@@ -15,5 +15,7 @@ def test_settings_defaults_are_thinkback_baseline() -> None:
 def test_settings_derived_urls() -> None:
     settings = Settings()
 
-    assert settings.database_url == "postgresql+asyncpg://postgres:postgres@localhost:5432/thinkback"
+    assert (
+        settings.database_url == "postgresql+asyncpg://postgres:postgres@localhost:5432/thinkback"
+    )
     assert settings.redis_url == "redis://localhost:6379/0"

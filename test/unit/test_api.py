@@ -66,9 +66,7 @@ def test_readiness_endpoint_returns_ready(client, monkeypatch) -> None:
     assert response.json()["status"] == "ready"
 
 
-def test_readiness_endpoint_returns_503_when_dependency_is_not_ready(
-    client, monkeypatch
-) -> None:
+def test_readiness_endpoint_returns_503_when_dependency_is_not_ready(client, monkeypatch) -> None:
     async def fake_collect_readiness():
         return {
             "status": "not_ready",

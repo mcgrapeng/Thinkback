@@ -8,7 +8,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from infra.config import Settings, settings as default_settings
+from infra.config import Settings
+from infra.config import settings as default_settings
 
 
 def build_mem0_config(*, settings: Settings = default_settings) -> dict[str, Any]:

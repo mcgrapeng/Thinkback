@@ -1,5 +1,7 @@
 """Redis client and readiness helpers."""
 
+from collections.abc import Awaitable
+
 from redis.asyncio import Redis
 
 from infra.config import settings
@@ -16,7 +18,9 @@ def get_redis_client() -> Redis:
 
 async def check_redis() -> dict[str, str]:
     try:
-        await get_redis_client().ping()
+        ping_result = get_redis_client().ping()
+        if isinstance(ping_result, Awaitable):
+            await ping_result
     except Exception as exc:
         return {"status": "not_ready", "detail": str(exc)}
     return {"status": "ready", "detail": "ok"}

@@ -71,10 +71,6 @@ warn_no_return = true
 strict_equality = true
 ignore_missing_imports = true
 
-[[tool.mypy.overrides]]
-module = "test.*"
-disallow_untyped_defs = false
-
 [tool.pytest.ini_options]
 minversion = "8.0"
 addopts = "-ra -q --strict-markers"

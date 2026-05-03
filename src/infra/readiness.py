@@ -12,8 +12,6 @@ async def collect_readiness() -> dict[str, object]:
         "qdrant": await check_qdrant(),
     }
     status = (
-        "ready"
-        if all(item["status"] == "ready" for item in dependencies.values())
-        else "not_ready"
+        "ready" if all(item["status"] == "ready" for item in dependencies.values()) else "not_ready"
     )
     return {"status": status, "dependencies": dependencies}
