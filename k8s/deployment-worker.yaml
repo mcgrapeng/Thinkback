@@ -1,0 +1,40 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: thinkback-worker
+  labels:
+    app: thinkback
+    component: worker
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: thinkback
+      component: worker
+  template:
+    metadata:
+      labels:
+        app: thinkback
+        component: worker
+    spec:
+      securityContext:
+        runAsNonRoot: true
+      containers:
+        - name: thinkback-worker
+          image: thinkback:0.1.0
+          imagePullPolicy: IfNotPresent
+          command:
+            - celery
+            - -A
+            - infra.tasks.celery_app.celery_app
+            - worker
+            - -l
+            - info
+          env:
+            - name: PYTHONPATH
+              value: /app/src
+          envFrom:
+            - configMapRef:
+                name: thinkback-config
+            - secretRef:
+                name: thinkback-secret

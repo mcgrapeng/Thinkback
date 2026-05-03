@@ -1,0 +1,52 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: thinkback-api
+  labels:
+    app: thinkback
+    component: api
+spec:
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app: thinkback
+      component: api
+  template:
+    metadata:
+      labels:
+        app: thinkback
+        component: api
+    spec:
+      securityContext:
+        runAsNonRoot: true
+      containers:
+        - name: thinkback-api
+          image: thinkback:0.1.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8000
+          env:
+            - name: PYTHONPATH
+              value: /app/src
+          envFrom:
+            - configMapRef:
+                name: thinkback-config
+            - secretRef:
+                name: thinkback-secret
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: 8000
+            initialDelaySeconds: 15
+            periodSeconds: 20

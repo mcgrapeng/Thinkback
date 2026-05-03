@@ -45,3 +45,26 @@ def test_env_example_declares_runtime_settings() -> None:
         "MEMORY_QDRANT_COLLECTION=",
     ]:
         assert variable in env_example
+
+
+def test_k8s_manifests_cover_api_worker_and_service() -> None:
+    api_deployment = Path("k8s/deployment-api.yaml").read_text(encoding="utf-8")
+    worker_deployment = Path("k8s/deployment-worker.yaml").read_text(encoding="utf-8")
+    service = Path("k8s/service.yaml").read_text(encoding="utf-8")
+
+    assert "name: thinkback-api" in api_deployment
+    assert "path: /health/ready" in api_deployment
+    assert "path: /health/live" in api_deployment
+    assert "name: thinkback-worker" in worker_deployment
+    assert "celery" in worker_deployment
+    assert "name: thinkback" in service
+
+
+def test_k8s_config_and_secret_examples_include_runtime_settings() -> None:
+    configmap = Path("k8s/configmap.yaml").read_text(encoding="utf-8")
+    secret = Path("k8s/secret.example.yaml").read_text(encoding="utf-8")
+
+    assert "QDRANT_URL" in configmap
+    assert "CELERY_BROKER_URL" in configmap
+    assert "POSTGRES_PASSWORD" in secret
+    assert "MEMORY_LLM_API_KEY" in secret
