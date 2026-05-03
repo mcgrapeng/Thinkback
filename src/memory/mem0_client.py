@@ -42,17 +42,3 @@ def build_mem0_config(*, settings: Settings = default_settings) -> dict[str, Any
         },
         "version": "v1.1",
     }
-
-
-class Mem0Factory:
-    def __init__(self, config: dict[str, Any] | None = None) -> None:
-        self._config = config or build_mem0_config()
-
-    @property
-    def config(self) -> dict[str, Any]:
-        return self._config
-
-    def create_memory(self) -> Any:
-        from mem0 import Memory
-
-        return Memory.from_config(self._config)

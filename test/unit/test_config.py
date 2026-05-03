@@ -19,3 +19,9 @@ def test_settings_derived_urls() -> None:
         settings.database_url == "postgresql+asyncpg://postgres:postgres@localhost:5432/thinkback"
     )
     assert settings.redis_url == "redis://localhost:6379/0"
+
+
+def test_redis_url_encodes_password() -> None:
+    settings = Settings(redis_password="p@ss/word")
+
+    assert settings.redis_url == "redis://:p%40ss%2Fword@localhost:6379/0"

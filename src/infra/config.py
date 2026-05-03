@@ -64,7 +64,8 @@ class Settings(BaseSettings):
 
     @property
     def redis_url(self) -> str:
-        auth_part = f":{self.redis_password}@" if self.redis_password else ""
+        encoded_password = quote_plus(self.redis_password) if self.redis_password else ""
+        auth_part = f":{encoded_password}@" if encoded_password else ""
         return f"redis://{auth_part}{self.redis_host}:{self.redis_port}/{self.redis_db}"
 
     @field_validator("log_level")

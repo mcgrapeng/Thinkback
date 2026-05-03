@@ -20,6 +20,13 @@ def test_mem0_config_builder_targets_qdrant_memory_collection() -> None:
     assert config["embedder"]["provider"] == "openai"
 
 
+def test_mem0_boundary_does_not_instantiate_memory_engine() -> None:
+    import memory.mem0_client as mem0_client
+
+    assert not hasattr(mem0_client, "Mem0Factory")
+    assert "Memory.from_config" not in mem0_client.__dict__.values()
+
+
 def test_memory_service_boundary_has_no_public_workflows() -> None:
     from memory.service import MemoryService
 

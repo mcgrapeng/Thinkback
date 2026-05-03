@@ -55,6 +55,7 @@ def test_k8s_manifests_cover_api_worker_and_service() -> None:
     assert "name: thinkback-api" in api_deployment
     assert "path: /health/ready" in api_deployment
     assert "path: /health/live" in api_deployment
+    assert "timeoutSeconds: 3" in api_deployment
     assert "name: thinkback-worker" in worker_deployment
     assert "celery" in worker_deployment
     assert "name: thinkback" in service
