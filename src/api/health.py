@@ -3,6 +3,8 @@
 from fastapi import APIRouter
 from pydantic import BaseModel
 
+from infra.config import settings
+
 router = APIRouter(prefix="/health", tags=["health"])
 
 
@@ -16,8 +18,8 @@ class HealthResponse(BaseModel):
 async def health_check() -> HealthResponse:
     return HealthResponse(
         status="healthy",
-        version="0.1.0",
-        environment="development",
+        version=settings.app_version,
+        environment=settings.environment,
     )
 
 

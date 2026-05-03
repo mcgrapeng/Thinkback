@@ -38,3 +38,10 @@ def test_liveness_endpoint(client) -> None:
 
     assert response.status_code == 200
     assert response.json() == {"status": "alive"}
+
+
+def test_trace_id_header_is_returned(client) -> None:
+    response = client.get("/health", headers={"X-Request-Id": "req-test"})
+
+    assert response.status_code == 200
+    assert response.headers["X-Trace-Id"] == "req-test"
