@@ -1,0 +1,83 @@
+[tool.poetry]
+name = "thinkback"
+version = "0.1.0"
+description = "Thinkback memory service"
+authors = ["Thinkback Contributors"]
+readme = "README.md"
+packages = [
+    {include = "api", from = "src"},
+    {include = "infra", from = "src"},
+    {include = "memory", from = "src"}
+]
+
+[tool.poetry.dependencies]
+python = ">=3.11,<3.14"
+fastapi = "^0.135.2"
+uvicorn = {extras = ["standard"], version = "^0.43.0"}
+pydantic = "^2.12.5"
+pydantic-settings = "^2.13.1"
+sqlalchemy = {extras = ["asyncio"], version = "^2.0.49"}
+asyncpg = "^0.30.0"
+alembic = "^1.18.4"
+redis = {extras = ["hiredis"], version = "^7.4.0"}
+celery = "^5.6.3"
+qdrant-client = "^1.17.0"
+mem0ai = "^0.1.0"
+loguru = "^0.7.2"
+python-dotenv = "^1.0.0"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.3.0"
+pytest-asyncio = "^0.24.0"
+pytest-mock = "^3.14.0"
+httpx = "^0.28.0"
+ruff = "^0.8.0"
+black = "^24.10.0"
+mypy = "^1.13.0"
+pre-commit = "^4.0.0"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "B", "C4", "UP", "ARG", "SIM"]
+ignore = ["E501", "B008", "B904"]
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["F401"]
+"test/**/*" = ["ARG", "S101"]
+
+[tool.black]
+line-length = 100
+target-version = ["py311"]
+include = "\\.pyi?$"
+
+[tool.mypy]
+python_version = "3.11"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_no_return = true
+strict_equality = true
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "test.*"
+disallow_untyped_defs = false
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+addopts = "-ra -q --strict-markers"
+testpaths = ["test"]
+pythonpath = ["src"]
+asyncio_mode = "auto"
