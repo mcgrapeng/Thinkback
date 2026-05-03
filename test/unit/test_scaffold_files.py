@@ -17,3 +17,31 @@ def test_db_migration_script_exists() -> None:
 
     assert script.exists()
     assert "alembic" in script.read_text(encoding="utf-8")
+
+
+def test_compose_declares_expected_services_without_object_storage() -> None:
+    compose = Path("docker-compose.yml").read_text(encoding="utf-8")
+
+    for service in ["app", "worker", "postgres", "redis", "qdrant"]:
+        assert f"  {service}:" in compose
+    assert "minio" not in compose.lower()
+
+
+def test_makefile_declares_core_commands() -> None:
+    makefile = Path("Makefile").read_text(encoding="utf-8")
+
+    for target in ["install:", "dev:", "run:", "worker:", "test:", "lint:", "format:"]:
+        assert target in makefile
+
+
+def test_env_example_declares_runtime_settings() -> None:
+    env_example = Path(".env.example").read_text(encoding="utf-8")
+
+    for variable in [
+        "POSTGRES_HOST=",
+        "REDIS_HOST=",
+        "QDRANT_URL=",
+        "CELERY_BROKER_URL=",
+        "MEMORY_QDRANT_COLLECTION=",
+    ]:
+        assert variable in env_example
