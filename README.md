@@ -14,16 +14,14 @@ Included:
 - Redis configuration
 - Qdrant configuration
 - Celery worker bootstrap
-- mem0 configuration boundary
+- P0 memory workflows aligned with the three-layer memory architecture
+- mem0/OpenAI/Qdrant long-term memory adapter
 - Docker Compose local stack
 - Kubernetes API and worker manifests
 
-Excluded from the scaffold:
+Not included in P0:
 
-- Memory extraction
-- Memory recall
-- Memory deletion
-- Feedback and rebuild workflows
+- P2 write fences, semantic suppression, tombstones, dead-letter governance, and decay jobs
 - Relationship scoring
 - RAG, document parsing, object storage, safety, and evaluation features
 
@@ -53,6 +51,21 @@ Run a worker:
 ```bash
 make worker
 ```
+
+Run deterministic tests:
+
+```bash
+PYTHONPATH=src .venv/bin/pytest
+```
+
+Run the real Mem0/OpenAI/Qdrant 5-round pressure scenario:
+
+```bash
+make docker-up
+PYTHONPATH=src .venv/bin/python script/real_mem0_pressure.py
+```
+
+The real pressure script requires `MEMORY_LLM_API_KEY`, `MEMORY_EMBEDDING_API_KEY`, and a reachable `QDRANT_URL`. It fails fast when real configuration is missing; it does not fall back to fake memory.
 
 ## Health
 
