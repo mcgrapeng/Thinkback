@@ -14,7 +14,10 @@ data:
   REDIS_HOST: redis
   REDIS_PORT: "6379"
   REDIS_DB: "0"
-  QDRANT_URL: http://qdrant:6333
+  QDRANT_URL: ""
   MEMORY_QDRANT_COLLECTION: thinkback_memories
+  MEM0_BACKEND_MODE: http_api
+  MEM0_API_URL: https://mem0.example.internal
+  MEM0_HTTP_TIMEOUT_SECONDS: "120"
   CELERY_BROKER_URL: redis://redis:6379/0
   CELERY_RESULT_BACKEND: redis://redis:6379/1

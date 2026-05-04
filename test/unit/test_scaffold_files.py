@@ -43,6 +43,9 @@ def test_env_example_declares_runtime_settings() -> None:
         "QDRANT_URL=",
         "CELERY_BROKER_URL=",
         "MEMORY_QDRANT_COLLECTION=",
+        "MEM0_BACKEND_MODE=",
+        "MEM0_API_URL=",
+        "MEM0_API_KEY=",
     ]:
         assert variable in env_example
 
@@ -66,6 +69,9 @@ def test_k8s_config_and_secret_examples_include_runtime_settings() -> None:
     secret = Path("k8s/secret.example.yaml").read_text(encoding="utf-8")
 
     assert "QDRANT_URL" in configmap
+    assert "MEM0_BACKEND_MODE" in configmap
+    assert "MEM0_API_URL" in configmap
     assert "CELERY_BROKER_URL" in configmap
     assert "POSTGRES_PASSWORD" in secret
+    assert "MEM0_API_KEY" in secret
     assert "MEMORY_LLM_API_KEY" in secret

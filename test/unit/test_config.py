@@ -2,7 +2,7 @@ from infra.config import Settings
 
 
 def test_settings_defaults_are_thinkback_baseline() -> None:
-    settings = Settings()
+    settings = Settings(_env_file=None)
 
     assert settings.app_name == "Thinkback"
     assert settings.app_version == "0.1.0"
@@ -10,6 +10,8 @@ def test_settings_defaults_are_thinkback_baseline() -> None:
     assert settings.database_backend == "postgresql"
     assert settings.vectorstore_type == "qdrant"
     assert settings.memory_backend == "redis"
+    assert settings.mem0_backend_mode == "http_api"
+    assert settings.mem0_http_timeout_seconds == 120.0
 
 
 def test_settings_derived_urls() -> None:

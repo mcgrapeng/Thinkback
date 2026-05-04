@@ -1,8 +1,9 @@
 # Thinkback Kubernetes Assets
 
 These manifests provide a baseline API and worker deployment for Thinkback.
-They assume PostgreSQL, Redis, and Qdrant are available in the cluster or through
-managed services addressed by the ConfigMap.
+They assume PostgreSQL, Redis, and a remote Mem0 REST API are available through
+managed services addressed by the ConfigMap and Secret. Qdrant belongs behind
+Mem0 and is not a direct Thinkback production dependency.
 
 ## Build Image
 

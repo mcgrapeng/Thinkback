@@ -37,6 +37,10 @@ class Settings(BaseSettings):
     redis_db: int = 0
     redis_password: str = ""
     memory_backend: Literal["redis"] = "redis"
+    mem0_backend_mode: Literal["local_sdk", "http_api"] = "http_api"
+    mem0_api_url: str = "https://mem0.example.internal"
+    mem0_api_key: str = Field(default="", description="Mem0 REST API key")
+    mem0_http_timeout_seconds: float = 120.0
 
     celery_broker_url: str = "redis://localhost:6379/0"
     celery_result_backend: str = "redis://localhost:6379/1"

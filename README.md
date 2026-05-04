@@ -15,7 +15,7 @@ Included:
 - Qdrant configuration
 - Celery worker bootstrap
 - P0 memory workflows aligned with the three-layer memory architecture
-- mem0/OpenAI/Qdrant long-term memory adapter
+- Remote Mem0 REST API long-term memory adapter, plus local SDK mode for development
 - Docker Compose local stack
 - Kubernetes API and worker manifests
 
@@ -46,6 +46,15 @@ Start local dependencies:
 make docker-up
 ```
 
+Production should use a remote Mem0 service:
+
+```bash
+MEM0_BACKEND_MODE=http_api
+MEM0_API_URL=https://mem0.example.internal
+MEM0_API_KEY=<secret>
+MEM0_HTTP_TIMEOUT_SECONDS=120
+```
+
 Run a worker:
 
 ```bash
@@ -66,6 +75,15 @@ PYTHONPATH=src .venv/bin/python script/real_mem0_pressure.py
 ```
 
 The real pressure script requires `MEMORY_LLM_API_KEY`, `MEMORY_EMBEDDING_API_KEY`, and a reachable `QDRANT_URL`. It fails fast when real configuration is missing; it does not fall back to fake memory.
+
+For a local isolated Mem0 REST stack, use the local URL instead:
+
+```bash
+MEM0_BACKEND_MODE=http_api
+MEM0_API_URL=http://localhost:8889
+MEM0_API_KEY=<local-key>
+MEM0_HTTP_TIMEOUT_SECONDS=120
+```
 
 ## Health
 
