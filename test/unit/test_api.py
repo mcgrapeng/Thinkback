@@ -51,12 +51,12 @@ def test_readiness_endpoint_returns_ready(client, monkeypatch) -> None:
     async def fake_collect_readiness():
         return {
             "status": "ready",
-            "dependencies": {
-                "database": {"status": "ready", "detail": "ok"},
-                "redis": {"status": "ready", "detail": "ok"},
-                "qdrant": {"status": "ready", "detail": "ok"},
-            },
-        }
+                "dependencies": {
+                    "database": {"status": "ready", "detail": "ok"},
+                    "redis": {"status": "ready", "detail": "ok"},
+                    "mem0": {"status": "ready", "detail": "ok"},
+                },
+            }
 
     monkeypatch.setattr("api.health.collect_readiness", fake_collect_readiness)
 
@@ -70,12 +70,12 @@ def test_readiness_endpoint_returns_503_when_dependency_is_not_ready(client, mon
     async def fake_collect_readiness():
         return {
             "status": "not_ready",
-            "dependencies": {
-                "database": {"status": "ready", "detail": "ok"},
-                "redis": {"status": "not_ready", "detail": "connection refused"},
-                "qdrant": {"status": "ready", "detail": "ok"},
-            },
-        }
+                "dependencies": {
+                    "database": {"status": "ready", "detail": "ok"},
+                    "redis": {"status": "not_ready", "detail": "connection refused"},
+                    "mem0": {"status": "ready", "detail": "ok"},
+                },
+            }
 
     monkeypatch.setattr("api.health.collect_readiness", fake_collect_readiness)
 

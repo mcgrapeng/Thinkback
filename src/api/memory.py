@@ -37,6 +37,11 @@ async def _run_memory_call(method: Callable[P, R], *args: P.args, **kwargs: P.kw
         else:
             status_code = 400
         raise HTTPException(status_code=status_code, detail=detail) from exc
+    except RuntimeError as exc:
+        detail = str(exc)
+        if "mem0 http" in detail or "memory backend" in detail:
+            raise HTTPException(status_code=502, detail=detail) from exc
+        raise
 
 
 @router.post("/append", response_model=AppendMemoryResponse)

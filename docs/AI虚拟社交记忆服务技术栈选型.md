@@ -10,25 +10,18 @@
 | 业务数据 | PostgreSQL + SQLAlchemy async | 保存 L2 摘要、可靠轮次、L3 业务索引、任务状态和用户角色状态。 |
 | 数据迁移 | Alembic | 管理 `tb_` 业务表结构。当前首版迁移为 `20260504_0001_memory_p0_tables.py`。 |
 | 长期记忆引擎 | 远程 Mem0 REST API | 负责 L3 的抽取、去重、分类、语义检索、显式更新和删除；生产推荐独立部署。 |
-| 向量数据库 | Qdrant | 作为 Mem0 的 vector store，由 Mem0 服务侧管理；Thinkback 不直接写入。 |
-| LLM / Embedding | OpenAI 兼容接口 | 由 Mem0 服务侧调用；`local_sdk` 本地模式才由 Thinkback 配置 `MEMORY_LLM_*` 和 `MEMORY_EMBEDDING_*`。 |
+| 向量数据库 | 独立 Qdrant 服务 | Thinkback 和 Mem0 指向同一个 Qdrant endpoint；Thinkback 只做就绪探测，L3 向量写入和语义检索仍由 Mem0 完成。 |
+| LLM / Embedding | 由 Mem0 服务侧决定 | Thinkback 不保存、不读取、不透传 LLM/Embedding 密钥。 |
 | 缓存和异步基础设施 | Redis + Celery | Redis 用于运行时基础设施；Celery 已有 worker bootstrap，复杂异步沉淀可继续扩展。 |
 | 测试 | pytest + ruff + mypy | 覆盖契约、后端适配、服务工作流、API 和端到端假后端流程。 |
 
-## 2. Mem0 和 Qdrant 的关系
+## 2. Mem0 和向量数据库的关系
 
-Mem0 内部依赖向量数据库。生产推荐 `http_api` 模式：Thinkback 只调用远程 Mem0 REST API，OpenAI、Embedding 和 Qdrant 都由外部 Mem0 服务自身配置。`local_sdk` 模式只用于本地开发或临时单体部署；此时 `src/memory/mem0_client.py` 会把 `vector_store.provider` 设置为 `qdrant`，集合名来自 `MEMORY_QDRANT_COLLECTION`。
+Mem0 内部通常依赖向量数据库。当前部署模型按三个独立服务处理：Thinkback、Mem0、Qdrant 可以分别部署在不同主机上。Thinkback 和 Mem0 都配置同一个 `QDRANT_URL / QDRANT_API_KEY`，但用途不同：Mem0 用它做 L3 向量存储和语义检索；Thinkback 只用它做 `/health/ready` 诊断，确认共享基础设施从 Thinkback 主机可达。
 
-业务服务不要直接通过 `src/infra/vectorstore` 写入 L3 记忆。原因很简单：L3 的抽取、去重、更新、删除和语义检索都属于 Mem0 的职责；业务服务绕过 Mem0 直接写 Qdrant，会破坏 Mem0 的一致性和返回语义。
+业务服务不要直接写 Qdrant 或任何向量库。原因很简单：L3 的抽取、去重、更新、删除和语义检索都属于 Mem0 的职责；业务服务绕过 Mem0 写向量库，会破坏 Mem0 的一致性和返回语义。
 
-`src/infra/vectorstore/qdrant_client.py` 只用于 Qdrant 就绪检查、运维诊断和未来可能的连接复用，不是 L3 业务写入路径。
-
-Mem0 后端由 `MEM0_BACKEND_MODE` 选择：
-
-| 模式 | 使用场景 | 配置 |
-| --- | --- | --- |
-| `http_api` | 生产推荐；使用远程 Mem0 REST API 或本地隔离测试栈 | `MEM0_API_URL / MEM0_API_KEY / MEM0_HTTP_TIMEOUT_SECONDS` |
-| `local_sdk` | 本地开发；Thinkback 进程内直接使用 Mem0 SDK | `MEMORY_LLM_* / MEMORY_EMBEDDING_* / QDRANT_*` |
+Thinkback 当前只保留 Mem0 REST 业务适配器，配置项为 `MEM0_API_URL / MEM0_API_KEY / MEM0_HTTP_TIMEOUT_SECONDS`。同时保留 `QDRANT_URL / QDRANT_API_KEY` 作为共享 Qdrant 的只读 readiness 配置，不提供 L3 业务写入入口。
 
 ## 3. 为什么还需要 PostgreSQL
 

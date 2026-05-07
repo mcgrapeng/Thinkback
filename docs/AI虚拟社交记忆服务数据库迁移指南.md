@@ -42,7 +42,7 @@ POSTGRES_DATABASE=thinkback
 启动依赖：
 
 ```bash
-docker compose up -d postgres redis qdrant
+docker compose up -d postgres redis
 ```
 
 执行迁移：
@@ -112,4 +112,6 @@ PYTHONPATH=src .venv/bin/alembic upgrade head --sql
 PYTHONPATH=src .venv/bin/alembic downgrade -1
 ```
 
-生产环境回滚前必须备份数据库，并确认 Mem0/Qdrant 中的长期记忆是否需要同步清理。Alembic 回滚只处理 PostgreSQL 业务表，不会自动删除 Mem0 中的向量记忆。
+生产环境回滚前必须备份数据库，并确认 Mem0 中的长期记忆是否需要同步清理。Alembic 回滚只处理 PostgreSQL 业务表，不会自动删除 Mem0 服务里的长期记忆。
+
+Qdrant 不属于 Alembic 管理范围。Mem0 使用独立 Qdrant 承载 L3 向量数据；Thinkback 数据库迁移只管理 `tb_` 业务表和索引，不创建、不删除 Qdrant collection。需要清理长期记忆时，应先通过 Thinkback 的业务索引和 Mem0 delete/update 能力处理，再按运维流程评估 Qdrant 数据。

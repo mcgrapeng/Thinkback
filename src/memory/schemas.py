@@ -171,6 +171,7 @@ class RecallMemoryRequest(BaseModel):
     query: str
     intent: RecallIntent = RecallIntent.CHAT
     l3_limit: int = Field(default=5, ge=0, le=50)
+    l3_score_threshold: float = Field(default=0.5, ge=0.0, le=1.0)
     token_budget: int = Field(default=1200, ge=100, le=12000)
 
 

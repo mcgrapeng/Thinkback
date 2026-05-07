@@ -18,6 +18,7 @@ async def test_collect_readiness_marks_timed_out_dependency_not_ready(monkeypatc
     monkeypatch.setattr(readiness, "check_database", slow_database_check)
     monkeypatch.setattr(readiness, "check_redis", ready_check)
     monkeypatch.setattr(readiness, "check_qdrant", ready_check)
+    monkeypatch.setattr(readiness, "check_mem0_api", ready_check)
 
     payload = await readiness.collect_readiness(timeout_seconds=0.01)
 
@@ -28,49 +29,49 @@ async def test_collect_readiness_marks_timed_out_dependency_not_ready(monkeypatc
     }
     assert payload["dependencies"]["redis"] == {"status": "ready", "detail": "ok"}
     assert payload["dependencies"]["qdrant"] == {"status": "ready", "detail": "ok"}
-
-
-@pytest.mark.asyncio
-async def test_collect_readiness_checks_mem0_api_in_http_mode_instead_of_qdrant(monkeypatch) -> None:
-    async def ready_check() -> dict[str, str]:
-        return {"status": "ready", "detail": "ok"}
-
-    async def qdrant_should_not_run() -> dict[str, str]:
-        raise AssertionError("http_api mode must not require direct qdrant readiness")
-
-    monkeypatch.setattr(
-        readiness,
-        "settings",
-        Settings(mem0_backend_mode="http_api", mem0_api_url="https://mem0.example.internal"),
-    )
-    monkeypatch.setattr(readiness, "check_database", ready_check)
-    monkeypatch.setattr(readiness, "check_redis", ready_check)
-    monkeypatch.setattr(readiness, "check_mem0_api", ready_check)
-    monkeypatch.setattr(readiness, "check_qdrant", qdrant_should_not_run)
-
-    payload = await readiness.collect_readiness()
-
-    assert payload["status"] == "ready"
     assert payload["dependencies"]["mem0"] == {"status": "ready", "detail": "ok"}
-    assert "qdrant" not in payload["dependencies"]
 
 
 @pytest.mark.asyncio
-async def test_collect_readiness_checks_qdrant_in_local_sdk_mode(monkeypatch) -> None:
+async def test_collect_readiness_checks_mem0_api_and_shared_qdrant(monkeypatch) -> None:
     async def ready_check() -> dict[str, str]:
         return {"status": "ready", "detail": "ok"}
 
-    async def mem0_should_not_run() -> dict[str, str]:
-        raise AssertionError("local_sdk mode must not call remote mem0 readiness")
-
-    monkeypatch.setattr(readiness, "settings", Settings(mem0_backend_mode="local_sdk"))
+    monkeypatch.setattr(readiness, "settings", Settings(mem0_api_url="https://mem0.example.internal"))
     monkeypatch.setattr(readiness, "check_database", ready_check)
     monkeypatch.setattr(readiness, "check_redis", ready_check)
     monkeypatch.setattr(readiness, "check_qdrant", ready_check)
-    monkeypatch.setattr(readiness, "check_mem0_api", mem0_should_not_run)
+    monkeypatch.setattr(readiness, "check_mem0_api", ready_check)
 
     payload = await readiness.collect_readiness()
 
     assert payload["status"] == "ready"
     assert payload["dependencies"]["qdrant"] == {"status": "ready", "detail": "ok"}
-    assert "mem0" not in payload["dependencies"]
+    assert payload["dependencies"]["mem0"] == {"status": "ready", "detail": "ok"}
+
+
+@pytest.mark.asyncio
+async def test_check_qdrant_uses_shared_endpoint_for_diagnostics_only(monkeypatch) -> None:
+    calls: list[dict[str, str]] = []
+
+    class FakeQdrantClient:
+        def __init__(
+            self, *, url: str, api_key: str | None = None, timeout_seconds: float = 2.0
+        ) -> None:
+            _ = timeout_seconds
+            calls.append({"url": url, "api_key": api_key or ""})
+
+        def get_collections(self) -> object:
+            return object()
+
+    monkeypatch.setattr(readiness, "QdrantClient", FakeQdrantClient)
+    monkeypatch.setattr(
+        readiness,
+        "settings",
+        Settings(qdrant_url="https://qdrant.example.internal", qdrant_api_key="qdrant-secret"),
+    )
+
+    payload = await readiness.check_qdrant()
+
+    assert payload == {"status": "ready", "detail": "ok"}
+    assert calls == [{"url": "https://qdrant.example.internal", "api_key": "qdrant-secret"}]

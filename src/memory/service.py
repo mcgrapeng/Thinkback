@@ -14,6 +14,7 @@ from memory.repositories import (
     SqlAlchemyMemoryRepository,
     TaskEntry,
     request_fingerprint,
+    source_ref_key,
 )
 from memory.schemas import (
     AppendMemoryRequest,
@@ -25,6 +26,7 @@ from memory.schemas import (
     DeleteScope,
     FactSubject,
     MemoryItem,
+    MemoryStatus,
     MemoryType,
     OperationType,
     RebuildMemoryRequest,
@@ -103,7 +105,7 @@ class MemoryService:
                     request.session_id,
                 )
             else:
-                self.repository.upsert_summary_from_journal(request.user_id, request.character_id)
+                self._upsert_default_summary(request.user_id, request.character_id)
                 l3_events = self._add_l3_from_messages(
                     [{"role": message.role.value, "content": message.content} for message in request.messages],
                     user_id=request.user_id,
@@ -171,30 +173,44 @@ class MemoryService:
             RecallIntent.RELATIONSHIP_CONTINUITY,
         }
         if must_query_l3:
-            backend_items = self.backend.search(
-                request.query,
-                user_id=request.user_id,
-                character_id=request.character_id,
-                limit=request.l3_limit,
-            )
-            active_backend_ids = {
-                memory.backend_memory_id
-                for memory in self.repository.active_memories(request.user_id, request.character_id)
+            active_memories = self.repository.active_memories(request.user_id, request.character_id)
+            active_memory_by_backend_id = {
+                memory.backend_memory_id: memory for memory in active_memories
             }
-            for item in backend_items:
-                memory_id = str(item.get("id", ""))
-                if memory_id not in active_backend_ids:
-                    continue
-                items.append(
-                    MemoryItem(
-                        layer="L3",
-                        content=str(item.get("memory", "")),
-                        source="mem0",
-                        memory_id=memory_id,
-                        score=item.get("score"),
-                        metadata={"memory_as_data": True, **(item.get("metadata") or {})},
-                    )
+            query_slot = self._query_conflict_slot(request.query)
+            if query_slot:
+                self._backfill_matching_slot_memories(
+                    items,
+                    query=request.query,
+                    active_memories=active_memories,
                 )
+            if not query_slot or not any(item.layer == "L3" for item in items):
+                backend_items = self.backend.search(
+                    request.query,
+                    user_id=request.user_id,
+                    character_id=request.character_id,
+                    limit=request.l3_limit,
+                    threshold=request.l3_score_threshold,
+                )
+                for item in backend_items:
+                    memory_id = str(item.get("id", ""))
+                    indexed_memory = active_memory_by_backend_id.get(memory_id)
+                    if indexed_memory is None:
+                        continue
+                    if not self._memory_context_allowed(indexed_memory, request.query):
+                        continue
+                    if query_slot and self._memory_conflict_slot(indexed_memory.memory_text) != query_slot:
+                        continue
+                    items.append(
+                        MemoryItem(
+                            layer="L3",
+                            content=indexed_memory.memory_text,
+                            source="mem0",
+                            memory_id=memory_id,
+                            score=item.get("score"),
+                            metadata={"memory_as_data": True, **(item.get("metadata") or {})},
+                        )
+                    )
 
         return RecallMemoryResponse(
             status="ok",
@@ -284,7 +300,7 @@ class MemoryService:
                 if current_version != request.history_version:
                     raise ValueError(
                         f"history_version mismatch: expected {request.history_version}, got {current_version}"
-                    )
+            )
             rounds = self._rebuild_rounds(request)
             if request.rebuild_l2:
                 deleted_refs = self.repository.deleted_source_refs(
@@ -299,6 +315,7 @@ class MemoryService:
                         None,
                     )
                     if (entry.session_id, entry.round_id) not in deleted_refs
+                    and self._round_allowed_in_default_summary(entry)
                 ]
                 self.repository.upsert_summary_from_rounds(
                     request.user_id,
@@ -306,11 +323,22 @@ class MemoryService:
                     l2_rounds,
                 )
             if request.rebuild_l3:
-                active_memories = self._l3_memories_in_rebuild_scope(request)
-                self.backend.delete_many([memory.backend_memory_id for memory in active_memories])
-                for memory in active_memories:
+                deleted_refs = self.repository.deleted_source_refs(
+                    request.user_id,
+                    request.character_id,
+                )
+                stale_memories = [
+                    memory
+                    for memory in self._l3_memories_in_rebuild_scope(request)
+                    if all(
+                        (ref.get("session_id"), ref.get("round_id")) in deleted_refs
+                        for ref in memory.source_refs
+                    )
+                ]
+                self.backend.delete_many([memory.backend_memory_id for memory in stale_memories])
+                for memory in stale_memories:
                     self.repository.mark_memory_superseded(memory.memory_id)
-                for entry in rounds:
+                for entry in self._uncovered_rebuild_rounds(request, rounds, deleted_refs):
                     messages = [
                         {"role": message["role"], "content": message["content"]}
                         for message in entry.messages
@@ -374,6 +402,12 @@ class MemoryService:
 
         self.backend.delete(memory.backend_memory_id)
         self.repository.mark_memory_deleted(memory.memory_id)
+        self._mark_superseded_slot_sources_deleted(
+            user_id=request.user_id,
+            character_id=request.character_id,
+            slot=self._memory_conflict_slot(memory.memory_text),
+            deleted_memory_id=memory.memory_id,
+        )
         for source_ref in memory.source_refs:
             self.repository.clear_l1(
                 request.user_id,
@@ -439,6 +473,102 @@ class MemoryService:
             clipped.append(item)
         return clipped
 
+    def _backfill_matching_slot_memories(
+        self,
+        items: list[MemoryItem],
+        *,
+        query: str,
+        active_memories: list[Any],
+    ) -> None:
+        query_slot = self._query_conflict_slot(query)
+        if query_slot is None:
+            return
+        existing_l3_ids = {item.memory_id for item in items if item.layer == "L3"}
+        for memory in active_memories:
+            if memory.backend_memory_id in existing_l3_ids:
+                continue
+            if not self._memory_context_allowed(memory, query):
+                continue
+            if self._memory_conflict_slot(memory.memory_text) != query_slot:
+                continue
+            items.append(
+                MemoryItem(
+                    layer="L3",
+                    content=memory.memory_text,
+                    source="business_index",
+                    memory_id=memory.backend_memory_id,
+                    metadata={"memory_as_data": True, "slot_backfill": query_slot},
+                )
+            )
+
+    @staticmethod
+    def _query_conflict_slot(query: str) -> str | None:
+        normalized = query.lower()
+        if any(marker in normalized for marker in ("猫", "cat")):
+            return "pet_name:cat"
+        if any(marker in normalized for marker in ("狗", "dog")):
+            return "pet_name:dog"
+        if any(marker in normalized for marker in ("鸟", "鹦鹉", "bird", "parrot")):
+            return "pet_name:bird"
+        if any(marker in normalized for marker in ("兔", "兔子", "rabbit", "bunny")):
+            return "pet_name:rabbit"
+        if any(
+            marker in normalized
+            for marker in ("称呼", "nickname", "called", "preferred name", "叫用户", "叫我")
+        ):
+            return "preferred_nickname"
+        if any(marker in normalized for marker in ("住哪", "住在", "城市", "location", "live")):
+            return "current_location"
+        if any(marker in normalized for marker in ("工作状态", "offer", "job", "work status", "换工作")):
+            return "current_work_status"
+        if any(marker in normalized for marker in ("怎么给建议", "沟通", "建议", "advice", "communication")):
+            return "communication_preference"
+        if any(marker in normalized for marker in ("生日", "birthday")):
+            return "birthday"
+        if any(
+            marker in normalized
+            for marker in (
+                "喜欢喝",
+                "饮品",
+                "饮料",
+                "favorite drink",
+                "preferred drink",
+                "drink preference",
+                "beverage preference",
+            )
+        ):
+            return "favorite:drink"
+        if any(
+            marker in normalized
+            for marker in ("喜欢吃", "食物", "favorite food", "food preference")
+        ):
+            return "favorite:food"
+        if any(
+            marker in normalized
+            for marker in ("提醒睡觉", "催睡觉", "睡眠提醒", "睡觉偏好", "sleep reminder")
+        ):
+            return "sleep_reminder_preference"
+        return None
+
+    @staticmethod
+    def _memory_context_allowed(memory: Any, query: str) -> bool:
+        normalized_query = query.lower()
+        asks_roleplay = any(
+            marker in normalized_query
+            for marker in ("剧情", "角色扮演", "设定", "story", "roleplay", "fiction")
+        )
+        context_type = str(getattr(memory, "context_type", "") or "").lower()
+        fact_subject = str(getattr(memory, "fact_subject", "") or "").lower()
+        roleplay_mode = str(getattr(memory, "roleplay_mode", "") or "").lower()
+        is_roleplay_memory = (
+            context_type in {"roleplay", "fictional_setting"}
+            or fact_subject == "story_world"
+            or roleplay_mode == "on"
+        )
+        if asks_roleplay:
+            return is_roleplay_memory
+        return not is_roleplay_memory
+
     def _add_l3_from_messages(
         self,
         messages: list[dict[str, str]],
@@ -449,6 +579,11 @@ class MemoryService:
         request_metadata: dict,
     ) -> list[dict]:
         l3_metadata = self._l3_metadata(source_refs, request_metadata)
+        source_text = " ".join(
+            message.get("content", "").strip() for message in messages if message.get("content", "").strip()
+        )
+        if source_text:
+            l3_metadata["source_text"] = source_text
         events = self.backend.add(
             messages,
             user_id=user_id,
@@ -456,36 +591,788 @@ class MemoryService:
             metadata=l3_metadata,
         )
         for event in events:
-            backend_id = str(event.get("id", ""))
-            memory_text = str(event.get("memory", ""))
-            if backend_id and event.get("event") in {"ADD", "UPDATE"}:
-                event_metadata = event.get("metadata") if isinstance(event.get("metadata"), dict) else {}
-                backend_categories = self._list_metadata_value(
-                    event_metadata.get("categories")
-                    or event_metadata.get("backend_categories")
-                    or request_metadata.get("backend_categories")
-                )
-                self.repository.add_memory_index(
-                    backend_memory_id=backend_id,
-                    user_id=user_id,
-                    character_id=character_id,
-                    source_refs=source_refs,
-                    memory_text=memory_text,
-                    source_type=str(l3_metadata["source_type"]),
-                    fact_subject=str(l3_metadata["fact_subject"]),
-                    context_type=str(l3_metadata["context_type"]),
-                    roleplay_mode=str(l3_metadata["roleplay_mode"]),
-                    data_classification=str(l3_metadata["data_classification"]),
-                    memory_type=str(l3_metadata["memory_type"]),
-                    backend_categories=backend_categories,
-                    metadata=dict(l3_metadata),
-                )
+            self._index_l3_event(
+                event,
+                user_id=user_id,
+                character_id=character_id,
+                source_refs=source_refs,
+                l3_metadata=l3_metadata,
+            )
         return [dict(event) for event in events]
+
+    def _index_l3_event(
+        self,
+        event: dict[str, Any],
+        *,
+        user_id: str,
+        character_id: str,
+        source_refs: list[dict[str, str]],
+        l3_metadata: dict[str, Any],
+    ) -> None:
+        backend_id = str(event.get("id", ""))
+        original_memory_text = str(event.get("memory", ""))
+        memory_text = self._canonical_memory_text_from_source(original_memory_text, l3_metadata)
+        if not backend_id or event.get("event") not in {"ADD", "UPDATE"}:
+            return
+
+        raw_event_metadata = event.get("metadata")
+        event_metadata: dict[str, Any] = (
+            dict(raw_event_metadata) if isinstance(raw_event_metadata, dict) else {}
+        )
+        backend_categories = self._list_metadata_value(
+            event_metadata.get("categories")
+            or event_metadata.get("backend_categories")
+            or l3_metadata.get("backend_categories")
+        )
+        index_metadata = {**dict(l3_metadata), **event_metadata}
+
+        existing = self.repository.get_active_memory_by_backend_id(
+            user_id,
+            character_id,
+            backend_id,
+        )
+        if not self._memory_supported_by_source(memory_text, l3_metadata):
+            if existing is None:
+                self.backend.delete(backend_id)
+            return
+        if existing:
+            self.repository.update_memory_index(
+                existing.memory_id,
+                source_refs=source_refs,
+                memory_text=memory_text,
+                source_type=str(l3_metadata["source_type"]),
+                fact_subject=str(l3_metadata["fact_subject"]),
+                context_type=str(l3_metadata["context_type"]),
+                roleplay_mode=str(l3_metadata["roleplay_mode"]),
+                data_classification=str(l3_metadata["data_classification"]),
+                memory_type=str(l3_metadata["memory_type"]),
+                backend_categories=backend_categories,
+                metadata=index_metadata,
+            )
+            if memory_text != original_memory_text:
+                self.backend.update(backend_id, memory_text)
+            return
+
+        if self._is_older_than_active_conflicting_memory(
+            user_id=user_id,
+            character_id=character_id,
+            backend_memory_id=backend_id,
+            memory_text=memory_text,
+            l3_metadata=l3_metadata,
+        ):
+            self.backend.delete(backend_id)
+            return
+        self._supersede_conflicting_memories(
+            user_id=user_id,
+            character_id=character_id,
+            backend_memory_id=backend_id,
+            memory_text=memory_text,
+            l3_metadata=l3_metadata,
+        )
+        self.repository.add_memory_index(
+            backend_memory_id=backend_id,
+            user_id=user_id,
+            character_id=character_id,
+            source_refs=source_refs,
+            memory_text=memory_text,
+            source_type=str(l3_metadata["source_type"]),
+            fact_subject=str(l3_metadata["fact_subject"]),
+            context_type=str(l3_metadata["context_type"]),
+            roleplay_mode=str(l3_metadata["roleplay_mode"]),
+            data_classification=str(l3_metadata["data_classification"]),
+            memory_type=str(l3_metadata["memory_type"]),
+            backend_categories=backend_categories,
+            metadata=index_metadata,
+        )
+        if memory_text != original_memory_text:
+            self.backend.update(backend_id, memory_text)
+
+    def _supersede_conflicting_memories(
+        self,
+        *,
+        user_id: str,
+        character_id: str,
+        backend_memory_id: str,
+        memory_text: str,
+        l3_metadata: dict[str, Any] | None = None,
+    ) -> None:
+        new_slot = self._memory_conflict_slot(memory_text)
+        if new_slot is None:
+            return
+        new_partition = self._conflict_partition_from_metadata(l3_metadata or {})
+        for memory in self.repository.active_memories(user_id, character_id):
+            if memory.backend_memory_id == backend_memory_id:
+                continue
+            if self._memory_conflict_slot(memory.memory_text) != new_slot:
+                continue
+            if self._conflict_partition(memory) != new_partition:
+                continue
+            self.backend.delete(memory.backend_memory_id)
+            self.repository.mark_memory_superseded(memory.memory_id)
+
+    def _is_older_than_active_conflicting_memory(
+        self,
+        *,
+        user_id: str,
+        character_id: str,
+        backend_memory_id: str,
+        memory_text: str,
+        l3_metadata: dict[str, Any] | None = None,
+    ) -> bool:
+        new_slot = self._memory_conflict_slot(memory_text)
+        if new_slot is None:
+            return False
+        new_partition = self._conflict_partition_from_metadata(l3_metadata or {})
+        new_cursor = self._source_cursor(l3_metadata or {})
+        if new_cursor is None:
+            return False
+        for memory in self.repository.active_memories(user_id, character_id):
+            if memory.backend_memory_id == backend_memory_id:
+                continue
+            if self._memory_conflict_slot(memory.memory_text) != new_slot:
+                continue
+            if self._conflict_partition(memory) != new_partition:
+                continue
+            existing_cursor = self._source_cursor(memory.metadata)
+            if existing_cursor is not None and new_cursor <= existing_cursor:
+                return True
+        return False
+
+    @staticmethod
+    def _source_cursor(metadata: dict[str, Any]) -> tuple[str, str] | None:
+        raw_refs = metadata.get("source_refs")
+        if not isinstance(raw_refs, list):
+            return None
+        refs: list[tuple[str, str]] = []
+        for raw_ref in raw_refs:
+            if not isinstance(raw_ref, dict):
+                continue
+            session_id = raw_ref.get("session_id")
+            round_id = raw_ref.get("round_id")
+            if session_id is None or round_id is None:
+                continue
+            refs.append((str(session_id), str(round_id)))
+        if not refs:
+            return None
+        return max(refs)
+
+    def _mark_superseded_slot_sources_deleted(
+        self,
+        *,
+        user_id: str,
+        character_id: str,
+        slot: str | None,
+        deleted_memory_id: str,
+    ) -> None:
+        if slot is None:
+            return
+        for memory in self.repository.list_memories(user_id, character_id):
+            if memory.memory_id == deleted_memory_id:
+                continue
+            if self._memory_conflict_slot(memory.memory_text) != slot:
+                continue
+            if memory.memory_status.name != "SUPERSEDED":
+                continue
+            self.repository.mark_memory_deleted(memory.memory_id)
+
+    @staticmethod
+    def _conflict_partition_from_metadata(metadata: dict[str, Any]) -> tuple[str, str, str]:
+        return (
+            str(metadata.get("context_type") or ContextType.REAL_USER.value),
+            str(metadata.get("fact_subject") or FactSubject.USER.value),
+            str(metadata.get("roleplay_mode") or RoleplayMode.OFF.value),
+        )
+
+    @staticmethod
+    def _conflict_partition(memory: Any) -> tuple[str, str, str]:
+        return (
+            str(getattr(memory, "context_type", "") or ContextType.REAL_USER.value),
+            str(getattr(memory, "fact_subject", "") or FactSubject.USER.value),
+            str(getattr(memory, "roleplay_mode", "") or RoleplayMode.OFF.value),
+        )
+
+    @staticmethod
+    def _memory_conflict_slot(memory_text: str) -> str | None:
+        normalized = MemoryService._canonical_memory_text(memory_text).lower()
+        nickname_markers = (
+            "叫我",
+            "称呼",
+            "preferred name",
+            "prefers to be called",
+            "prefers to be addressed as",
+            "addressed as",
+            "changed preferred name",
+            "called",
+        )
+        if any(marker in normalized for marker in nickname_markers):
+            return "preferred_nickname"
+        pet_kind = MemoryService._extract_pet_name(memory_text)
+        if pet_kind:
+            return f"pet_name:{pet_kind[0]}"
+        if any(
+            marker in normalized
+            for marker in ("lives in", "moved from", "moved to", "relocated to", "住在", "搬到", "搬去")
+        ):
+            return "current_location"
+        if any(
+            marker in normalized
+            for marker in (
+                "current work status",
+                "job opportunities",
+                "accepted an offer",
+                "evaluating offers",
+                "work status",
+                "工作状态",
+                "换工作",
+                "offer",
+            )
+        ):
+            return "current_work_status"
+        if any(
+            marker in normalized
+            for marker in (
+                "communication preference",
+                "reassurance",
+                "direct advice",
+                "before advice",
+                "instead of reassurance",
+                "沟通偏好",
+                "直接建议",
+                "先安慰",
+                "说教",
+            )
+        ):
+            return "communication_preference"
+        if any(marker in normalized for marker in ("birthday", "生日")):
+            return "birthday"
+        favorite = MemoryService._extract_favorite_consumable(memory_text)
+        if favorite:
+            return f"favorite:{favorite[0]}"
+        if any(
+            marker in normalized
+            for marker in (
+                "sleep reminder preference",
+                "gentle reminders about sleep",
+                "sleep reminders",
+                "reminded to sleep",
+                "reminders to sleep",
+                "reminders to go to sleep",
+                "gentle sleep reminders",
+                "nighttime routine preference",
+                "催睡觉",
+                "提醒睡觉",
+                "睡眠提醒",
+            )
+        ):
+            return "sleep_reminder_preference"
+        return None
+
+    @classmethod
+    def _memory_supported_by_source(cls, memory_text: str, l3_metadata: dict[str, Any]) -> bool:
+        source_text = str(l3_metadata.get("source_text") or "")
+        if not source_text:
+            return True
+        pet_name = cls._extract_pet_name(memory_text)
+        if pet_name:
+            pet_kind, name = pet_name
+            kind_markers = {
+                "cat": ("猫", "cat"),
+                "dog": ("狗", "dog"),
+                "bird": ("鸟", "鹦鹉", "bird", "parrot"),
+                "rabbit": ("兔", "兔子", "rabbit", "bunny"),
+            }.get(pet_kind, (pet_kind,))
+            lowered_source = source_text.lower()
+            source_pet_name = cls._extract_pet_name(source_text)
+            if source_pet_name:
+                return source_pet_name[0] == pet_kind
+            return any(marker in lowered_source for marker in kind_markers) and name in source_text
+        nickname = cls._extract_current_nickname(memory_text)
+        if nickname:
+            lowered_source = source_text.lower()
+            nickname_markers = (
+                "叫我",
+                "称呼我",
+                "叫用户",
+                "称呼",
+                "preferred name",
+                "name should be",
+                "name is",
+                "called",
+                "addressed as",
+            )
+            return nickname in source_text and any(marker in lowered_source for marker in nickname_markers)
+        slot = cls._memory_conflict_slot(memory_text)
+        if slot == "birthday":
+            return cls._source_has_any(source_text, ("生日", "birthday"))
+        if slot == "current_location":
+            return cls._source_has_any(
+                source_text,
+                ("住", "搬", "城市", "location", "live", "lived", "moving", "moved", "relocated"),
+            )
+        if slot == "current_work_status":
+            return cls._source_has_any(source_text, ("工作", "offer", "job", "moonshot", "换工作"))
+        if slot == "communication_preference":
+            lowered_memory = memory_text.lower()
+            if cls._source_has_any(
+                memory_text,
+                ("anxiety", "anxious", "break down", "breaking down", "焦虑", "拆解"),
+            ):
+                return cls._source_has_any(
+                    source_text,
+                    ("焦虑", "拆解", "anxiety", "anxious", "break down", "breaking down"),
+                )
+            if cls._source_has_any(
+                memory_text,
+                ("concise", "direct", "简洁", "直接"),
+            ):
+                return cls._source_has_any(
+                    source_text,
+                    ("简洁", "直接", "concise", "direct"),
+                )
+            if "reassurance" in lowered_memory or "comfort" in lowered_memory or "安慰" in memory_text:
+                return cls._source_has_any(
+                    source_text,
+                    ("安慰", "reassurance", "comfort"),
+                )
+            return cls._source_has_any(
+                source_text,
+                (
+                    "沟通",
+                    "建议",
+                    "安慰",
+                    "说教",
+                    "焦虑",
+                    "communication",
+                    "advice",
+                    "suggestions",
+                    "reassurance",
+                    "anxious",
+                ),
+            )
+        if slot == "favorite:drink":
+            return cls._source_has_any(
+                source_text,
+                ("饮品", "饮料", "喝", "咖啡", "茶", "drink", "beverage", "coffee", "tea"),
+            )
+        if slot == "favorite:food":
+            return cls._source_has_any(source_text, ("食物", "吃", "food"))
+        if slot == "sleep_reminder_preference":
+            return cls._source_has_any(source_text, ("睡", "提醒", "sleep", "reminder"))
+        return True
+
+    @staticmethod
+    def _source_has_any(source_text: str, markers: tuple[str, ...]) -> bool:
+        lowered_source = source_text.lower()
+        return any(marker.lower() in lowered_source for marker in markers)
+
+    @classmethod
+    def _canonical_memory_text(cls, memory_text: str) -> str:
+        canonical_nickname = cls._extract_current_nickname(memory_text)
+        if canonical_nickname:
+            return f"User prefers to be called {canonical_nickname}"
+        pet_name = cls._extract_pet_name(memory_text)
+        if pet_name:
+            pet_kind, name = pet_name
+            return f"User has a {pet_kind} named {name}"
+        current_location = cls._extract_current_location(memory_text)
+        if current_location:
+            return f"User lives in {current_location}"
+        work_status = cls._extract_current_work_status(memory_text)
+        if work_status:
+            return f"User current work status: {work_status}"
+        communication_preference = cls._extract_communication_preference(memory_text)
+        if communication_preference:
+            return f"User communication preference: {communication_preference}"
+        birthday = cls._extract_birthday(memory_text)
+        if birthday:
+            return f"User birthday: {birthday}"
+        favorite = cls._extract_favorite_consumable(memory_text)
+        if favorite:
+            kind, value = favorite
+            return f"User favorite {kind}: {value}"
+        sleep_reminder_preference = cls._extract_sleep_reminder_preference(memory_text)
+        if sleep_reminder_preference:
+            return f"User sleep reminder preference: {sleep_reminder_preference}"
+        return memory_text
+
+    @classmethod
+    def _canonical_memory_text_from_source(
+        cls, memory_text: str, l3_metadata: dict[str, Any]
+    ) -> str:
+        source_text = str(l3_metadata.get("source_text") or "")
+        source_pet_name = cls._extract_pet_name(source_text)
+        memory_pet_name = cls._extract_pet_name(memory_text)
+        if source_pet_name and memory_pet_name and source_pet_name[0] == memory_pet_name[0]:
+            pet_kind, name = source_pet_name
+            return f"User has a {pet_kind} named {name}"
+        return cls._canonical_memory_text(memory_text)
+
+    @staticmethod
+    def _extract_current_nickname(memory_text: str) -> str | None:
+        patterns = (
+            r"\bpreferred\s+name\s+from\s+.+?\s+to\s+'?([\u4e00-\u9fffA-Za-z0-9_-]{2,24})",
+            r"\bpreferred\s+name\s+from\s+'?[\u4e00-\u9fffA-Za-z0-9_-]{2,24}'?\s+to\s+'?([\u4e00-\u9fffA-Za-z0-9_-]{2,24})'?",
+            r"\bfrom\s+[\u4e00-\u9fffA-Za-z0-9_-]{2,24}\s+to\s+([\u4e00-\u9fffA-Za-z0-9_-]{2,24})",
+            r"\bname\s+to\s+([\u4e00-\u9fffA-Za-z0-9_-]{2,24})",
+            r"\bname\s+should\s+be\s+([\u4e00-\u9fffA-Za-z0-9_-]{2,24})",
+            r"\bname\s+is\s+([\u4e00-\u9fffA-Za-z0-9_-]{2,24})",
+            r"\bshould\s+be\s+called\s+'?([\u4e00-\u9fffA-Za-z0-9_-]{2,24})'?",
+            r"\baddressed\s+as\s+'?([\u4e00-\u9fffA-Za-z0-9_-]{2,24})'?",
+            r"(?:改成|改为|更正为|纠正为)\s*([\u4e00-\u9fffA-Za-z0-9_-]{2,24})",
+            r"(?:叫我|称呼我|叫|称呼)\s*([\u4e00-\u9fffA-Za-z0-9_-]{2,24})",
+            r"(?:called|be called)\s+([\u4e00-\u9fffA-Za-z0-9_-]{2,24})",
+        )
+        normalized = memory_text.strip()
+        if re.search(r"\b(?:cat|dog)(?:'s)?\s+name\s+is\b", normalized, flags=re.IGNORECASE):
+            return None
+        slot_markers = (
+            "preferred name",
+            "prefers to be called",
+            "prefers to be addressed as",
+            "name should be",
+            "name is",
+            "called",
+            "addressed as",
+            "叫我",
+            "称呼",
+        )
+        if not any(marker in normalized.lower() for marker in slot_markers):
+            return None
+        for pattern in patterns:
+            matches = re.findall(pattern, normalized, flags=re.IGNORECASE)
+            if matches:
+                value = str(matches[-1]).strip("。,.， ")
+                value = re.split(r"\s*\(corrected\s+from\b", value, maxsplit=1, flags=re.IGNORECASE)[
+                    0
+                ].strip("。,.， ")
+                return value
+        return None
+
+    @staticmethod
+    def _extract_pet_name(memory_text: str) -> tuple[str, str] | None:
+        normalized = memory_text.strip()
+        lowered = normalized.lower()
+        kind: str | None = None
+        if "cat" in lowered or "猫" in normalized:
+            kind = "cat"
+        elif "dog" in lowered or "狗" in normalized:
+            kind = "dog"
+        elif "bird" in lowered or "parrot" in lowered or "鸟" in normalized or "鹦鹉" in normalized:
+            kind = "bird"
+        elif "rabbit" in lowered or "bunny" in lowered or "兔" in normalized:
+            kind = "rabbit"
+        if kind is None:
+            return None
+
+        patterns = (
+            r"\bfrom\s+[\u4e00-\u9fffA-Za-z0-9_-]{1,24}\s+to\s+([\u4e00-\u9fffA-Za-z0-9_-]{1,24})",
+            r"\b(?:cat|dog)\s+was\s+initially\s+named\s+[\u4e00-\u9fffA-Za-z0-9_-]{1,24}\s+but\s+corrected\s+to\s+([\u4e00-\u9fffA-Za-z0-9_-]{1,24})",
+            r"\b(?:cat|dog|bird|parrot|rabbit|bunny)\s+character\s+named\s+([\u4e00-\u9fffA-Za-z0-9_-]{1,24})",
+            r"\b(?:cat|dog|bird|parrot|rabbit|bunny)(?:'s)?\s+name\s+is\s+([\u4e00-\u9fffA-Za-z0-9_-]{1,24})",
+            r"\b(?:cat|dog|bird|parrot|rabbit|bunny)\s+(?:is\s+)?named\s+([\u4e00-\u9fffA-Za-z0-9_-]{1,24})",
+            r"(?:猫|狗|鸟|鹦鹉|兔|兔子)不叫[\u4e00-\u9fffA-Za-z0-9_-]{1,24}[，,]?\s*(?:现在)?(?:叫|名叫|名字叫)\s*([\u4e00-\u9fffA-Za-z0-9_-]{1,24})",
+            r"(?:猫|狗|鸟|鹦鹉|兔|兔子)(?:的)?(?:名字)?(?:叫|名叫)\s*([\u4e00-\u9fffA-Za-z0-9_-]{1,24})",
+            r"(?:养了|有).*?(?:猫|狗|鸟|鹦鹉|兔|兔子).*?(?:叫|名叫|名字叫)\s*([\u4e00-\u9fffA-Za-z0-9_-]{1,24})",
+        )
+        for pattern in patterns:
+            matches = re.findall(pattern, normalized, flags=re.IGNORECASE)
+            if matches:
+                return kind, str(matches[-1]).strip("。,.， ")
+        return None
+
+    @staticmethod
+    def _extract_current_location(memory_text: str) -> str | None:
+        normalized = memory_text.strip()
+        lowered = normalized.lower()
+        if not any(marker in lowered for marker in ("live", "moved", "relocated", "住", "搬")):
+            return None
+        patterns = (
+            r"\bfrom\s+[\u4e00-\u9fffA-Za-z0-9_-]{2,40}\s+to\s+([\u4e00-\u9fffA-Za-z0-9_-]{2,40})",
+            r"\bmoved\s+to\s+([\u4e00-\u9fffA-Za-z0-9_-]{2,40})",
+            r"\bbefore\s+moving\s+to\s+([\u4e00-\u9fffA-Za-z0-9_-]{2,40})",
+            r"\bbefore\s+relocating\s+to\s+([\u4e00-\u9fffA-Za-z0-9_-]{2,40})",
+            r"\brelocated\s+to\s+([\u4e00-\u9fffA-Za-z0-9_-]{2,40})",
+            r"\blives?\s+in\s+([\u4e00-\u9fffA-Za-z0-9_-]{2,40})",
+            r"(?:搬到|搬去|住在|现在住在)\s*([\u4e00-\u9fffA-Za-z0-9_-]{2,40})",
+        )
+        for pattern in patterns:
+            matches = re.findall(pattern, normalized, flags=re.IGNORECASE)
+            if matches:
+                value = str(matches[-1]).strip("。,.， ")
+                value = re.split(r"\s*\(corrected\s+from\b", value, maxsplit=1, flags=re.IGNORECASE)[
+                    0
+                ].strip("。,.， ")
+                return value
+        return None
+
+    @staticmethod
+    def _extract_current_work_status(memory_text: str) -> str | None:
+        normalized = memory_text.strip()
+        lowered = normalized.lower()
+        markers = (
+            "work status",
+            "job opportunities",
+            "evaluating offers",
+            "accepted an offer",
+            "current work",
+            "stopped evaluating",
+            "换工作",
+            "工作状态",
+            "offer",
+        )
+        if not any(marker in lowered for marker in markers):
+            return None
+        patterns = (
+            r"\b(user\s+)?accepted\s+(.+?offer.+?)(?:\s+and\s+is\s+no\s+longer\b|[.;。]|$)",
+            r"(?:work status|job status|current work status).*?\bfrom\b.+?\bto\b\s+(.+?)(?:[.;。]|$)",
+            r"\bcurrent\s+work\s+status:\s*(.+?)(?:[.;。]|$)",
+            r"\bstopped\s+evaluating\s+.+?\s+after\s+accepting\s+(.+?offer)(?:,|[.;。]|$)",
+            r"\baccepted\s+(.+?offer.+?)(?:[.;。]|$)",
+            r"\bis\s+(.+?job opportunities)(?:[.;。]|$)",
+            r"(?:工作状态|现在)\s*(?:是|为)?\s*([^。,.，]+)",
+        )
+        for pattern in patterns:
+            matches = re.findall(pattern, normalized, flags=re.IGNORECASE)
+            if matches:
+                match = matches[-1]
+                if isinstance(match, tuple):
+                    match = next((part for part in reversed(match) if part), "")
+                value = str(match).strip("。,.， ")
+                value = re.split(
+                    r"\s+(?:and\s+)?(?:is\s+)?no\s+longer\b|\s+and\s+stopped\s+evaluating\b|，?不再|，?不需要",
+                    value,
+                    maxsplit=1,
+                    flags=re.IGNORECASE,
+                )[0].strip("。,.， ")
+                if (
+                    value.startswith("a job offer")
+                    or value.startswith("an offer")
+                    or ("offer" in value.lower() and not value.lower().startswith("accepted"))
+                ):
+                    value = f"accepted {value}"
+                return value
+        return None
+
+    @staticmethod
+    def _extract_communication_preference(memory_text: str) -> str | None:
+        normalized = memory_text.strip()
+        lowered = normalized.lower()
+        markers = (
+            "communication preference",
+            "reassurance",
+            "direct advice",
+            "advice",
+            "suggestions",
+            "anxious",
+            "沟通偏好",
+            "建议",
+            "安慰",
+            "说教",
+        )
+        if not any(marker in lowered for marker in markers):
+            return None
+        patterns = (
+            r"\bupdated\s+communication\s+preference\s+to\s+want\s+(.+?)(?:\s+without\b|\s+instead\s+of\b|[.;。]|$)",
+            r"\bupdated\s+their\s+communication\s+preference\s+to\s+want\s+(.+?)(?:\s+without\b|\s+instead\s+of\b|[.;。]|$)",
+            r"\bupdated\s+communication\s+preference\s+.+?\bto\s+prefer\s+(.+?)(?:\s+without\b|\s+instead\s+of\b|[.;。]|$)",
+            r"\bcommunication\s+preference\s+updated\s+to\s+want\s+(.+?)(?:\s+without\b|\s+instead\s+of\b|[.;。]|$)",
+            r"\bcommunication\s+preference\s+updated\s+to\s+prefer\s+(.+?)(?:\s+without\b|\s+instead\s+of\b|[.;。]|$)",
+            r"\bcommunication\s+preference\s+updated:\s*wants\s+(.+?)(?:\s+without\b|\s+instead\s+of\b|[.;。]|$)",
+            r"\bcommunication\s+preference\s+is\s+for\s+(.+?)(?:\s+without\b|\s+instead\s+of\b|[.;。]|$)",
+            r"\bcommunication\s+preference\s+is\s+to\s+receive\s+(.+?)(?:\s+without\b|\s+instead\s+of\b|[.;。]|$)",
+            r"\bcommunication\s+preference\s+has\s+been\s+updated\s+to\s+want\s+(.+?)(?:\s+without\b|\s+instead\s+of\b|[.;。]|$)",
+            r"\bcommunication\s+preference\s+has\s+been\s+updated:\s+they\s+now\s+want\s+(.+?)(?:\s+without\b|\s+instead\s+of\b|[.;。]|$)",
+            r"\bprefers\s+(that\s+when\s+.+?)(?:\s+before\s+giving\b|[.;。]|$)",
+            r"\bprefers\s+(.+?advice)(?:\s+without\b|\s+instead\s+of\b|[.;。]|$)",
+            r"\bprefers\s+(.+?suggestions)(?:\s+without\b|\s+instead\s+of\b|[.;。]|$)",
+            r"\bnow\s+wants\s+(.+?)(?:\s+without\b|\s+instead\s+of\b|[.;。]|$)",
+            r"\bnow\s+wants\s+(.+?)\s+instead\s+of\b",
+            r"\bprefers\s+(.+?)\s+before\b",
+            r"\bcommunication preference:\s*(.+?)(?:[.;。]|$)",
+            r"(?:沟通偏好|希望你|想要你)\s*([^。,.，]+)",
+        )
+        for pattern in patterns:
+            matches = re.findall(pattern, normalized, flags=re.IGNORECASE)
+            if matches:
+                value = str(matches[-1]).strip("。,.， ")
+                value = re.split(
+                    r"\s+without\b|\s+instead\s+of\b|，?不需要|，?不要",
+                    value,
+                    maxsplit=1,
+                    flags=re.IGNORECASE,
+                )[0].strip("。,.， ")
+                return value
+        return None
+
+    @staticmethod
+    def _extract_birthday(memory_text: str) -> str | None:
+        normalized = memory_text.strip()
+        lowered = normalized.lower()
+        if "birthday" not in lowered and "生日" not in normalized:
+            return None
+        patterns = (
+            r"\bfrom\s+.+?\s+to\s+(.+?)(?:[.;。]|$)",
+            r"\bbirthday\s*(?:is|:)\s*(.+?)(?:[.;。]|$)",
+            r"(?:生日|出生日期).*?不是[^。,.，]+[，,]?\s*(?:是|改成|改为|更正为|纠正为)\s*([^。,.，]+)",
+            r"(?:生日|出生日期).*?(?:改成|改为|更正为|纠正为|(?<!不)是)\s*([^。,.，]+)",
+            r"(?:生日|出生日期)(?:是|为|:|：)?\s*([^。,.，]+)",
+        )
+        for pattern in patterns:
+            matches = re.findall(pattern, normalized, flags=re.IGNORECASE)
+            if matches:
+                value = str(matches[-1]).strip("。,.， ")
+                value = re.split(
+                    r"\s*\(corrected\s+from\b|\s*\(not\b|\s*\(previously\s+thought\s+to\s+be\b|,\s*correcting\s+a\s+previous\b|,\s*corrected\s+from\b",
+                    value,
+                    maxsplit=1,
+                    flags=re.IGNORECASE,
+                )[0].strip("。,.， ")
+                return value
+        return None
+
+    @staticmethod
+    def _extract_favorite_consumable(memory_text: str) -> tuple[str, str] | None:
+        normalized = memory_text.strip()
+        lowered = normalized.lower()
+        kind: str | None = None
+        if any(
+            marker in lowered
+            for marker in (
+                "favorite drink",
+                "preferred drink",
+                "drink preference",
+                "beverage preference",
+                "preferred beverage",
+                "beverage preference changed",
+                "switched from drinking",
+                "changed drink preference",
+                "changed their drink preference",
+                "drink preference changed",
+                "switched drink preference",
+                "switched their drink preference",
+                "favorite drink",
+            )
+        ) or any(marker in normalized for marker in ("喜欢喝", "饮品", "饮料")):
+            kind = "drink"
+        elif any(
+            marker in lowered
+            for marker in (
+                "favorite food",
+                "preferred food",
+                "food preference",
+                "changed food preference",
+                "food preference changed",
+                "food preference changed",
+                "switched food preference",
+                "switched their food preference",
+                "favorite food",
+            )
+        ) or any(
+            marker in normalized for marker in ("喜欢吃", "食物")
+        ):
+            kind = "food"
+        if kind is None:
+            return None
+
+        patterns: tuple[str, ...]
+        if kind == "drink":
+            patterns = (
+                r"\bnow\s+prefers\s+(.+?)\s+instead\s+of\b.+?\bfavorite\s+drink\b",
+                r"\bbeverage\s+preference\s+changed\s+from\s+.+?\s+to\s+(.+?)(?:\s+and\s+no\s+longer\b|[.;。]|$)",
+                r"\bbeverage\s+preference\s+from\s+.+?\s+to\s+(.+?)(?:\s+and\s+no\s+longer\b|[.;。]|$)",
+                r"\bchanged\s+drink\s+preference\s+from\s+.+?\s+to\s+(.+?)(?:[.;。]|$)",
+                r"\bchanged\s+their\s+drink\s+preference\s+from\s+.+?\s+to\s+(.+?)(?:[.;。]|$)",
+                r"\bdrink\s+preference\s+changed\s+to\s+(.+?)(?:[.;。]|$)",
+                r"\bswitched\s+drink\s+preference\s+from\s+.+?\s+to\s+(.+?)(?:,|\s+and\s+no\s+longer\b|[.;。]|$)",
+                r"\bswitched\s+their\s+drink\s+preference\s+from\s+.+?\s+to\s+(.+?)(?:,|\s+and\s+no\s+longer\b|[.;。]|$)",
+                r"\bprefers\s+(.+?)\s+as\s+their\s+favorite\s+drink\b",
+                r"\bswitched\s+from\s+drinking\s+.+?\s+to\s+(.+?)\s+as\s+their\s+preferred\s+beverage\b",
+                r"\bswitched\s+from\s+drinking\s+.+?\s+to\s+preferring\s+(.+?)(?:[.;。]|$)",
+                r"\bswitched\s+from\s+.+?\s+to\s+(.+?)\s+as\s+their\s+preferred\s+beverage\b",
+                r"\bswitched\s+from\s+.+?\s+to\s+(.+?)\s+as\s+their\s+preferred\s+drink\b",
+                r"\bfavorite\s+drink\s*(?:is|:)\s*(.+?)(?:[.;。]|$)",
+                r"\bdrink\s+preference\s*(?:is|:|to)\s*(.+?)(?:[.;。]|$)",
+                r"\bbeverage\s+preference\s*(?:is|:|to)\s*(.+?)(?:[.;。]|$)",
+                r"(?:饮品|饮料).*?(?:偏好)?(?:改成|改为|更正为|纠正为|是|为|:|：)\s*([^。,.，]+)",
+                r"(?:最喜欢喝|喜欢喝|饮品|饮料)(?:是|为|:|：)?\s*([^。,.，]+)",
+            )
+        else:
+            patterns = (
+                r"\bnow\s+prefers\s+(.+?)\s+instead\s+of\b.+?\bfavorite\s+food\b",
+                r"\bfood\s+preference\s+changed\s+from\s+.+?\s+to\s+(.+?)(?:[.;。]|$)",
+                r"\bswitched\s+from\s+eating\s+.+?\s+to\s+(.+?)\s+as\s+their\s+preferred\s+food\b",
+                r"\bswitched\s+from\s+eating\s+.+?\s+to\s+(.+?)\s+as\s+their\s+favorite\s+food\b",
+                r"\bchanged\s+food\s+preference\s+from\s+.+?\s+to\s+(.+?)(?:[.;。]|$)",
+                r"\bswitched\s+food\s+preference\s+from\s+.+?\s+to\s+(.+?)(?:[.;。]|$)",
+                r"\bswitched\s+their\s+food\s+preference\s+from\s+.+?\s+to\s+(.+?)(?:[.;。]|$)",
+                r"\bfood\s+preference\s+changed\s+to\s+(.+?)(?:[.;。]|$)",
+                r"\bfavorite\s+food\s*(?:is|:)\s*(.+?)(?:[.;。]|$)",
+                r"\bfood\s+preference\s*(?:is|:|to)\s*(.+?)(?:[.;。]|$)",
+                r"(?:食物).*?(?:偏好)?(?:改成|改为|更正为|纠正为|是|为|:|：)\s*([^。,.，]+)",
+                r"(?:最喜欢吃|喜欢吃|食物)(?:是|为|:|：)?\s*([^。,.，]+)",
+            )
+        for pattern in patterns:
+            matches = re.findall(pattern, normalized, flags=re.IGNORECASE)
+            if matches:
+                value = str(matches[-1]).strip("。,.， ")
+                value = re.split(
+                    r",?\s+no\s+longer\s+drinking\b|,?\s+no\s+longer\s+drinks\b|,?\s+no\s+longer\s+eating\b|,?\s+no\s+longer\s+eats\b|\s+and\s+no\s+longer\s+drinks\b|\s+and\s+no\s+longer\s+eats\b|\s+and\s+stopped\s+drinking\b|\s+and\s+stopped\s+eating\b|，?不再",
+                    value,
+                    maxsplit=1,
+                    flags=re.IGNORECASE,
+                )[0].strip("。,.， ")
+                return kind, value
+        return None
+
+    @staticmethod
+    def _extract_sleep_reminder_preference(memory_text: str) -> str | None:
+        normalized = memory_text.strip()
+        lowered = normalized.lower()
+        markers = (
+            "sleep reminder preference",
+            "gentle reminders about sleep",
+            "sleep reminders",
+            "reminded to sleep",
+            "reminders to sleep",
+            "reminders to go to sleep",
+            "gentle sleep reminders",
+            "going to sleep",
+            "nighttime routine preference",
+            "催睡觉",
+            "提醒睡觉",
+            "睡眠提醒",
+        )
+        if not any(marker in lowered for marker in markers):
+            return None
+        patterns = (
+            r"\bnow\s+(?:is\s+)?((?:okay|ok|fine)\s+with\s+.+?sleep reminders?)(?:\s+instead\b|[.;。]|$)",
+            r"\bnow\s+(accepts\s+gentle\s+reminders\s+to\s+go\s+to\s+sleep)(?:,|\s+representing\b|[.;。]|$)",
+            r"\bnow\s+(accepts\s+gentle\s+reminders\s+to\s+sleep)(?:,|\s+representing\b|[.;。]|$)",
+            r"\bnow\s+(accepts\s+gentle\s+reminders\s+about\s+going\s+to\s+sleep)(?:,|\s+representing\b|[.;。]|$)",
+            r"\b(accepts\s+gentle\s+reminders\s+about\s+sleep)(?:\s+and\b|,|[.;。]|$)",
+            r"\bnighttime\s+routine\s+preference\s+to\s+(now\s+accept\s+gentle\s+sleep\s+reminders)(?:,|[.;。]|$)",
+            r"\b(can\s+now\s+accept\s+gentle\s+reminders\s+to\s+go\s+to\s+sleep)(?:,|\s+updating\b|[.;。]|$)",
+            r"\b(can\s+now\s+accept\s+gentle\s+reminders\s+about\s+going\s+to\s+sleep)(?:[.;。]|$)",
+            r"\bsleep reminder preference:\s*(.+?)(?:[.;。]|$)",
+            r"\bdislikes\s+(.+?)(?:[.;。]|$)",
+            r"(?:可以|接受|愿意).*?(温和.*?(?:提醒睡觉|睡眠提醒))",
+            r"(?:不喜欢|讨厌|不要|不需要).*?(催睡觉|提醒睡觉|睡眠提醒)",
+        )
+        for pattern in patterns:
+            matches = re.findall(pattern, normalized, flags=re.IGNORECASE)
+            if matches:
+                value = str(matches[-1]).strip("。,.， ")
+                if value in {"催睡觉", "提醒睡觉", "睡眠提醒"}:
+                    return "dislikes sleep reminders"
+                if "温和" in value:
+                    return "okay with gentle sleep reminders"
+                return value
+        return None
 
     def _l3_metadata(
         self, source_refs: list[dict[str, str]], request_metadata: dict[str, Any]
     ) -> dict[str, Any]:
-        return {
+        metadata = {
             "source_refs": source_refs,
             "source_type": self._enum_value(
                 SourceType,
@@ -518,6 +1405,12 @@ class MemoryService:
                 MemoryType.PROFILE.value,
             ),
         }
+        backend_categories = self._list_metadata_value(request_metadata.get("backend_categories"))
+        if backend_categories:
+            metadata["backend_categories"] = backend_categories
+        if request_metadata.get("source_text"):
+            metadata["source_text"] = str(request_metadata["source_text"])
+        return metadata
 
     @staticmethod
     def _enum_value(enum_type: type[StrEnum], value: object, default: str) -> str:
@@ -559,6 +1452,27 @@ class MemoryService:
             for message in messages
         )
 
+    def _upsert_default_summary(self, user_id: str, character_id: str) -> None:
+        deleted_refs = self.repository.deleted_source_refs(user_id, character_id)
+        rounds = [
+            entry
+            for entry in self.repository.list_rounds(user_id, character_id)
+            if (entry.session_id, entry.round_id) not in deleted_refs
+            and self._round_allowed_in_default_summary(entry)
+        ]
+        self.repository.upsert_summary_from_rounds(user_id, character_id, rounds)
+
+    @staticmethod
+    def _round_allowed_in_default_summary(entry: JournalEntry) -> bool:
+        user_text = " ".join(
+            str(message.get("content", ""))
+            for message in entry.messages
+            if message.get("role") == "user"
+        )
+        lowered = user_text.lower()
+        roleplay_markers = ("剧情", "角色扮演", "设定", "story", "roleplay", "fiction")
+        return not any(marker in lowered for marker in roleplay_markers)
+
     @staticmethod
     def _text_is_restricted_or_unsafe(content: str) -> bool:
         normalized = content.lower()
@@ -593,7 +1507,7 @@ class MemoryService:
             raise ValueError("round_id conflict: existing round scope or fingerprint does not match")
 
     def _rebuild_rounds(self, request: RebuildMemoryRequest) -> list[JournalEntry]:
-        deleted_refs = self.repository.deleted_source_refs(request.user_id, request.character_id)
+        excluded_refs = self.repository.deleted_source_refs(request.user_id, request.character_id)
         return [
             entry
             for entry in self._effective_history_rounds(
@@ -601,8 +1515,39 @@ class MemoryService:
                 request.character_id,
                 request.session_id,
             )
-            if (entry.session_id, entry.round_id) not in deleted_refs
+            if (entry.session_id, entry.round_id) not in excluded_refs
         ]
+
+    def _uncovered_rebuild_rounds(
+        self,
+        request: RebuildMemoryRequest,
+        rounds: list[JournalEntry],
+        deleted_refs: set[tuple[str | None, str | None]],
+    ) -> list[JournalEntry]:
+        processed_refs = self._processed_l3_source_refs(request, deleted_refs)
+        return [
+            entry
+            for entry in rounds
+            if (entry.session_id, entry.round_id) not in processed_refs
+        ]
+
+    def _processed_l3_source_refs(
+        self,
+        request: RebuildMemoryRequest,
+        deleted_refs: set[tuple[str | None, str | None]],
+    ) -> set[tuple[str | None, str | None]]:
+        processed_refs: set[tuple[str | None, str | None]] = set()
+        for memory in self.repository.list_memories(request.user_id, request.character_id):
+            if memory.memory_status is MemoryStatus.DELETED:
+                continue
+            for source_ref in memory.source_refs:
+                ref_key = source_ref_key(source_ref)
+                if ref_key in deleted_refs:
+                    continue
+                if request.session_id is not None and source_ref.get("session_id") != request.session_id:
+                    continue
+                processed_refs.add(ref_key)
+        return processed_refs
 
     def _effective_history_rounds(
         self, user_id: str, character_id: str, session_id: str | None

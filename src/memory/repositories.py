@@ -185,6 +185,31 @@ class MemoryRepository(Protocol):
     def active_memories(self, user_id: str, character_id: str) -> list[MemoryIndexEntry]:
         ...
 
+    def list_memories(self, user_id: str, character_id: str) -> list[MemoryIndexEntry]:
+        ...
+
+    def get_active_memory_by_backend_id(
+        self, user_id: str, character_id: str, backend_memory_id: str
+    ) -> MemoryIndexEntry | None:
+        ...
+
+    def update_memory_index(
+        self,
+        memory_id: str,
+        *,
+        source_refs: list[dict[str, str]],
+        memory_text: str,
+        source_type: str = SourceType.CHAT_ROUND.value,
+        fact_subject: str = FactSubject.USER.value,
+        context_type: str = ContextType.REAL_USER.value,
+        roleplay_mode: str = RoleplayMode.OFF.value,
+        data_classification: str = DataClassification.NORMAL.value,
+        memory_type: str | None = None,
+        backend_categories: list[str] | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> MemoryIndexEntry | None:
+        ...
+
     def mark_memory_deleted(self, memory_id: str) -> MemoryIndexEntry | None:
         ...
 
@@ -197,6 +222,9 @@ class MemoryRepository(Protocol):
         ...
 
     def deleted_source_refs(self, user_id: str, character_id: str) -> set[tuple[str | None, str | None]]:
+        ...
+
+    def excluded_source_refs(self, user_id: str, character_id: str) -> set[tuple[str | None, str | None]]:
         ...
 
     def save_task(self, task: TaskEntry) -> TaskEntry:
@@ -375,6 +403,55 @@ class InMemoryMemoryRepository(L1CacheMixin):
             and memory.memory_status is MemoryStatus.ACTIVE
         ]
 
+    def list_memories(self, user_id: str, character_id: str) -> list[MemoryIndexEntry]:
+        return [
+            memory
+            for memory in self.memories.values()
+            if memory.user_id == user_id and memory.character_id == character_id
+        ]
+
+    def get_active_memory_by_backend_id(
+        self, user_id: str, character_id: str, backend_memory_id: str
+    ) -> MemoryIndexEntry | None:
+        return next(
+            (
+                memory
+                for memory in self.active_memories(user_id, character_id)
+                if memory.backend_memory_id == backend_memory_id
+            ),
+            None,
+        )
+
+    def update_memory_index(
+        self,
+        memory_id: str,
+        *,
+        source_refs: list[dict[str, str]],
+        memory_text: str,
+        source_type: str = SourceType.CHAT_ROUND.value,
+        fact_subject: str = FactSubject.USER.value,
+        context_type: str = ContextType.REAL_USER.value,
+        roleplay_mode: str = RoleplayMode.OFF.value,
+        data_classification: str = DataClassification.NORMAL.value,
+        memory_type: str | None = None,
+        backend_categories: list[str] | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> MemoryIndexEntry | None:
+        memory = self.memories.get(memory_id)
+        if memory is None:
+            return None
+        memory.source_refs = source_refs
+        memory.memory_text = memory_text
+        memory.source_type = source_type
+        memory.fact_subject = fact_subject
+        memory.context_type = context_type
+        memory.roleplay_mode = roleplay_mode
+        memory.data_classification = data_classification
+        memory.memory_type = memory_type
+        memory.backend_categories = list(backend_categories or [])
+        memory.metadata = dict(metadata or {})
+        return memory
+
     def mark_memory_deleted(self, memory_id: str) -> MemoryIndexEntry | None:
         memory = self.memories.get(memory_id)
         if memory:
@@ -402,6 +479,17 @@ class InMemoryMemoryRepository(L1CacheMixin):
                 memory.user_id == user_id
                 and memory.character_id == character_id
                 and memory.memory_status is MemoryStatus.DELETED
+            ):
+                refs.update(source_ref_key(source_ref) for source_ref in memory.source_refs)
+        return refs
+
+    def excluded_source_refs(self, user_id: str, character_id: str) -> set[tuple[str | None, str | None]]:
+        refs: set[tuple[str | None, str | None]] = set()
+        for memory in self.memories.values():
+            if (
+                memory.user_id == user_id
+                and memory.character_id == character_id
+                and memory.memory_status in {MemoryStatus.DELETED, MemoryStatus.SUPERSEDED}
             ):
                 refs.update(source_ref_key(source_ref) for source_ref in memory.source_refs)
         return refs
@@ -741,6 +829,110 @@ class SqlAlchemyMemoryRepository(L1CacheMixin):
             ).all()
             return [self._memory_from_record(record) for record in records]
 
+    def list_memories(self, user_id: str, character_id: str) -> list[MemoryIndexEntry]:
+        return self._run(self._list_memories(user_id, character_id))
+
+    async def _list_memories(self, user_id: str, character_id: str) -> list[MemoryIndexEntry]:
+        async with self.session_factory() as session:
+            records = (
+                await session.scalars(
+                    select(MemoryRecord).where(
+                        and_(
+                            MemoryRecord.user_id == user_id,
+                            MemoryRecord.character_id == character_id,
+                        )
+                    )
+                )
+            ).all()
+            return [self._memory_from_record(record) for record in records]
+
+    def get_active_memory_by_backend_id(
+        self, user_id: str, character_id: str, backend_memory_id: str
+    ) -> MemoryIndexEntry | None:
+        return self._run(
+            self._get_active_memory_by_backend_id(user_id, character_id, backend_memory_id)
+        )
+
+    async def _get_active_memory_by_backend_id(
+        self, user_id: str, character_id: str, backend_memory_id: str
+    ) -> MemoryIndexEntry | None:
+        async with self.session_factory() as session:
+            record = await session.scalar(
+                select(MemoryRecord).where(
+                    and_(
+                        MemoryRecord.user_id == user_id,
+                        MemoryRecord.character_id == character_id,
+                        MemoryRecord.backend_memory_id == backend_memory_id,
+                        MemoryRecord.memory_status == MemoryStatus.ACTIVE.value,
+                    )
+                )
+            )
+            return self._memory_from_record(record) if record else None
+
+    def update_memory_index(
+        self,
+        memory_id: str,
+        *,
+        source_refs: list[dict[str, str]],
+        memory_text: str,
+        source_type: str = SourceType.CHAT_ROUND.value,
+        fact_subject: str = FactSubject.USER.value,
+        context_type: str = ContextType.REAL_USER.value,
+        roleplay_mode: str = RoleplayMode.OFF.value,
+        data_classification: str = DataClassification.NORMAL.value,
+        memory_type: str | None = None,
+        backend_categories: list[str] | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> MemoryIndexEntry | None:
+        return self._run(
+            self._update_memory_index(
+                memory_id,
+                source_refs=source_refs,
+                memory_text=memory_text,
+                source_type=source_type,
+                fact_subject=fact_subject,
+                context_type=context_type,
+                roleplay_mode=roleplay_mode,
+                data_classification=data_classification,
+                memory_type=memory_type,
+                backend_categories=backend_categories,
+                metadata=metadata,
+            )
+        )
+
+    async def _update_memory_index(
+        self,
+        memory_id: str,
+        *,
+        source_refs: list[dict[str, str]],
+        memory_text: str,
+        source_type: str = SourceType.CHAT_ROUND.value,
+        fact_subject: str = FactSubject.USER.value,
+        context_type: str = ContextType.REAL_USER.value,
+        roleplay_mode: str = RoleplayMode.OFF.value,
+        data_classification: str = DataClassification.NORMAL.value,
+        memory_type: str | None = None,
+        backend_categories: list[str] | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> MemoryIndexEntry | None:
+        async with self.session_factory() as session:
+            record = await session.get(MemoryRecord, memory_id)
+            if record is None:
+                return None
+            record.source_refs = source_refs
+            record.memory_text = memory_text
+            record.source_type = source_type
+            record.fact_subject = fact_subject
+            record.context_type = context_type
+            record.roleplay_mode = roleplay_mode
+            record.data_classification = data_classification
+            record.memory_type = memory_type
+            record.backend_categories = list(backend_categories or [])
+            record.memory_metadata = dict(metadata or {})
+            await session.commit()
+            await session.refresh(record)
+            return self._memory_from_record(record)
+
     def mark_memory_deleted(self, memory_id: str) -> MemoryIndexEntry | None:
         return self._run(self._mark_memory_deleted(memory_id))
 
@@ -796,6 +988,31 @@ class SqlAlchemyMemoryRepository(L1CacheMixin):
                             MemoryRecord.user_id == user_id,
                             MemoryRecord.character_id == character_id,
                             MemoryRecord.memory_status == MemoryStatus.DELETED.value,
+                        )
+                    )
+                )
+            ).all()
+            refs: set[tuple[str | None, str | None]] = set()
+            for record in records:
+                refs.update(source_ref_key(source_ref) for source_ref in record.source_refs)
+            return refs
+
+    def excluded_source_refs(self, user_id: str, character_id: str) -> set[tuple[str | None, str | None]]:
+        return self._run(self._excluded_source_refs(user_id, character_id))
+
+    async def _excluded_source_refs(
+        self, user_id: str, character_id: str
+    ) -> set[tuple[str | None, str | None]]:
+        async with self.session_factory() as session:
+            records = (
+                await session.scalars(
+                    select(MemoryRecord).where(
+                        and_(
+                            MemoryRecord.user_id == user_id,
+                            MemoryRecord.character_id == character_id,
+                            MemoryRecord.memory_status.in_(
+                                [MemoryStatus.DELETED.value, MemoryStatus.SUPERSEDED.value]
+                            ),
                         )
                     )
                 )

@@ -4,15 +4,12 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
+from http.client import RemoteDisconnected
 from typing import Any, Protocol
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 from uuid import uuid4
-
-from mem0 import Memory
-
-from memory.mem0_client import build_mem0_config
 
 
 class MemoryBackend(Protocol):
@@ -129,68 +126,6 @@ class FakeMemoryBackend:
         for memory_id in matching:
             self.memories.pop(memory_id, None)
         return len(matching)
-
-
-class Mem0MemoryBackend:
-    def __init__(self, memory: Any | None = None) -> None:
-        self.memory = memory or Memory.from_config(build_mem0_config())
-
-    def add(
-        self,
-        messages: list[dict[str, str]],
-        *,
-        user_id: str,
-        character_id: str,
-        metadata: dict[str, Any] | None = None,
-    ) -> list[dict[str, Any]]:
-        scoped_metadata = dict(metadata or {})
-        scoped_metadata["character_id"] = character_id
-        result = self.memory.add(
-            messages,
-            user_id=user_id,
-            agent_id=character_id,
-            metadata=scoped_metadata,
-        )
-        return list(result.get("results", []))
-
-    def search(
-        self,
-        query: str,
-        *,
-        user_id: str,
-        character_id: str,
-        limit: int,
-        threshold: float | None = None,
-    ) -> list[dict[str, Any]]:
-        result = self.memory.search(
-            query,
-            user_id=user_id,
-            agent_id=character_id,
-            limit=limit,
-            threshold=threshold,
-        )
-        return list(result.get("results", []))
-
-    def update(self, memory_id: str, data: str) -> None:
-        self.memory.update(memory_id, data)
-
-    def delete(self, memory_id: str) -> None:
-        self.memory.delete(memory_id)
-
-    def delete_many(self, memory_ids: list[str]) -> int:
-        deleted = 0
-        for memory_id in memory_ids:
-            if not memory_id:
-                continue
-            self.memory.delete(memory_id)
-            deleted += 1
-        return deleted
-
-    def delete_all(self, *, user_id: str, character_id: str) -> int:
-        result = self.memory.get_all(user_id=user_id, agent_id=character_id, limit=1000)
-        memories = result.get("results", []) if isinstance(result, dict) else result
-        memory_ids = [str(memory.get("id", "")) for memory in memories if isinstance(memory, dict)]
-        return self.delete_many(memory_ids)
 
 
 class Mem0HttpMemoryBackend:
@@ -312,6 +247,8 @@ class Mem0HttpMemoryBackend:
             raise RuntimeError(f"mem0 http {method} {path} failed: {exc.code} {detail}") from exc
         except URLError as exc:
             raise RuntimeError(f"mem0 http {method} {path} failed: {exc.reason}") from exc
+        except RemoteDisconnected as exc:
+            raise RuntimeError(f"mem0 http {method} {path} failed: {exc}") from exc
         except TimeoutError as exc:
             raise RuntimeError(f"mem0 http {method} {path} failed: {exc}") from exc
         if not payload:

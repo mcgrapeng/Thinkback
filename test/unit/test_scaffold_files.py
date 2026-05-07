@@ -22,8 +22,10 @@ def test_db_migration_script_exists() -> None:
 def test_compose_declares_expected_services_without_object_storage() -> None:
     compose = Path("docker-compose.yml").read_text(encoding="utf-8")
 
-    for service in ["app", "worker", "postgres", "redis", "qdrant"]:
+    for service in ["app", "worker", "postgres", "redis"]:
         assert f"  {service}:" in compose
+    assert "qdrant:" not in compose
+    assert "QDRANT_URL: ${QDRANT_URL:-https://qdrant.example.internal}" in compose
     assert "minio" not in compose.lower()
 
 
@@ -42,12 +44,14 @@ def test_env_example_declares_runtime_settings() -> None:
         "REDIS_HOST=",
         "QDRANT_URL=",
         "CELERY_BROKER_URL=",
-        "MEMORY_QDRANT_COLLECTION=",
-        "MEM0_BACKEND_MODE=",
         "MEM0_API_URL=",
         "MEM0_API_KEY=",
+        "MEM0_HTTP_TIMEOUT_SECONDS=",
     ]:
         assert variable in env_example
+    assert "QDRANT_API_KEY=" in env_example
+    assert "MEMORY_LLM_API_KEY=" not in env_example
+    assert "QDRANT_URL=https://qdrant.example.internal" in env_example
 
 
 def test_k8s_manifests_cover_api_worker_and_service() -> None:
@@ -69,9 +73,11 @@ def test_k8s_config_and_secret_examples_include_runtime_settings() -> None:
     secret = Path("k8s/secret.example.yaml").read_text(encoding="utf-8")
 
     assert "QDRANT_URL" in configmap
-    assert "MEM0_BACKEND_MODE" in configmap
+    assert "QDRANT_API_KEY" in secret
+    assert "MEM0_BACKEND_MODE" not in configmap
     assert "MEM0_API_URL" in configmap
+    assert "MEM0_HTTP_TIMEOUT_SECONDS" in configmap
     assert "CELERY_BROKER_URL" in configmap
     assert "POSTGRES_PASSWORD" in secret
     assert "MEM0_API_KEY" in secret
-    assert "MEMORY_LLM_API_KEY" in secret
+    assert "MEMORY_LLM_API_KEY" not in secret

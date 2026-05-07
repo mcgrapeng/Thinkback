@@ -1,7 +1,6 @@
 from pathlib import Path
 from types import SimpleNamespace
 
-from infra.config import Settings
 from memory.schemas import MemoryStatus
 
 
@@ -13,22 +12,15 @@ def test_celery_app_registers_diagnostic_memory_task() -> None:
 
 
 def test_mem0_config_builder_targets_qdrant_memory_collection() -> None:
-    from memory.mem0_client import build_mem0_config
-
-    settings = Settings()
-    config = build_mem0_config(settings=settings)
-
-    assert config["vector_store"]["provider"] == "qdrant"
-    assert config["vector_store"]["config"]["collection_name"] == "thinkback_memories"
-    assert config["llm"]["provider"] == "openai"
-    assert config["embedder"]["provider"] == "openai"
+    assert not Path("src/memory/mem0_client.py").exists()
 
 
 def test_mem0_boundary_does_not_instantiate_memory_engine() -> None:
-    import memory.mem0_client as mem0_client
+    source = Path("src/memory/backends.py").read_text(encoding="utf-8")
 
-    assert not hasattr(mem0_client, "Mem0Factory")
-    assert "Memory.from_config" not in mem0_client.__dict__.values()
+    assert "Memory.from_config" not in source
+    assert "build_mem0_config" not in source
+    assert "QdrantClient" not in source
 
 
 def test_memory_service_exposes_p0_public_workflows() -> None:
@@ -50,8 +42,12 @@ def test_default_memory_service_uses_sql_repository(monkeypatch) -> None:
     from memory.backends import FakeMemoryBackend
     from memory.repositories import SqlAlchemyMemoryRepository
 
+    class FakeHttpBackend(FakeMemoryBackend):
+        def __init__(self, **kwargs) -> None:  # type: ignore[no-untyped-def]
+            super().__init__()
+
     monkeypatch.setattr(dependencies, "_memory_service", None)
-    monkeypatch.setattr(dependencies, "Mem0MemoryBackend", FakeMemoryBackend)
+    monkeypatch.setattr(dependencies, "Mem0HttpMemoryBackend", FakeHttpBackend)
     service = dependencies.get_memory_service()
 
     assert isinstance(service.repository, SqlAlchemyMemoryRepository)
@@ -67,7 +63,6 @@ def test_memory_service_can_use_mem0_http_backend_from_settings(monkeypatch) -> 
         dependencies,
         "settings",
         Settings(
-            mem0_backend_mode="http_api",
             mem0_api_url="http://localhost:8889",
             mem0_api_key="test-key",
         ),
@@ -102,6 +97,7 @@ def test_real_pressure_script_reuses_configurable_mem0_backend() -> None:
 
     assert "get_memory_backend(settings)" in source
     assert "Mem0MemoryBackend()" not in source
+    assert "QdrantClient" not in source
     assert "repository.memories.values()" not in source
 
 

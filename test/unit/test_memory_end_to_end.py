@@ -58,7 +58,9 @@ def test_fake_backend_full_chain_append_recall_delete_rebuild_recall() -> None:
     assert any("换工作" in item.content for item in first_recall.items)
 
     memory_id = next(
-        memory.memory_id for memory in service.repository.memories.values() if "睡觉" in memory.memory_text
+        memory.memory_id
+        for memory in service.repository.memories.values()
+        if "sleep reminder" in memory.memory_text
     )
     service.delete(
         DeleteMemoryRequest(

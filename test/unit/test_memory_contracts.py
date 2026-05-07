@@ -7,6 +7,7 @@ from memory.schemas import (
     MemoryType,
     MessageRole,
     RecallIntent,
+    RecallMemoryRequest,
     SummaryState,
 )
 
@@ -68,3 +69,14 @@ def test_documented_enums_are_available() -> None:
     assert RecallIntent.RELATIONSHIP_CONTINUITY.value == "relationship_continuity"
     assert RecallIntent.DELETE_CONFIRMATION.value == "delete_confirmation"
     assert DeleteScope.SESSION.value == "session"
+
+
+def test_recall_request_has_l3_score_threshold() -> None:
+    request = RecallMemoryRequest(
+        user_id="user-1",
+        character_id="char-1",
+        session_id="session-1",
+        query="用户的狗叫什么？",
+    )
+
+    assert request.l3_score_threshold == 0.5

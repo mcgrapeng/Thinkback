@@ -1,4 +1,4 @@
-"""Run a real 5-round pressure scenario against Mem0/OpenAI/Qdrant.
+"""Run a real 5-round pressure scenario against remote Mem0 REST.
 
 This script intentionally does not support fake mode. It validates configuration
 up front, then exercises append, recall, delete, rebuild, and recall again with
@@ -8,7 +8,6 @@ the real Mem0 adapter.
 from __future__ import annotations
 
 import asyncio
-import os
 import re
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -16,7 +15,6 @@ from typing import Protocol
 from uuid import uuid4
 
 from dotenv import load_dotenv
-from qdrant_client import QdrantClient
 
 from api.dependencies import get_memory_backend
 from infra.config import Settings
@@ -37,25 +35,12 @@ from memory.service import MemoryService
 
 def _require_real_config(settings: Settings) -> None:
     missing = []
-    if settings.mem0_backend_mode == "http_api":
-        if not settings.mem0_api_url:
-            missing.append("MEM0_API_URL")
-        if not settings.mem0_api_key:
-            missing.append("MEM0_API_KEY")
-    else:
-        if not settings.memory_llm_api_key:
-            missing.append("MEMORY_LLM_API_KEY")
-        if not settings.memory_embedding_api_key:
-            missing.append("MEMORY_EMBEDDING_API_KEY")
-        if not settings.qdrant_url:
-            missing.append("QDRANT_URL")
+    if not settings.mem0_api_url:
+        missing.append("MEM0_API_URL")
+    if not settings.mem0_api_key:
+        missing.append("MEM0_API_KEY")
     if missing:
         raise RuntimeError(f"real pressure test requires: {', '.join(missing)}")
-
-
-def _check_qdrant(settings: Settings) -> None:
-    client = QdrantClient(url=settings.qdrant_url, api_key=settings.qdrant_api_key or None)
-    client.get_collections()
 
 
 def _check_database() -> None:
@@ -155,8 +140,6 @@ def main() -> None:
     load_dotenv()
     settings = Settings()
     _require_real_config(settings)
-    if settings.mem0_backend_mode == "local_sdk":
-        _check_qdrant(settings)
     _check_database()
 
     repository = SqlAlchemyMemoryRepository()
@@ -254,8 +237,5 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    # Keep OpenAI compatibility for libraries that look at OPENAI_API_KEY.
     load_dotenv()
-    if os.getenv("MEMORY_LLM_API_KEY") and not os.getenv("OPENAI_API_KEY"):
-        os.environ["OPENAI_API_KEY"] = os.getenv("MEMORY_LLM_API_KEY", "")
     main()

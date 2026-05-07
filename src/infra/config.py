@@ -37,7 +37,8 @@ class Settings(BaseSettings):
     redis_db: int = 0
     redis_password: str = ""
     memory_backend: Literal["redis"] = "redis"
-    mem0_backend_mode: Literal["local_sdk", "http_api"] = "http_api"
+    qdrant_url: str = "https://qdrant.example.internal"
+    qdrant_api_key: str = Field(default="", description="Shared Qdrant API key")
     mem0_api_url: str = "https://mem0.example.internal"
     mem0_api_key: str = Field(default="", description="Mem0 REST API key")
     mem0_http_timeout_seconds: float = 120.0
@@ -46,17 +47,6 @@ class Settings(BaseSettings):
     celery_result_backend: str = "redis://localhost:6379/1"
     celery_task_time_limit: int = 3600
     celery_task_soft_time_limit: int = 3000
-
-    vectorstore_type: Literal["qdrant"] = "qdrant"
-    qdrant_url: str = "http://localhost:6333"
-    qdrant_api_key: str = ""
-    memory_qdrant_collection: str = "thinkback_memories"
-
-    memory_llm_model: str = "gpt-4o-mini"
-    memory_llm_base_url: str = "https://api.openai.com/v1"
-    memory_llm_api_key: str = Field(default="", description="Memory LLM API key")
-    memory_embedding_model: str = "text-embedding-3-small"
-    memory_embedding_api_key: str = Field(default="", description="Memory embedding API key")
 
     @property
     def database_url(self) -> str:
