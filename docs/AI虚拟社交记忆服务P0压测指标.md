@@ -50,7 +50,7 @@ P0 结论必须分层表达，避免把一次短压测通过写成生产可上�
 | P0 release gate | 判断 P0 主链路是否具备发布候选质量。 | 连续 5 轮 dev gate + 50 并发 recall 代表性压测。 | 5 轮无语义失败；50 并发下召回质量不退化；延迟若未过门禁，必须作为发布风险处理。 |
 | 生产前预检 | 上线前稳定性与容量验证。 | baseline、stress、spike、soak、故障注入、代表性样本回放。 | 全部有报告且通过；仍不等同于线上长期稳定。 |
 
-截至 2026-05-07 的 [P0 压测最终报告](reports/p0-pressure-final-20260507.md) 显示：P0 dev gate 已通过；50 并发代表性压测召回准确率通过，但 `recall p95=1808ms` 超过 1500ms 门禁，因此不能声明 P0 release gate 完全通过。
+截至 2026-05-08 的 [P0 压测最终报告](reports/p0-pressure-final-20260508.md) 和 [P0 生产前压测汇总报告](reports/p0-preprod-summary-20260508T025700.md) 显示：P0 dev gate 已连续 5 轮通过，最新真实短压测也通过，10 并发 `recall p95=161ms`、`recall p99=168ms`；最新 50 并发代表性压测召回准确率和延迟门禁均通过，`recall p95=795ms`、`recall p99=823ms`；baseline dry run、50 并发 stress 短探针、100 并发 spike 短探针、30 并发 soak_probe 均未观察到质量退化；Mem0 unavailable 故障注入验证了 readiness 可观测失败和恢复。但正式 10-15 分钟 baseline、15-30 分钟 stress、完整 10 -> 100 -> 10 spike、6-24 小时 soak、Qdrant/Postgres/Redis 故障注入和代表性样本回放仍未补齐，因此不能声明已达到生产前完整压测标准。
 
 这些门禁不是“行业统一数值”。行业实践提供的是方法：定义少量关键 SLI、写清测量条件、区分负载类型、把阈值接入自动失败；具体数值要由 Thinkback 的产品体验、依赖链路和历史基线决定。
 

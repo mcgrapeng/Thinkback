@@ -4,6 +4,18 @@ from urllib.error import HTTPError
 
 from script import real_mem0_quality_regression
 from script.build_p0_pressure_final_report import build_final_report
+from script.real_mem0_p0_fault_injection import (
+    build_fault_injection_report,
+    render_fault_injection_markdown,
+)
+from script.real_mem0_p0_preprod_pressure import (
+    _phase_command,
+    _spike_phase_commands,
+    build_duration_phase_report,
+    build_preprod_report,
+    build_spike_phase_report,
+    render_preprod_report_markdown,
+)
 from script.real_mem0_p0_short_pressure import (
     build_pressure_suite_report,
     render_pressure_suite_markdown,
@@ -587,6 +599,489 @@ def test_final_pressure_report_uses_p0_metric_names_and_scope_language(tmp_path)
     assert "200+ / 1000+" not in content
     assert "P0/P1" not in content
     assert "P0 核心槽位评测集" in content
+
+
+def test_final_pressure_report_separates_dev_gate_and_50_concurrency_evidence(
+    tmp_path,
+) -> None:
+    dev_report = _final_report_fixture("p0-short-dev", passed=True)
+    dev_report["concurrent_recall"]["latency_ms"]["recall"]["p95"] = 131
+    dev_report["concurrent_recall"]["latency_ms"]["recall"]["p99"] = 132
+
+    stress_report = _final_report_fixture("p0-short-stress-pass", passed=True)
+    stress_report["config"]["recall_concurrency"] = 50
+    stress_report["config"]["recall_requests"] = 100
+    stress_report["concurrent_recall"]["latency_ms"]["recall"]["p95"] = 920
+    stress_report["concurrent_recall"]["latency_ms"]["recall"]["p99"] = 934
+
+    dev_path = tmp_path / "dev.json"
+    stress_path = tmp_path / "stress.json"
+    output_path = tmp_path / "final.md"
+    dev_path.write_text(json.dumps(dev_report), encoding="utf-8")
+    stress_path.write_text(json.dumps(stress_report), encoding="utf-8")
+
+    content = build_final_report([dev_path, stress_path], output_path=output_path)
+
+    assert "| 10 并发 recall p95 | 131ms | <= 1500ms |" in content
+    assert "| 10 并发 recall p99 | 132ms | <= 3000ms |" in content
+    assert "50 并发代表性压测已通过" in content
+    assert "`recall p95=920ms`" in content
+    assert "50 并发 recall p95 超门禁" not in content
+
+
+def test_final_pressure_report_can_reference_preprod_summary(tmp_path) -> None:
+    pass_report = _final_report_fixture("p0-short-pass", passed=True)
+    report_path = tmp_path / "pass.json"
+    output_path = tmp_path / "final.md"
+    report_path.write_text(json.dumps(pass_report), encoding="utf-8")
+    preprod_summary = {
+        "run_id": "p0-preprod-summary",
+        "requested_phases_passed": True,
+        "production_precheck_passed": False,
+        "executed_phases": ["baseline", "stress", "spike", "soak"],
+        "missing_phases": ["fault_injection", "representative_replay"],
+        "phase_results": {
+            "baseline": {"worst_recall_p95_ms": 153, "worst_recall_p99_ms": 162},
+            "stress": {"worst_recall_p95_ms": 795, "worst_recall_p99_ms": 823},
+            "spike": {"worst_recall_p95_ms": 1310, "worst_recall_p99_ms": 1310},
+            "soak": {"worst_recall_p95_ms": 470, "worst_recall_p99_ms": 516},
+        },
+    }
+
+    content = build_final_report(
+        [report_path],
+        output_path=output_path,
+        preprod_summary=preprod_summary,
+    )
+
+    assert "## 6. 生产前预检阶段" in content
+    assert "| baseline | p95=153ms, p99=162ms | 通过 |" in content
+    assert "| spike | p95=1310ms, p99=1310ms | 通过 |" in content
+    assert "fault_injection, representative_replay" in content
+    assert "生产前完整压测标准 | 否" in content
+
+
+def test_final_pressure_report_keeps_50_concurrency_and_spike_latency_separate(
+    tmp_path,
+) -> None:
+    dev_report = _final_report_fixture("p0-dev", passed=True)
+    stress_report = _final_report_fixture("p0-stress-50", passed=True)
+    stress_report["config"]["recall_concurrency"] = 50
+    stress_report["config"]["recall_requests"] = 100
+    stress_report["concurrent_recall"]["latency_ms"]["recall"]["p95"] = 795
+    stress_report["concurrent_recall"]["latency_ms"]["recall"]["p99"] = 823
+    spike_report = _final_report_fixture("p0-spike-100", passed=True)
+    spike_report["config"]["recall_concurrency"] = 100
+    spike_report["config"]["recall_requests"] = 100
+    spike_report["concurrent_recall"]["latency_ms"]["recall"]["p95"] = 1310
+    spike_report["concurrent_recall"]["latency_ms"]["recall"]["p99"] = 1310
+
+    paths = []
+    for report in (dev_report, stress_report, spike_report):
+        path = tmp_path / f"{report['suite_id']}.json"
+        path.write_text(json.dumps(report), encoding="utf-8")
+        paths.append(path)
+    output_path = tmp_path / "final.md"
+
+    content = build_final_report(paths, output_path=output_path)
+
+    assert "| 50 并发 recall / 100 请求 |" in content
+    assert "`p95=795ms`, `p99=823ms`" in content
+    assert "`p95=1310ms`, `p99=1310ms`" not in content
+
+
+def test_final_pressure_report_renders_partial_preprod_gaps_precisely(tmp_path) -> None:
+    dev_report = _final_report_fixture("p0-dev", passed=True)
+    old_stress = _final_report_fixture("p0-stress-old", passed=True)
+    old_stress["config"]["recall_concurrency"] = 50
+    old_stress["config"]["recall_requests"] = 100
+    old_stress["concurrent_recall"]["latency_ms"]["recall"]["p95"] = 920
+    old_stress["concurrent_recall"]["latency_ms"]["recall"]["p99"] = 934
+    latest_stress = _final_report_fixture("p0-stress-latest", passed=True)
+    latest_stress["config"]["recall_concurrency"] = 50
+    latest_stress["config"]["recall_requests"] = 100
+    latest_stress["concurrent_recall"]["latency_ms"]["recall"]["p95"] = 795
+    latest_stress["concurrent_recall"]["latency_ms"]["recall"]["p99"] = 823
+
+    paths = []
+    for report in (dev_report, old_stress, latest_stress):
+        path = tmp_path / f"{report['suite_id']}.json"
+        path.write_text(json.dumps(report), encoding="utf-8")
+        paths.append(path)
+    output_path = tmp_path / "final.md"
+    preprod_summary = {
+        "run_id": "p0-preprod-summary",
+        "requested_phases_passed": True,
+        "production_precheck_passed": False,
+        "executed_phases": ["baseline", "fault_injection", "soak_probe", "spike", "stress"],
+        "missing_phases": ["soak", "representative_replay"],
+        "phase_results": {
+            "baseline": {"worst_recall_p95_ms": 153, "worst_recall_p99_ms": 162},
+            "fault_injection": {"worst_recall_p95_ms": 0, "worst_recall_p99_ms": 0},
+            "soak_probe": {"worst_recall_p95_ms": 470, "worst_recall_p99_ms": 516},
+            "spike": {
+                "recovery_gate_passed": True,
+                "worst_recall_p95_ms": 1310,
+                "worst_recall_p99_ms": 1310,
+            },
+            "stress": {"worst_recall_p95_ms": 795, "worst_recall_p99_ms": 823},
+        },
+    }
+
+    content = build_final_report(paths, output_path=output_path, preprod_summary=preprod_summary)
+
+    assert "`recall p95=795ms`" in content
+    assert "| Mem0/Qdrant/Postgres/Redis 故障注入 | 部分执行 | Mem0 unavailable 已验证；Qdrant/Postgres/Redis 故障注入未执行。 |" in content
+    assert "不能替代 15-30 分钟 stress、100 并发 spike" not in content
+    assert "补齐 baseline" not in content
+    assert "补齐 6-24 小时 soak、代表性样本回放、Qdrant/Postgres/Redis 故障注入" in content
+
+
+def test_final_pressure_report_distinguishes_official_duration_from_probe(tmp_path) -> None:
+    dev_report = _final_report_fixture("p0-dev", passed=True)
+    report_path = tmp_path / "dev.json"
+    output_path = tmp_path / "final.md"
+    report_path.write_text(json.dumps(dev_report), encoding="utf-8")
+    preprod_summary = {
+        "run_id": "p0-preprod-summary",
+        "requested_phases_passed": False,
+        "production_precheck_passed": False,
+        "executed_phases": ["stress", "spike"],
+        "missing_phases": ["soak", "fault_injection", "representative_replay"],
+        "phase_results": {
+            "stress": {
+                "passed": False,
+                "duration_gate_passed": False,
+                "failed_duration_reports": ["p0-duration-stress"],
+                "worst_recall_p95_ms": 795,
+                "worst_recall_p99_ms": 823,
+            },
+            "spike": {
+                "passed": True,
+                "recovery_gate_passed": True,
+                "worst_recall_p95_ms": 1310,
+                "worst_recall_p99_ms": 1310,
+            },
+        },
+    }
+
+    content = build_final_report([report_path], output_path=output_path, preprod_summary=preprod_summary)
+
+    assert "| stress | p95=795ms, p99=823ms | 未通过 |" in content
+    assert "| 15-30 分钟 50 并发 stress | 已执行短探针 | 已验证短时 50 并发 recall；尚未覆盖持续 15-30 分钟。 |" in content
+    assert "| 100 并发 spike | 已执行完整恢复曲线 | 已验证 10 -> 100 -> 10 恢复曲线。 |" in content
+    assert "不能替代 15-30 分钟 stress、100 并发 spike" not in content
+    assert "完整 10 -> 100 -> 10 spike 恢复曲线" not in content
+
+
+def test_preprod_report_requires_all_production_precheck_phases() -> None:
+    baseline_child = _final_report_fixture("p0-baseline-pass", passed=True)
+    baseline_child["config"]["recall_concurrency"] = 10
+    baseline_child["config"]["append_concurrency"] = 10
+    baseline_child["config"]["recall_requests"] = 100
+    baseline_child["concurrent_recall"]["latency_ms"]["recall"]["p95"] = 420
+    baseline = build_duration_phase_report(
+        run_id="p0-duration-baseline",
+        phase="baseline",
+        started_at="2026-05-08T00:00:00+00:00",
+        ended_at="2026-05-08T00:10:00+00:00",
+        target_duration_seconds=600,
+        actual_duration_seconds=600,
+        child_reports=[baseline_child],
+    )
+
+    report = build_preprod_report(
+        run_id="preprod-run",
+        started_at="2026-05-08T00:00:00+00:00",
+        ended_at="2026-05-08T00:10:00+00:00",
+        phase_reports={"baseline": [baseline]},
+        required_phases=["baseline", "stress", "spike", "soak", "fault_injection", "representative_replay"],
+    )
+
+    assert report["requested_phases_passed"] is True
+    assert report["production_precheck_passed"] is False
+    assert report["missing_phases"] == [
+        "stress",
+        "spike",
+        "soak",
+        "fault_injection",
+        "representative_replay",
+    ]
+    assert report["phase_results"]["baseline"]["worst_recall_p95_ms"] == 420
+    assert report["phase_results"]["baseline"]["duration_gate_passed"] is True
+
+    markdown = render_preprod_report_markdown(report)
+    assert "生产前完整压测 | 未通过" in markdown
+    assert "stress, spike, soak, fault_injection, representative_replay" in markdown
+
+
+def test_preprod_report_fails_requested_phase_when_child_report_fails() -> None:
+    stress = _final_report_fixture("p0-stress-fail", passed=False)
+    stress["config"]["recall_concurrency"] = 50
+    stress["config"]["append_concurrency"] = 10
+    stress["failed_sections"] = ["concurrent_recall"]
+    stress["concurrent_recall"]["latency_ms"]["recall"]["p95"] = 2200
+
+    report = build_preprod_report(
+        run_id="preprod-run",
+        started_at="2026-05-08T00:00:00+00:00",
+        ended_at="2026-05-08T00:20:00+00:00",
+        phase_reports={"stress": [stress]},
+        required_phases=["stress"],
+    )
+
+    assert report["requested_phases_passed"] is False
+    assert report["production_precheck_passed"] is False
+    assert report["failed_phases"] == ["stress"]
+    assert report["phase_results"]["stress"]["failed_child_reports"] == ["p0-stress-fail"]
+
+
+def test_preprod_report_does_not_accept_under_duration_probe_as_official_phase() -> None:
+    child = _final_report_fixture("p0-short-child", passed=True)
+    probe = build_duration_phase_report(
+        run_id="p0-duration-stress",
+        phase="stress",
+        started_at="2026-05-08T03:00:00+00:00",
+        ended_at="2026-05-08T03:01:00+00:00",
+        target_duration_seconds=900,
+        actual_duration_seconds=60,
+        child_reports=[child],
+    )
+
+    report = build_preprod_report(
+        run_id="preprod-run",
+        started_at="2026-05-08T03:00:00+00:00",
+        ended_at="2026-05-08T03:01:00+00:00",
+        phase_reports={"stress": [probe]},
+        required_phases=["stress"],
+    )
+
+    assert report["requested_phases_passed"] is False
+    assert report["production_precheck_passed"] is False
+    assert report["failed_phases"] == ["stress"]
+    assert report["phase_results"]["stress"]["duration_gate_passed"] is False
+
+
+def test_preprod_report_does_not_accept_short_probe_as_official_duration_or_full_spike() -> None:
+    stress_probe = _final_report_fixture("p0-short-stress", passed=True)
+    stress_probe["config"]["recall_concurrency"] = 50
+    spike_probe = _final_report_fixture("p0-short-spike", passed=True)
+    spike_probe["config"]["recall_concurrency"] = 100
+
+    report = build_preprod_report(
+        run_id="preprod-run",
+        started_at="2026-05-08T03:00:00+00:00",
+        ended_at="2026-05-08T03:05:00+00:00",
+        phase_reports={"stress": [stress_probe], "spike": [spike_probe]},
+        required_phases=["stress", "spike"],
+    )
+
+    assert report["requested_phases_passed"] is False
+    assert report["failed_phases"] == ["stress", "spike"]
+    assert report["phase_results"]["stress"]["duration_gate_passed"] is False
+    assert report["phase_results"]["spike"]["recovery_gate_passed"] is False
+
+
+def test_preprod_phase_command_maps_p0_metric_document_scenarios() -> None:
+    baseline = _phase_command(
+        "baseline",
+        report_dir="docs/reports",
+        python_executable=".venv/bin/python",
+        script_path="script/real_mem0_p0_short_pressure.py",
+    )
+    stress = _phase_command(
+        "stress",
+        report_dir="docs/reports",
+        python_executable=".venv/bin/python",
+        script_path="script/real_mem0_p0_short_pressure.py",
+    )
+    spike = _phase_command(
+        "spike",
+        report_dir="docs/reports",
+        python_executable=".venv/bin/python",
+        script_path="script/real_mem0_p0_short_pressure.py",
+    )
+    soak_probe = _phase_command(
+        "soak_probe",
+        report_dir="docs/reports",
+        python_executable=".venv/bin/python",
+        script_path="script/real_mem0_p0_short_pressure.py",
+    )
+
+    assert baseline == [
+        ".venv/bin/python",
+        "script/real_mem0_p0_short_pressure.py",
+        "--recall-concurrency",
+        "10",
+        "--recall-requests",
+        "100",
+        "--append-concurrency",
+        "10",
+        "--report-dir",
+        "docs/reports",
+    ]
+    assert stress[stress.index("--recall-concurrency") + 1] == "50"
+    assert stress[stress.index("--append-concurrency") + 1] == "10"
+    assert stress[stress.index("--recall-requests") + 1] == "100"
+    assert spike[spike.index("--recall-concurrency") + 1] == "100"
+    assert soak_probe[soak_probe.index("--recall-concurrency") + 1] == "30"
+    assert soak_probe[soak_probe.index("--append-concurrency") + 1] == "10"
+
+
+def test_duration_phase_report_marks_under_duration_runs_as_probe() -> None:
+    child = _final_report_fixture("p0-short-child", passed=True)
+    child["config"]["recall_concurrency"] = 50
+    child["config"]["append_concurrency"] = 10
+    child["config"]["recall_requests"] = 100
+    child["concurrent_recall"]["latency_ms"]["recall"]["p95"] = 780
+    child["concurrent_recall"]["latency_ms"]["recall"]["p99"] = 820
+
+    report = build_duration_phase_report(
+        run_id="p0-duration-stress",
+        phase="stress",
+        started_at="2026-05-08T03:00:00+00:00",
+        ended_at="2026-05-08T03:01:00+00:00",
+        target_duration_seconds=900,
+        actual_duration_seconds=60,
+        child_reports=[child],
+    )
+
+    assert report["phase"] == "stress"
+    assert report["passed"] is True
+    assert report["duration_gate_passed"] is False
+    assert report["probe_only"] is True
+    assert report["report_count"] == 1
+    assert report["worst_recall_p95_ms"] == 780
+    assert report["worst_recall_p99_ms"] == 820
+
+
+def test_duration_phase_report_uses_official_phase_minimum_not_overridden_dry_run_target() -> None:
+    child = _final_report_fixture("p0-short-child", passed=True)
+
+    report = build_duration_phase_report(
+        run_id="p0-duration-baseline",
+        phase="baseline",
+        started_at="2026-05-08T03:00:00+00:00",
+        ended_at="2026-05-08T03:02:00+00:00",
+        target_duration_seconds=1,
+        actual_duration_seconds=120,
+        child_reports=[child],
+    )
+
+    assert report["target_duration_seconds"] == 1
+    assert report["official_min_duration_seconds"] == 600
+    assert report["duration_gate_passed"] is False
+    assert report["probe_only"] is True
+
+
+def test_duration_phase_report_requires_child_reports_to_pass() -> None:
+    child = _final_report_fixture("p0-short-child", passed=False)
+    child["failed_sections"] = ["quality"]
+
+    report = build_duration_phase_report(
+        run_id="p0-duration-baseline",
+        phase="baseline",
+        started_at="2026-05-08T03:00:00+00:00",
+        ended_at="2026-05-08T03:15:00+00:00",
+        target_duration_seconds=900,
+        actual_duration_seconds=900,
+        child_reports=[child],
+    )
+
+    assert report["passed"] is False
+    assert report["duration_gate_passed"] is True
+    assert report["failed_child_reports"] == ["p0-short-child"]
+
+
+def test_spike_phase_commands_model_recovery_curve() -> None:
+    commands = _spike_phase_commands(
+        report_dir="docs/reports",
+        python_executable=".venv/bin/python",
+        script_path="script/real_mem0_p0_short_pressure.py",
+    )
+
+    assert [command[command.index("--recall-concurrency") + 1] for command in commands] == ["10", "100", "10"]
+    assert [command[command.index("--recall-requests") + 1] for command in commands] == ["100", "100", "100"]
+
+
+def test_spike_phase_report_requires_recovery_leg_to_pass() -> None:
+    warmup = _final_report_fixture("p0-spike-warmup", passed=True)
+    peak = _final_report_fixture("p0-spike-peak", passed=True)
+    recovery = _final_report_fixture("p0-spike-recovery", passed=False)
+    recovery["failed_sections"] = ["concurrent_recall"]
+
+    report = build_spike_phase_report(
+        run_id="p0-spike-full",
+        started_at="2026-05-08T03:00:00+00:00",
+        ended_at="2026-05-08T03:05:00+00:00",
+        leg_reports={"warmup_10": warmup, "peak_100": peak, "recovery_10": recovery},
+    )
+
+    assert report["phase"] == "spike"
+    assert report["passed"] is False
+    assert report["failed_legs"] == ["recovery_10"]
+    assert report["recovery_gate_passed"] is False
+
+
+def test_preprod_report_accepts_full_spike_report_as_official_spike() -> None:
+    warmup = _final_report_fixture("p0-spike-warmup", passed=True)
+    peak = _final_report_fixture("p0-spike-peak", passed=True)
+    recovery = _final_report_fixture("p0-spike-recovery", passed=True)
+    spike = build_spike_phase_report(
+        run_id="p0-spike-full",
+        started_at="2026-05-08T03:00:00+00:00",
+        ended_at="2026-05-08T03:05:00+00:00",
+        leg_reports={"warmup_10": warmup, "peak_100": peak, "recovery_10": recovery},
+    )
+
+    report = build_preprod_report(
+        run_id="preprod-run",
+        started_at="2026-05-08T03:00:00+00:00",
+        ended_at="2026-05-08T03:05:00+00:00",
+        phase_reports={"spike": [spike]},
+        required_phases=["spike"],
+    )
+
+    assert report["requested_phases_passed"] is True
+    assert report["production_precheck_passed"] is True
+    assert report["phase_results"]["spike"]["recovery_gate_passed"] is True
+
+
+def test_fault_injection_report_requires_injected_failure_and_recovery() -> None:
+    report = build_fault_injection_report(
+        run_id="fault-run",
+        started_at="2026-05-08T02:00:00+00:00",
+        ended_at="2026-05-08T02:02:00+00:00",
+        scenarios=[
+            {
+                "name": "mem0_unavailable",
+                "injected": True,
+                "failure_observed": True,
+                "recovered": True,
+                "recovery_verified": True,
+                "failure_detail": "readiness returned 503 for mem0",
+                "recovery_detail": "readiness returned 200",
+            },
+            {
+                "name": "qdrant_unavailable",
+                "injected": True,
+                "failure_observed": False,
+                "recovered": True,
+                "recovery_verified": True,
+                "failure_detail": "readiness stayed ready",
+                "recovery_detail": "readiness returned 200",
+            },
+        ],
+    )
+
+    assert report["passed"] is False
+    assert report["failed_scenarios"] == ["qdrant_unavailable"]
+    assert report["scenario_results"][0]["passed"] is True
+    assert report["scenario_results"][1]["passed"] is False
+
+    markdown = render_fault_injection_markdown(report)
+    assert "qdrant_unavailable" in markdown
+    assert "readiness stayed ready" in markdown
 
 
 def _final_report_fixture(suite_id: str, *, passed: bool) -> dict[str, object]:
