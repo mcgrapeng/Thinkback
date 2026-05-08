@@ -45,7 +45,7 @@ def build_final_report(
             f"| 失败报告数 | {len(failed_reports)} |",
             f"| 最新通过报告 | `{latest_pass['suite_id'] if latest_pass else '-'}` |",
             f"| 是否达到 P0 主链路短压测 | {'是' if latest_pass else '否'} |",
-            f"| 是否达到生产前完整压测标准 | {'否' if stress_failures or semantic_failures else '待长测确认'} |",
+            f"| 是否达到生产前完整压测标准 | {'否' if stress_failures or semantic_failures else '待长测、故障注入和代表性回放确认'} |",
             "",
         ]
     )
@@ -133,8 +133,8 @@ def build_final_report(
                 f"| `conflict_pollution_rate` | {latest_quality.get('conflict_pollution_rate', 0.0)} | <= 0.02 |",
                 f"| `false_positive_rate` | {latest_quality.get('false_positive_rate', 0.0)} | <= 0.02 |",
                 f"| `duplicate_active_rate` | {latest_quality.get('duplicate_active_rate', 0.0)} | 0 |",
-                f"| `delete_residue_rate` | {latest_pass['post_delete'].get('delete_residue_rate', 0.0)} | 0 |",
-                f"| `rebuild_resurrection_rate` | {latest_pass['post_delete'].get('rebuild_resurrection_rate', 0.0)} | 0 |",
+                f"| `delete_memory_residue_rate` | {_metric(latest_pass['post_delete'], 'delete_memory_residue_rate', 'delete_residue_rate', 0.0)} | 0 |",
+                f"| `rebuild_resurrection_rate` | {_metric(latest_pass['post_delete'], 'rebuild_resurrection_rate', default=0.0)} | 0 |",
                 f"| 10 并发 recall p95 | {latest_concurrent.get('latency_ms', {}).get('recall', {}).get('p95', 0)}ms | <= 1500ms |",
                 f"| 10 并发 recall p99 | {latest_concurrent.get('latency_ms', {}).get('recall', {}).get('p99', 0)}ms | <= 3000ms |",
                 "",
@@ -179,12 +179,12 @@ def build_final_report(
             "| 15-30 分钟 50 并发 stress | 未执行 | 本轮只做了 50 并发 / 100 请求代表性压测。 |",
             "| 100 并发 spike | 未执行 | 尚未验证峰值后恢复能力。 |",
             "| Mem0/Qdrant/Postgres/Redis 故障注入 | 未执行 | 尚未验证外部依赖异常下的降级和失败关闭。 |",
-            "| 200+ / 1000+ 大样本评测 | 未执行 | 当前仍是 P0 工程构造集。 |",
+            "| 代表性样本回放 | 未执行 | 当前仍是 P0 工程构造集；样本量按槽位、冲突、负样本、隔离和删除覆盖清单扩展。 |",
             "",
             "## 7. 后续建议",
             "",
             "1. 优先处理 50 并发 recall p95 超门禁的问题，再重跑 50 并发和 100 并发 spike。",
-            "2. 扩大 P0/P1 槽位评测集，把真实 Mem0 表达漂移继续沉淀成回归测试。",
+            "2. 扩大 P0 核心槽位评测集，把真实 Mem0 表达漂移继续沉淀成回归测试。",
             "3. 做 6-24 小时 soak 和故障注入后，再声明生产前完整压测通过。",
             "",
         ]
@@ -200,6 +200,19 @@ def _load_report(path: Path) -> dict[str, Any]:
     if not isinstance(report, dict):
         raise ValueError(f"pressure report must be a JSON object: {path}")
     return dict(report)
+
+
+def _metric(
+    report: dict[str, Any],
+    primary: str,
+    legacy: str | None = None,
+    default: object | None = None,
+) -> object:
+    if primary in report:
+        return report[primary]
+    if legacy and legacy in report:
+        return report[legacy]
+    return default
 
 
 def _has_quality_failure(report: dict[str, Any]) -> bool:

@@ -222,6 +222,40 @@ def test_quality_report_includes_duplicate_active_rate() -> None:
     assert report["duplicate_active_rate"] == 1 / 3
 
 
+def test_quality_report_exposes_p0_stable_metric_fields() -> None:
+    report = build_quality_report([], [], active_memory_count=0, active_after_rebuild=0)
+
+    assert report["delete_memory_residue_rate"] == 0.0
+    assert report["delete_session_residue_rate"] is None
+    assert report["delete_all_residue_rate"] is None
+    assert report["rebuild_resurrection_rate"] == 0.0
+    assert report["cross_user_leak_rate"] is None
+    assert report["cross_character_leak_rate"] == 0.0
+    assert report["roleplay_real_mix_rate"] == 0.0
+    assert report["dirty_summary_recall_rate"] is None
+    assert report["source_ref_loss_rate"] is None
+    assert report["critical_slot_pass_rate"] is None
+    assert report["known_drift_regression_pass_rate"] is None
+    assert report["http_5xx_rate"] is None
+    assert report["timeout_rate"] is None
+    assert report["idempotency_failure_rate"] is None
+    assert report["transient_retry_rate"] == 0.0
+
+
+def test_quality_report_caps_transient_retry_rate_by_request_count() -> None:
+    metrics = RequestMetrics(request_count=4, retry_count=5, transient_failure_count=2)
+
+    report = build_quality_report(
+        [],
+        [],
+        active_memory_count=0,
+        active_after_rebuild=0,
+        request_metrics=metrics,
+    )
+
+    assert report["transient_retry_rate"] == 0.5
+
+
 def test_quality_report_does_not_count_duplicate_slots_across_context_partitions() -> None:
     active_memories = [
         MemorySnapshot(

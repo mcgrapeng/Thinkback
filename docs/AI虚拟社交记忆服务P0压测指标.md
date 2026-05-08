@@ -50,7 +50,7 @@ P0 结论必须分层表达，避免把一次短压测通过写成生产可上�
 | P0 release gate | 判断 P0 主链路是否具备发布候选质量。 | 连续 5 轮 dev gate + 50 并发 recall 代表性压测。 | 5 轮无语义失败；50 并发下召回质量不退化；延迟若未过门禁，必须作为发布风险处理。 |
 | 生产前预检 | 上线前稳定性与容量验证。 | baseline、stress、spike、soak、故障注入、代表性样本回放。 | 全部有报告且通过；仍不等同于线上长期稳定。 |
 
-最近一次 Thinkback 最终报告显示：P0 dev gate 已通过；50 并发代表性压测召回准确率通过，但 `recall p95=1808ms` 超过 1500ms 门禁，因此不能声明 P0 release gate 完全通过。
+截至 2026-05-07 的 [P0 压测最终报告](reports/p0-pressure-final-20260507.md) 显示：P0 dev gate 已通过；50 并发代表性压测召回准确率通过，但 `recall p95=1808ms` 超过 1500ms 门禁，因此不能声明 P0 release gate 完全通过。
 
 这些门禁不是“行业统一数值”。行业实践提供的是方法：定义少量关键 SLI、写清测量条件、区分负载类型、把阈值接入自动失败；具体数值要由 Thinkback 的产品体验、依赖链路和历史基线决定。
 
@@ -72,6 +72,8 @@ P0 结论必须分层表达，避免把一次短压测通过写成生产可上�
 
 `precision_at_10` 是 case 级指标，不是严格 IR item 级 precision。报告必须同时输出 `item_precision_at_10`，避免“case 过了但 top10 混入大量无关记忆”的误判。
 
+当样本量较小时，比例阈值要按 case 数解释。比如 20 个 case 下 `case_pass_rate >= 0.98` 实际等价于全部通过；短压测应直接按核心 case 全过判断，样本扩展后再使用比例阈值观察整体趋势。
+
 P0 核心槽位不应只被总通过率掩盖。只要核心槽位出现漏召回、旧值污染、角色串记忆或跨角色泄漏，即使总通过率仍高，也应判定为 P0 质量失败。
 
 ## 4. 可靠性指标
@@ -84,7 +86,7 @@ P0 核心槽位不应只被总通过率掩盖。只要核心槽位出现漏召�
 | `rebuild_success_rate` | rebuild 分段请求成功比例。 | dev gate 要求覆盖到的重建探针全过；独立 success rate 字段待补齐。 | dev gate / release gate | 分段报告。 |
 | `idempotency_failure_rate` | 重复 `round_id` / `operation_id` 导致重复写入、重复删除或状态错误的比例。 | `0`。 | release gate | 待补齐。 |
 | `duplicate_active_rate` | 同一 user×character×context 下同槽位重复 active 记忆比例。 | `0`。 | dev gate / release gate | 自动门禁。 |
-| `transient_retry_rate` | 502、503、504、timeout 等瞬时失败触发重试的比例。 | 先观测，过高必须排查 Mem0/OpenAI/Qdrant。 | dev gate / release gate | 自动报告。 |
+| `transient_retry_rate` | 发生 502、503、504、timeout 等瞬时失败并触发重试的请求比例；重试次数单独看 `retry_count`。 | 先观测，过高必须排查 Mem0/OpenAI/Qdrant。 | dev gate / release gate | 自动报告。 |
 | `non_transient_failure_count` | 非瞬时失败数量。 | dev gate 要求 `0`。 | dev gate / release gate | 自动门禁。 |
 | `http_5xx_rate` | Thinkback 对外接口 5xx 比例。 | dev gate 要求分段无 5xx；独立比率在生产前长测中记录趋势，线上 SLO 上线前再定。 | dev gate / 生产前预检 | 半自动。 |
 | `timeout_rate` | 客户端超时或 Mem0 超时比例。 | dev gate 要求分段无 timeout；独立比率在生产前长测中记录趋势，线上 SLO 上线前再定。 | dev gate / 生产前预检 | 半自动。 |
@@ -105,7 +107,7 @@ P0 核心槽位不应只被总通过率掩盖。只要核心槽位出现漏召�
 | `roleplay_real_mix_rate` | 现实事实与剧情设定互相混入召回的比例。 | `0`。 | dev gate / release gate | 用例门禁，当前由剧情隔离 case 覆盖。 |
 | `source_ref_loss_rate` | L3 业务索引丢失来源引用的比例。 | `0`。 | release gate | 半自动抽查，独立统计待补齐。 |
 
-删除压测必须至少覆盖三类作用域：单条记忆删除、会话来源删除、全部记忆删除。P0 阶段重点看“显式删除不再直接召回”和“重建不复活”。
+删除压测按门禁分层：dev gate 至少覆盖单条 L3 删除、dirty L2 不进 prompt、重建不复活；release gate 必须补齐会话来源删除和全部记忆删除。三类作用域都要进最终 P0 报告，但不能把单条删除通过解释成所有删除作用域都已覆盖。
 
 ## 6. 性能指标
 
@@ -191,14 +193,14 @@ P0 必测槽位如下：
 用于每次重要修改后的快速验收：
 
 ```bash
-env MEM0_API_KEY=$(cat /private/tmp/thinkback-mem0-api-key) \
-MEM0_API_URL=http://localhost:8888 \
+env MEM0_API_KEY=${MEM0_API_KEY:?set MEM0_API_KEY} \
+MEM0_API_URL=${MEM0_API_URL:?set MEM0_API_URL} \
 POSTGRES_PORT=55432 \
 POSTGRES_DATABASE=thinkback_real \
 REDIS_PORT=56379 \
 REDIS_PASSWORD= \
-QDRANT_URL=http://localhost:6333 \
-THINKBACK_API_URL=http://127.0.0.1:18082 \
+QDRANT_URL=${QDRANT_URL:?set QDRANT_URL} \
+THINKBACK_API_URL=${THINKBACK_API_URL:?set THINKBACK_API_URL} \
 PYTHONPATH=src .venv/bin/python script/real_mem0_p0_short_pressure.py \
   --recall-concurrency 10 \
   --recall-requests 20 \
@@ -219,14 +221,14 @@ docs/reports/<suite_id>.md
 
 ```bash
 for i in 1 2 3 4 5; do
-  env MEM0_API_KEY=$(cat /private/tmp/thinkback-mem0-api-key) \
-  MEM0_API_URL=http://localhost:8888 \
+  env MEM0_API_KEY=${MEM0_API_KEY:?set MEM0_API_KEY} \
+  MEM0_API_URL=${MEM0_API_URL:?set MEM0_API_URL} \
   POSTGRES_PORT=55432 \
   POSTGRES_DATABASE=thinkback_real \
   REDIS_PORT=56379 \
   REDIS_PASSWORD= \
-  QDRANT_URL=http://localhost:6333 \
-  THINKBACK_API_URL=http://127.0.0.1:18082 \
+  QDRANT_URL=${QDRANT_URL:?set QDRANT_URL} \
+  THINKBACK_API_URL=${THINKBACK_API_URL:?set THINKBACK_API_URL} \
   PYTHONPATH=src .venv/bin/python script/real_mem0_p0_short_pressure.py \
     --recall-concurrency 10 \
     --recall-requests 20 \
@@ -268,7 +270,7 @@ P0 生产前至少演练：
 
 每次真实压测至少输出稳定字段。下面的 JSON 是目标稳定结构；当前脚本尚未输出的字段必须写 `null`，并在 `metric_automation_status` 中标明状态。用例门禁可以写实际 case 结果，但必须说明“由 case 覆盖”，不能用 `0.0` 假装已经有独立统计字段。
 
-当前脚本仍有少量历史字段名。`delete_residue_rate` 暂时等价于单条 L3 删除后的 `delete_memory_residue_rate`，不代表会话删除和全部删除也已覆盖；`cross_scope_leak_rate` 暂时主要由跨角色和剧情隔离 case 覆盖，不代表跨 user 独立指标已覆盖。报告汇总时必须保留这层兼容说明。
+当前脚本应优先输出下面的稳定字段；历史 JSON 中的 `delete_residue_rate` 仅兼容映射为单条 L3 删除后的 `delete_memory_residue_rate`，不代表会话删除和全部删除也已覆盖；历史 JSON 中的 `cross_scope_leak_rate` 仅兼容映射为跨角色和剧情隔离 case，不代表跨 user 独立指标已覆盖。报告汇总时必须保留这层兼容说明。
 
 ```json
 {
@@ -294,6 +296,10 @@ P0 生产前至少演练：
   "duplicate_active_rate": 0.0,
   "critical_slot_pass_rate": null,
   "known_drift_regression_pass_rate": null,
+  "http_5xx_rate": null,
+  "timeout_rate": null,
+  "idempotency_failure_rate": null,
+  "transient_retry_rate": 0.0,
   "operation_success_rate": {
     "append": null,
     "recall": null,
@@ -317,22 +323,26 @@ P0 生产前至少演练：
   "failed_sections": [],
   "metric_automation_status": {
     "critical_slot_pass_rate": "case_gate_independent_field_pending",
-    "delete_memory_residue_rate": "case_gate_legacy_delete_residue_rate",
+    "delete_memory_residue_rate": "case_gate_post_delete",
     "delete_session_residue_rate": "pending",
     "delete_all_residue_rate": "pending",
     "rebuild_resurrection_rate": "case_gate_post_delete_and_active_count",
     "dirty_summary_recall_rate": "pending",
     "cross_user_leak_rate": "pending",
-    "cross_character_leak_rate": "case_gate_legacy_cross_scope_leak_rate",
+    "cross_character_leak_rate": "case_gate_isolation",
     "roleplay_real_mix_rate": "case_gate_independent_field_pending",
     "operation_success_rate": "section_pass_fail_independent_fields_pending",
     "known_drift_regression_pass_rate": "semi_automatic",
-    "source_ref_loss_rate": "semi_automatic_independent_field_pending"
+    "source_ref_loss_rate": "semi_automatic_independent_field_pending",
+    "http_5xx_rate": "semi_automatic",
+    "timeout_rate": "semi_automatic",
+    "idempotency_failure_rate": "pending",
+    "transient_retry_rate": "automatic_report"
   }
 }
 ```
 
-脚本可以分阶段补齐指标，但报告字段名应尽量稳定，方便后续接入 CI 或压测平台。对于当前报告仍使用旧聚合字段的情况，例如 `delete_residue_rate` 或 `cross_scope_leak_rate`，应在下一轮脚本改造时映射到上面的细分字段；在改造前，最终报告必须说明字段口径，不能把旧聚合字段解释成所有删除或所有隔离指标已经通过。
+脚本可以分阶段补齐指标，但报告字段名应尽量稳定，方便后续接入 CI 或压测平台。对于历史报告仍使用旧聚合字段的情况，例如 `delete_residue_rate` 或 `cross_scope_leak_rate`，报告汇总脚本必须映射到上面的细分字段，并说明字段口径，不能把旧聚合字段解释成所有删除或所有隔离指标已经通过。
 
 Markdown 报告必须包含：
 

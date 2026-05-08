@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import re
 from enum import StrEnum
+from hashlib import sha256
+from time import monotonic
 from typing import Any, Protocol
 
 from memory.backends import MemoryBackend
@@ -28,6 +30,7 @@ from memory.schemas import (
     MemoryItem,
     MemoryStatus,
     MemoryType,
+    MessageRole,
     OperationType,
     RebuildMemoryRequest,
     RebuildMemoryResponse,
@@ -61,10 +64,13 @@ class MemoryService:
         repository: MemoryRepository,
         backend: MemoryBackend,
         history_source: HistorySource | None = None,
+        active_memory_cache_ttl_seconds: float = 2.0,
     ) -> None:
         self.repository = repository
         self.backend = backend
         self.history_source = history_source
+        self.active_memory_cache_ttl_seconds = active_memory_cache_ttl_seconds
+        self._active_memory_cache: dict[tuple[str, str], tuple[float, list[Any]]] = {}
 
     def append(self, request: AppendMemoryRequest) -> AppendMemoryResponse:
         existing = self.repository.get_round(request.round_id)
@@ -113,6 +119,19 @@ class MemoryService:
                     source_refs=[{"session_id": request.session_id, "round_id": request.round_id}],
                     request_metadata=request.metadata,
                 )
+                self._backfill_p0_slots_from_round_source(
+                    source_text=" ".join(
+                        message.content.strip()
+                        for message in request.messages
+                        if message.role is MessageRole.USER
+                        if message.content.strip()
+                    ),
+                    user_id=request.user_id,
+                    character_id=request.character_id,
+                    source_refs=[{"session_id": request.session_id, "round_id": request.round_id}],
+                    request_metadata=request.metadata,
+                )
+                self._invalidate_active_memory_cache(request.user_id, request.character_id)
         except Exception as exc:
             task.status = TaskStatus.FAILED
             task.last_error = str(exc)
@@ -173,7 +192,7 @@ class MemoryService:
             RecallIntent.RELATIONSHIP_CONTINUITY,
         }
         if must_query_l3:
-            active_memories = self.repository.active_memories(request.user_id, request.character_id)
+            active_memories = self._active_memories(request.user_id, request.character_id)
             active_memory_by_backend_id = {
                 memory.backend_memory_id: memory for memory in active_memories
             }
@@ -184,7 +203,9 @@ class MemoryService:
                     query=request.query,
                     active_memories=active_memories,
                 )
-            if not query_slot or not any(item.layer == "L3" for item in items):
+            if query_slot and not any(item.layer == "L3" for item in items):
+                pass
+            elif not query_slot or not any(item.layer == "L3" for item in items):
                 backend_items = self.backend.search(
                     request.query,
                     user_id=request.user_id,
@@ -265,6 +286,7 @@ class MemoryService:
             "session_id": request.session_id,
         }
         self.repository.save_task(task)
+        self._invalidate_active_memory_cache(request.user_id, request.character_id)
         return DeleteMemoryResponse(
             status="completed",
             task_id=task.task_id,
@@ -365,6 +387,7 @@ class MemoryService:
             "history_version": request.history_version,
         }
         self.repository.save_task(task)
+        self._invalidate_active_memory_cache(request.user_id, request.character_id)
         return RebuildMemoryResponse(
             status="completed",
             task_id=task.task_id,
@@ -450,6 +473,21 @@ class MemoryService:
         self.repository.mark_rounds_deleted(request.user_id, request.character_id)
         self.repository.mark_summary(request.user_id, request.character_id, SummaryState.DIRTY)
         return [memory.memory_id for memory in active_memories]
+
+    def _active_memories(self, user_id: str, character_id: str) -> list[Any]:
+        cache_key = (user_id, character_id)
+        now = monotonic()
+        cached = self._active_memory_cache.get(cache_key)
+        if cached is not None:
+            cached_at, cached_memories = cached
+            if now - cached_at <= self.active_memory_cache_ttl_seconds:
+                return list(cached_memories)
+        memories = self.repository.active_memories(user_id, character_id)
+        self._active_memory_cache[cache_key] = (now, list(memories))
+        return memories
+
+    def _invalidate_active_memory_cache(self, user_id: str, character_id: str) -> None:
+        self._active_memory_cache.pop((user_id, character_id), None)
 
     def _dedupe_and_clip(self, items: list[MemoryItem], token_budget: int) -> list[MemoryItem]:
         priority = {"L3": 3, "L2": 2, "L1": 1}
@@ -599,6 +637,90 @@ class MemoryService:
                 l3_metadata=l3_metadata,
             )
         return [dict(event) for event in events]
+
+    def _backfill_p0_slots_from_round_source(
+        self,
+        *,
+        source_text: str,
+        user_id: str,
+        character_id: str,
+        source_refs: list[dict[str, str]],
+        request_metadata: dict[str, Any],
+    ) -> None:
+        l3_metadata = self._l3_metadata(
+            source_refs,
+            {**request_metadata, "source_text": source_text},
+        )
+        for memory_text in self._p0_canonical_memories_from_source(source_text):
+            if not self._memory_supported_by_source(memory_text, l3_metadata):
+                continue
+            existing_same_source = [
+                memory
+                for memory in self.repository.active_memories(user_id, character_id)
+                if self._memory_conflict_slot(memory.memory_text) == self._memory_conflict_slot(memory_text)
+                and self._conflict_partition(memory) == self._conflict_partition_from_metadata(l3_metadata)
+                and any(source_ref_key(ref) in {source_ref_key(raw_ref) for raw_ref in source_refs} for ref in memory.source_refs)
+            ]
+            if any(memory.memory_text == memory_text for memory in existing_same_source):
+                continue
+            backend_id = self._local_p0_backend_memory_id(
+                user_id=user_id,
+                character_id=character_id,
+                slot=self._memory_conflict_slot(memory_text),
+                source_refs=source_refs,
+            )
+            if self._is_older_than_active_conflicting_memory(
+                user_id=user_id,
+                character_id=character_id,
+                backend_memory_id=backend_id,
+                memory_text=memory_text,
+                l3_metadata=l3_metadata,
+            ):
+                continue
+            self._supersede_conflicting_memories(
+                user_id=user_id,
+                character_id=character_id,
+                backend_memory_id=backend_id,
+                memory_text=memory_text,
+                l3_metadata=l3_metadata,
+            )
+            self.repository.add_memory_index(
+                backend_memory_id=backend_id,
+                user_id=user_id,
+                character_id=character_id,
+                source_refs=source_refs,
+                memory_text=memory_text,
+                source_type=str(l3_metadata["source_type"]),
+                fact_subject=str(l3_metadata["fact_subject"]),
+                context_type=str(l3_metadata["context_type"]),
+                roleplay_mode=str(l3_metadata["roleplay_mode"]),
+                data_classification=str(l3_metadata["data_classification"]),
+                memory_type=str(l3_metadata["memory_type"]),
+                backend_categories=self._list_metadata_value(l3_metadata.get("backend_categories")),
+                metadata={**l3_metadata, "p0_source_backfill": True},
+            )
+
+    @staticmethod
+    def _local_p0_backend_memory_id(
+        *,
+        user_id: str,
+        character_id: str,
+        slot: str | None,
+        source_refs: list[dict[str, str]],
+    ) -> str:
+        raw = "|".join(
+            (
+                user_id,
+                character_id,
+                slot or "unknown",
+                *(
+                    f"{source_ref.get('session_id', '')}:{source_ref.get('round_id', '')}"
+                    for source_ref in source_refs
+                ),
+            )
+        )
+        digest = sha256(raw.encode("utf-8")).hexdigest()[:32]
+        return f"local-p0:{slot or 'unknown'}:{digest}"
 
     def _index_l3_event(
         self,
@@ -904,6 +1026,13 @@ class MemoryService:
         slot = cls._memory_conflict_slot(memory_text)
         if slot == "birthday":
             return cls._source_has_any(source_text, ("生日", "birthday"))
+        source_slots = {
+            cls._memory_conflict_slot(source_memory_text)
+            for source_memory_text in cls._p0_canonical_memories_from_source(source_text)
+        }
+        source_slots.discard(None)
+        if source_slots and slot not in source_slots:
+            return False
         if slot == "current_location":
             return cls._source_has_any(
                 source_text,
@@ -966,6 +1095,37 @@ class MemoryService:
         return any(marker.lower() in lowered_source for marker in markers)
 
     @classmethod
+    def _p0_canonical_memories_from_source(cls, source_text: str) -> list[str]:
+        canonical: list[str] = []
+        nickname = cls._extract_current_nickname(source_text)
+        if nickname:
+            canonical.append(f"User prefers to be called {nickname}")
+        pet_name = cls._extract_pet_name(source_text)
+        if pet_name:
+            pet_kind, name = pet_name
+            canonical.append(f"User has a {pet_kind} named {name}")
+        current_location = cls._extract_current_location(source_text)
+        if current_location:
+            canonical.append(f"User lives in {current_location}")
+        work_status = cls._extract_current_work_status(source_text)
+        if work_status:
+            canonical.append(f"User current work status: {work_status}")
+        communication_preference = cls._extract_communication_preference(source_text)
+        if communication_preference:
+            canonical.append(f"User communication preference: {communication_preference}")
+        birthday = cls._extract_birthday(source_text)
+        if birthday:
+            canonical.append(f"User birthday: {birthday}")
+        favorite = cls._extract_favorite_consumable(source_text)
+        if favorite:
+            kind, value = favorite
+            canonical.append(f"User favorite {kind}: {value}")
+        sleep_reminder_preference = cls._extract_sleep_reminder_preference(source_text)
+        if sleep_reminder_preference:
+            canonical.append(f"User sleep reminder preference: {sleep_reminder_preference}")
+        return canonical
+
+    @classmethod
     def _canonical_memory_text(cls, memory_text: str) -> str:
         canonical_nickname = cls._extract_current_nickname(memory_text)
         if canonical_nickname:
@@ -1000,12 +1160,27 @@ class MemoryService:
         cls, memory_text: str, l3_metadata: dict[str, Any]
     ) -> str:
         source_text = str(l3_metadata.get("source_text") or "")
+        source_canonical = cls._p0_canonical_memory_for_source_slot(memory_text, source_text)
+        if source_canonical is not None:
+            return source_canonical
         source_pet_name = cls._extract_pet_name(source_text)
         memory_pet_name = cls._extract_pet_name(memory_text)
         if source_pet_name and memory_pet_name and source_pet_name[0] == memory_pet_name[0]:
             pet_kind, name = source_pet_name
             return f"User has a {pet_kind} named {name}"
         return cls._canonical_memory_text(memory_text)
+
+    @classmethod
+    def _p0_canonical_memory_for_source_slot(cls, memory_text: str, source_text: str) -> str | None:
+        if not source_text:
+            return None
+        memory_slot = cls._memory_conflict_slot(memory_text)
+        if memory_slot != "preferred_nickname":
+            return None
+        for source_memory_text in cls._p0_canonical_memories_from_source(source_text):
+            if cls._memory_conflict_slot(source_memory_text) == memory_slot:
+                return source_memory_text
+        return None
 
     @staticmethod
     def _extract_current_nickname(memory_text: str) -> str | None:
@@ -1019,7 +1194,7 @@ class MemoryService:
             r"\bshould\s+be\s+called\s+'?([\u4e00-\u9fffA-Za-z0-9_-]{2,24})'?",
             r"\baddressed\s+as\s+'?([\u4e00-\u9fffA-Za-z0-9_-]{2,24})'?",
             r"(?:改成|改为|更正为|纠正为)\s*([\u4e00-\u9fffA-Za-z0-9_-]{2,24})",
-            r"(?:叫我|称呼我|叫|称呼)\s*([\u4e00-\u9fffA-Za-z0-9_-]{2,24})",
+            r"(?:叫我|称呼我)\s*([\u4e00-\u9fffA-Za-z0-9_-]{2,24})",
             r"(?:called|be called)\s+([\u4e00-\u9fffA-Za-z0-9_-]{2,24})",
         )
         normalized = memory_text.strip()
@@ -1084,13 +1259,14 @@ class MemoryService:
     def _extract_current_location(memory_text: str) -> str | None:
         normalized = memory_text.strip()
         lowered = normalized.lower()
-        if not any(marker in lowered for marker in ("live", "moved", "relocated", "住", "搬")):
+        if not any(marker in lowered for marker in ("live", "resided", "moved", "relocated", "住", "搬")):
             return None
         patterns = (
             r"\bfrom\s+[\u4e00-\u9fffA-Za-z0-9_-]{2,40}\s+to\s+([\u4e00-\u9fffA-Za-z0-9_-]{2,40})",
             r"\bmoved\s+to\s+([\u4e00-\u9fffA-Za-z0-9_-]{2,40})",
             r"\bbefore\s+moving\s+to\s+([\u4e00-\u9fffA-Za-z0-9_-]{2,40})",
             r"\bbefore\s+relocating\s+to\s+([\u4e00-\u9fffA-Za-z0-9_-]{2,40})",
+            r"\bpreviously\s+resided\s+in\s+[\u4e00-\u9fffA-Za-z0-9_-]{2,40}\s+before\s+relocating\s+to\s+([\u4e00-\u9fffA-Za-z0-9_-]{2,40})",
             r"\brelocated\s+to\s+([\u4e00-\u9fffA-Za-z0-9_-]{2,40})",
             r"\blives?\s+in\s+([\u4e00-\u9fffA-Za-z0-9_-]{2,40})",
             r"(?:搬到|搬去|住在|现在住在)\s*([\u4e00-\u9fffA-Za-z0-9_-]{2,40})",
@@ -1181,6 +1357,7 @@ class MemoryService:
             r"\bcommunication\s+preference\s+is\s+for\s+(.+?)(?:\s+without\b|\s+instead\s+of\b|[.;。]|$)",
             r"\bcommunication\s+preference\s+is\s+to\s+receive\s+(.+?)(?:\s+without\b|\s+instead\s+of\b|[.;。]|$)",
             r"\bcommunication\s+preference\s+has\s+been\s+updated\s+to\s+want\s+(.+?)(?:\s+without\b|\s+instead\s+of\b|[.;。]|$)",
+            r"\b(?:user's\s+)?communication\s+preference\s+has\s+been\s+updated\s+to\s+prefer\s+(.+?)(?:\s+without\b|\s+instead\s+of\b|[.;。]|$)",
             r"\bcommunication\s+preference\s+has\s+been\s+updated:\s+they\s+now\s+want\s+(.+?)(?:\s+without\b|\s+instead\s+of\b|[.;。]|$)",
             r"\bprefers\s+(that\s+when\s+.+?)(?:\s+before\s+giving\b|[.;。]|$)",
             r"\bprefers\s+(.+?advice)(?:\s+without\b|\s+instead\s+of\b|[.;。]|$)",
@@ -1189,6 +1366,7 @@ class MemoryService:
             r"\bnow\s+wants\s+(.+?)\s+instead\s+of\b",
             r"\bprefers\s+(.+?)\s+before\b",
             r"\bcommunication preference:\s*(.+?)(?:[.;。]|$)",
+            r"(?:沟通偏好).*?(?:现在)?(?:更)?(?:想要|希望|要|偏好|喜欢)\s*([^。,.，]+?)(?:，?不需要|，?不要|，?不想|[。,.，]|$)",
             r"(?:沟通偏好|希望你|想要你)\s*([^。,.，]+)",
         )
         for pattern in patterns:
@@ -1212,6 +1390,8 @@ class MemoryService:
             return None
         patterns = (
             r"\bfrom\s+.+?\s+to\s+(.+?)(?:[.;。]|$)",
+            r"\bbirthday\s+falls\s+on\s+(.+?)(?:,|\s+correcting\b|[.;。]|$)",
+            r"\bbirthday\s+has\s+been\s+updated\s+to\s+(.+?)(?:,|\s+not\b|[.;。]|$)",
             r"\bbirthday\s*(?:is|:)\s*(.+?)(?:[.;。]|$)",
             r"(?:生日|出生日期).*?不是[^。,.，]+[，,]?\s*(?:是|改成|改为|更正为|纠正为)\s*([^。,.，]+)",
             r"(?:生日|出生日期).*?(?:改成|改为|更正为|纠正为|(?<!不)是)\s*([^。,.，]+)",
@@ -1222,7 +1402,7 @@ class MemoryService:
             if matches:
                 value = str(matches[-1]).strip("。,.， ")
                 value = re.split(
-                    r"\s*\(corrected\s+from\b|\s*\(not\b|\s*\(previously\s+thought\s+to\s+be\b|,\s*correcting\s+a\s+previous\b|,\s*corrected\s+from\b",
+                    r"\s*\(corrected\s+from\b|\s*\(not\b|\s*\(previously\s+thought\s+to\s+be\b|\s*\(previously\s+stated\s+as\b|,\s*previously\b|,\s*not\b|,\s*correcting\s+a\s+previous\b|,\s*corrected\s+from\b",
                     value,
                     maxsplit=1,
                     flags=re.IGNORECASE,
@@ -1248,8 +1428,12 @@ class MemoryService:
                 "changed drink preference",
                 "changed their drink preference",
                 "drink preference changed",
+                "drink preference updated",
                 "switched drink preference",
                 "switched their drink preference",
+                "preferring",
+                "no longer drinks",
+                "no longer drinking",
                 "favorite drink",
             )
         ) or any(marker in normalized for marker in ("喜欢喝", "饮品", "饮料")):
@@ -1265,6 +1449,9 @@ class MemoryService:
                 "food preference changed",
                 "switched food preference",
                 "switched their food preference",
+                "prefers",
+                "no longer eats",
+                "no longer eating",
                 "favorite food",
             )
         ) or any(
@@ -1283,13 +1470,17 @@ class MemoryService:
                 r"\bchanged\s+drink\s+preference\s+from\s+.+?\s+to\s+(.+?)(?:[.;。]|$)",
                 r"\bchanged\s+their\s+drink\s+preference\s+from\s+.+?\s+to\s+(.+?)(?:[.;。]|$)",
                 r"\bdrink\s+preference\s+changed\s+to\s+(.+?)(?:[.;。]|$)",
+                r"\bdrink\s+preference\s+updated\s+to\s+(.+?)(?:\s+only\b|,|\s+and\s+no\s+longer\b|[.;。]|$)",
                 r"\bswitched\s+drink\s+preference\s+from\s+.+?\s+to\s+(.+?)(?:,|\s+and\s+no\s+longer\b|[.;。]|$)",
                 r"\bswitched\s+their\s+drink\s+preference\s+from\s+.+?\s+to\s+(.+?)(?:,|\s+and\s+no\s+longer\b|[.;。]|$)",
                 r"\bprefers\s+(.+?)\s+as\s+their\s+favorite\s+drink\b",
                 r"\bswitched\s+from\s+drinking\s+.+?\s+to\s+(.+?)\s+as\s+their\s+preferred\s+beverage\b",
                 r"\bswitched\s+from\s+drinking\s+.+?\s+to\s+preferring\s+(.+?)(?:[.;。]|$)",
+                r"\bswitched\s+from\s+regularly\s+drinking\s+.+?\s+to\s+preferring\s+(.+?)\s+as\s+their\s+daily\s+beverage\b",
                 r"\bswitched\s+from\s+.+?\s+to\s+(.+?)\s+as\s+their\s+preferred\s+beverage\b",
                 r"\bswitched\s+from\s+.+?\s+to\s+(.+?)\s+as\s+their\s+preferred\s+drink\b",
+                r"\bno\s+longer\s+drinks?\s+.+?,\s+only\s+(.+?)(?:[.;。]|$)",
+                r"\bno\s+longer\s+drinking\s+.+?,\s+only\s+(.+?)(?:[.;。]|$)",
                 r"\bfavorite\s+drink\s*(?:is|:)\s*(.+?)(?:[.;。]|$)",
                 r"\bdrink\s+preference\s*(?:is|:|to)\s*(.+?)(?:[.;。]|$)",
                 r"\bbeverage\s+preference\s*(?:is|:|to)\s*(.+?)(?:[.;。]|$)",
@@ -1299,6 +1490,8 @@ class MemoryService:
         else:
             patterns = (
                 r"\bnow\s+prefers\s+(.+?)\s+instead\s+of\b.+?\bfavorite\s+food\b",
+                r"\bprefers\s+(.+?)\s+over\b.+?\bfood\b",
+                r"\bprefers\s+(.+?)\s+instead\s+of\b.+?\bfood\b",
                 r"\bfood\s+preference\s+changed\s+from\s+.+?\s+to\s+(.+?)(?:[.;。]|$)",
                 r"\bswitched\s+from\s+eating\s+.+?\s+to\s+(.+?)\s+as\s+their\s+preferred\s+food\b",
                 r"\bswitched\s+from\s+eating\s+.+?\s+to\s+(.+?)\s+as\s+their\s+favorite\s+food\b",
@@ -1306,6 +1499,8 @@ class MemoryService:
                 r"\bswitched\s+food\s+preference\s+from\s+.+?\s+to\s+(.+?)(?:[.;。]|$)",
                 r"\bswitched\s+their\s+food\s+preference\s+from\s+.+?\s+to\s+(.+?)(?:[.;。]|$)",
                 r"\bfood\s+preference\s+changed\s+to\s+(.+?)(?:[.;。]|$)",
+                r"\bno\s+longer\s+eats?\s+.+?,\s+only\s+(.+?)(?:[.;。]|$)",
+                r"\bno\s+longer\s+eating\s+.+?,\s+only\s+(.+?)(?:[.;。]|$)",
                 r"\bfavorite\s+food\s*(?:is|:)\s*(.+?)(?:[.;。]|$)",
                 r"\bfood\s+preference\s*(?:is|:|to)\s*(.+?)(?:[.;。]|$)",
                 r"(?:食物).*?(?:偏好)?(?:改成|改为|更正为|纠正为|是|为|:|：)\s*([^。,.，]+)",

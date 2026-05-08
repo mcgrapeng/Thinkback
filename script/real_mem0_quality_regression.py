@@ -238,6 +238,8 @@ def build_quality_report(
     false_positive_rate = false_positive_cases / max(1, negative_cases)
     conflict_pollution_rate = conflict_polluted_cases / case_count
     duplicate_active_rate = _duplicate_active_rate(active_memory_snapshots or [])
+    request_metrics_dict = (request_metrics or RequestMetrics()).as_dict()
+    transient_retry_rate = request_metrics_dict["transient_failure_count"] / max(1, request_metrics_dict["request_count"])
     report = {
         "case_count": len(cases),
         "positive_case_count": positive_case_count,
@@ -251,8 +253,23 @@ def build_quality_report(
         "irrelevant_l3_per_query": irrelevant_l3_per_query,
         "false_positive_rate": false_positive_rate,
         "conflict_pollution_rate": conflict_pollution_rate,
-        "delete_residue_rate": 0.0,
+        "critical_slot_pass_rate": None,
+        "delete_memory_residue_rate": 0.0,
+        "delete_session_residue_rate": None,
+        "delete_all_residue_rate": None,
         "rebuild_resurrection_rate": 0.0,
+        "cross_user_leak_rate": None,
+        "cross_character_leak_rate": 0.0,
+        "roleplay_real_mix_rate": 0.0,
+        "dirty_summary_recall_rate": None,
+        "source_ref_loss_rate": None,
+        "known_drift_regression_pass_rate": None,
+        "http_5xx_rate": None,
+        "timeout_rate": None,
+        "idempotency_failure_rate": None,
+        "transient_retry_rate": transient_retry_rate,
+        # Legacy aliases kept temporarily for old dashboards and historical report builders.
+        "delete_residue_rate": 0.0,
         "cross_scope_leak_rate": 0.0,
         "duplicate_active_rate": duplicate_active_rate,
         "active_memory_count": active_memory_count,
@@ -260,7 +277,7 @@ def build_quality_report(
         "failed_cases": failed_cases,
         "case_results": case_results,
         "category_metrics": category_metrics,
-        "request_metrics": (request_metrics or RequestMetrics()).as_dict(),
+        "request_metrics": request_metrics_dict,
         "latency_ms": (latency_metrics or LatencyMetrics()).as_dict(),
     }
     failed_metrics = _failed_metric_gates(report)
