@@ -22,7 +22,7 @@ kubectl apply -f k8s/secret.example.yaml
 Replace values in `secret.example.yaml` before using it outside a local cluster.
 
 The default ConfigMap values are aligned with the current P0 pressure-test
-baseline: `MEMORY_L3_EXECUTOR_WORKERS=16`,
+baseline: `MEMORY_API_WORKER_LIMIT=8`, `MEMORY_L3_EXECUTOR_WORKERS=16`,
 `MEMORY_L3_MAX_PENDING_TASKS=256`, `MEMORY_L3_QUEUE_WAIT_SECONDS=5`, and
 `READINESS_TIMEOUT_SECONDS=30`. These values are not an online capacity
 promise; recalibrate them after real traffic, pod resources, and external model

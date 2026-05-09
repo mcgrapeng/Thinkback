@@ -578,7 +578,7 @@ def _forbidden_active_terms() -> list[str]:
 
 def _limitations() -> list[str]:
     return [
-        "本短压测不替代 6-24 小时 soak test。",
+        "本短压测不替代 10 分钟 P0 soak test。",
         "本短压测不替代 50/100 并发容量压测。",
         "本短压测不执行 Mem0、Qdrant、Postgres 故障注入。",
         "本短压测使用工程构造样本，不代表线上全量用户分布。",

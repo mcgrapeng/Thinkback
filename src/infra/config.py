@@ -50,6 +50,7 @@ class Settings(BaseSettings):
     memory_l3_executor_workers: int = 16
     memory_l3_max_pending_tasks: int = 256
     memory_l3_queue_wait_seconds: float = 5.0
+    memory_api_worker_limit: int = 8
     readiness_timeout_seconds: float = 30.0
 
     @field_validator("memory_l3_executor_workers")
@@ -57,6 +58,13 @@ class Settings(BaseSettings):
     def validate_memory_l3_executor_workers(cls, value: int) -> int:
         if value < 1:
             raise ValueError("memory_l3_executor_workers must be >= 1")
+        return value
+
+    @field_validator("memory_api_worker_limit")
+    @classmethod
+    def validate_memory_api_worker_limit(cls, value: int) -> int:
+        if value < 1:
+            raise ValueError("memory_api_worker_limit must be >= 1")
         return value
 
     celery_broker_url: str = "redis://localhost:6379/0"

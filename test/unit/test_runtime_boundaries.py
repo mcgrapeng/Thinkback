@@ -94,7 +94,10 @@ def test_memory_service_can_use_mem0_library_backend_from_settings(monkeypatch) 
 def test_memory_routes_call_sync_service_in_threadpool() -> None:
     source = Path("src/api/memory.py").read_text(encoding="utf-8")
 
-    assert "return await run_in_threadpool(method, *args, **kwargs)" in source
+    assert "CapacityLimiter(" in source
+    assert "partial(method, *args, **kwargs)" in source
+    assert "return await to_thread.run_sync(" in source
+    assert "limiter=_memory_call_limiter" in source
     assert "_run_memory_call(service.append, request)" in source
     assert "_run_memory_call(service.recall, request)" in source
     assert "_run_memory_call(service.delete, request)" in source

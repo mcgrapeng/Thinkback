@@ -1,12 +1,14 @@
 """Memory workflow routes."""
 
 from collections.abc import Callable
+from functools import partial
 from typing import ParamSpec, TypeVar
 
+from anyio import CapacityLimiter, to_thread
 from fastapi import APIRouter, Depends, HTTPException
-from starlette.concurrency import run_in_threadpool
 
 from api.dependencies import get_memory_service
+from infra.config import settings
 from memory.schemas import (
     AppendMemoryRequest,
     AppendMemoryResponse,
@@ -23,11 +25,16 @@ from memory.service import MemoryService
 router = APIRouter(prefix="/memory", tags=["memory"])
 P = ParamSpec("P")
 R = TypeVar("R")
+_memory_call_limiter = CapacityLimiter(settings.memory_api_worker_limit)
 
 
 async def _run_memory_call(method: Callable[P, R], *args: P.args, **kwargs: P.kwargs) -> R:
     try:
-        return await run_in_threadpool(method, *args, **kwargs)
+        call = partial(method, *args, **kwargs)
+        return await to_thread.run_sync(
+            call,
+            limiter=_memory_call_limiter,
+        )
     except ValueError as exc:
         detail = str(exc)
         if "fail-closed" in detail:

@@ -22,6 +22,7 @@ def test_settings_defaults_are_thinkback_baseline() -> None:
     assert settings.memory_l3_executor_workers == 16
     assert settings.memory_l3_max_pending_tasks == 256
     assert settings.memory_l3_queue_wait_seconds == 5.0
+    assert settings.memory_api_worker_limit == 8
     assert settings.readiness_timeout_seconds == 30.0
 
     assert not hasattr(settings, "mem0_api_url")

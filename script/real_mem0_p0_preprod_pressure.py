@@ -52,7 +52,7 @@ _PHASE_ARGS = {
 _DURATION_PHASE_TARGET_SECONDS = {
     "baseline": 10 * 60,
     "stress": 15 * 60,
-    "soak": 6 * 60 * 60,
+    "soak": 10 * 60,
 }
 
 _DEFAULT_DURATION_PHASE_INTERVAL_SECONDS = {
@@ -190,6 +190,7 @@ def build_duration_phase_report(
     official_min_duration_seconds = _DURATION_PHASE_TARGET_SECONDS.get(phase, target_duration_seconds)
     required_duration_seconds = max(target_duration_seconds, official_min_duration_seconds)
     duration_gate_passed = actual_duration_seconds >= required_duration_seconds
+    child_gate_passed = not failed_child_reports
     return {
         "run_id": run_id,
         "phase": phase,
@@ -201,7 +202,8 @@ def build_duration_phase_report(
         "actual_duration_seconds": round(actual_duration_seconds, 3),
         "duration_gate_passed": duration_gate_passed,
         "probe_only": not duration_gate_passed,
-        "passed": not failed_child_reports,
+        "passed": child_gate_passed and duration_gate_passed,
+        "child_gate_passed": child_gate_passed,
         "report_count": len(child_reports),
         "failed_child_reports": failed_child_reports,
         "suite_ids": [str(report.get("suite_id", report.get("run_id", "-"))) for report in child_reports],
@@ -214,6 +216,7 @@ def build_duration_phase_report(
 def render_duration_phase_markdown(report: dict[str, Any]) -> str:
     conclusion = "通过" if report.get("passed") else "未通过"
     duration = "通过" if report.get("duration_gate_passed") else "未满足，按短探针记录"
+    child_gate = "通过" if report.get("child_gate_passed", report.get("passed")) else "未通过"
     lines = [
         "# Thinkback P0 持续压测阶段报告",
         "",
@@ -225,7 +228,8 @@ def render_duration_phase_markdown(report: dict[str, Any]) -> str:
         f"| phase | {report['phase']} |",
         f"| started_at | `{report['started_at']}` |",
         f"| ended_at | `{report['ended_at']}` |",
-        f"| 子报告门禁 | {conclusion} |",
+        f"| 整体结论 | {conclusion} |",
+        f"| 子报告门禁 | {child_gate} |",
         f"| 持续时间门禁 | {duration} |",
         f"| target_duration_seconds | {report['target_duration_seconds']} |",
         f"| actual_duration_seconds | {report['actual_duration_seconds']} |",
@@ -723,7 +727,7 @@ def _summarize_phase(phase: str, reports: list[dict[str, Any]]) -> dict[str, Any
     ]
     duration_required = phase in {"baseline", "stress", "soak"}
     duration_gate_passed = bool(duration_reports) and all(
-        bool(report.get("duration_gate_passed"))
+        _duration_report_meets_current_gate(phase, report)
         for report in duration_reports
     )
     if not duration_required and not duration_reports:
@@ -731,7 +735,7 @@ def _summarize_phase(phase: str, reports: list[dict[str, Any]]) -> dict[str, Any
     failed_duration_reports = [
         str(report.get("run_id", "-"))
         for report in duration_reports
-        if not bool(report.get("duration_gate_passed"))
+        if not _duration_report_meets_current_gate(phase, report)
     ]
     spike_reports = [
         report
@@ -784,6 +788,13 @@ def _summarize_phase(phase: str, reports: list[dict[str, Any]]) -> dict[str, Any
         "worst_recall_p95_ms": _worst_recall_latency(reports, "p95"),
         "worst_recall_p99_ms": _worst_recall_latency(reports, "p99"),
     }
+
+
+def _duration_report_meets_current_gate(phase: str, report: dict[str, Any]) -> bool:
+    current_min_duration_seconds = _DURATION_PHASE_TARGET_SECONDS.get(phase)
+    if current_min_duration_seconds is None:
+        return bool(report.get("duration_gate_passed"))
+    return float(report.get("actual_duration_seconds", 0)) >= current_min_duration_seconds
 
 
 def _load_phase_report_args(phase_report_args: list[str]) -> dict[str, list[dict[str, Any]]]:

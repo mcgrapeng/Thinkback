@@ -52,6 +52,7 @@ def test_env_example_declares_runtime_settings() -> None:
         "MEMORY_EMBEDDING_MODEL=",
         "MEM0_HISTORY_DB_PATH=",
         "READINESS_TIMEOUT_SECONDS=",
+        "MEMORY_API_WORKER_LIMIT=",
         "MEMORY_L3_EXECUTOR_WORKERS=",
         "MEMORY_L3_MAX_PENDING_TASKS=",
         "MEMORY_L3_QUEUE_WAIT_SECONDS=",
@@ -95,6 +96,7 @@ def test_k8s_config_and_secret_examples_include_runtime_settings() -> None:
     assert "MEMORY_L3_EXECUTOR_WORKERS" in configmap
     assert "MEMORY_L3_MAX_PENDING_TASKS" in configmap
     assert "MEMORY_L3_QUEUE_WAIT_SECONDS" in configmap
+    assert "MEMORY_API_WORKER_LIMIT" in configmap
     assert "READINESS_TIMEOUT_SECONDS" in configmap
     assert "CELERY_BROKER_URL" in configmap
     assert "POSTGRES_PASSWORD" in secret

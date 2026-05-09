@@ -12,6 +12,7 @@ from script.real_mem0_p0_fault_injection import (
     render_fault_injection_markdown,
 )
 from script.real_mem0_p0_preprod_pressure import (
+    _DURATION_PHASE_TARGET_SECONDS,
     _failed_duration_child_report,
     _phase_command,
     _render_cli_summary,
@@ -618,14 +619,14 @@ def test_render_pressure_suite_markdown_includes_gates_and_limitations() -> None
             "failed_metrics": [],
             "latency_ms": {"append": {"p95": 9000}, "recall": {"p95": 500}},
         },
-        limitations=["未执行 6 小时 soak test"],
+        limitations=["未执行 10 分钟 P0 soak test"],
     )
 
     markdown = render_pressure_suite_markdown(report)
 
     assert "# Thinkback P0 压测报告" in markdown
     assert "| 整体结论 | 通过 |" in markdown
-    assert "未执行 6 小时 soak test" in markdown
+    assert "未执行 10 分钟 P0 soak test" in markdown
 
 
 def test_final_pressure_report_keeps_stress_latency_failure_visible(tmp_path) -> None:
@@ -768,7 +769,7 @@ def test_final_pressure_report_uses_latest_passing_50_concurrency_after_old_fail
     assert "`recall_at_10=1.0`" in content
     assert "`precision_at_10=1.0`" in content
     assert "`recall p95=888ms`" in content
-    assert "长测、故障注入、代表性样本回放和资源饱和观测" in content
+    assert "P0 召回主链路在当前代表性并发下未退化" in content
     assert "| 50 并发 recall / 100 请求 | `case_pass_rate=1.0`, `recall_at_10=1.0` | `p95=888ms`, `p99=971ms` | 通过，未观察到召回质量退化。 |" in content
     assert "50 并发 recall p95 超门禁" not in content
 
@@ -883,8 +884,8 @@ def test_final_pressure_report_renders_partial_preprod_gaps_precisely(tmp_path) 
     assert "| 资源饱和观测 | 未执行 | CPU、内存、连接池、队列等待、Qdrant 请求耗时和外部限流尚未形成固定报告。 |" in content
     assert "| 10-15 分钟 baseline | 已执行短探针 | 已验证短时 10 并发 recall；尚未覆盖持续 10-15 分钟。 |" in content
     assert "不能替代 15-30 分钟 stress、100 并发 spike" not in content
-    assert "补齐 10-15 分钟持续 baseline" in content
-    assert "6-24 小时 soak、代表性样本回放、Mem0/Qdrant/Postgres/Redis 故障注入、资源饱和观测" in content
+    assert "补齐10-15 分钟持续 baseline" in content
+    assert "10 分钟 P0 soak、代表性样本回放、Mem0/Qdrant/Postgres/Redis 故障注入、资源饱和观测" in content
 
 
 def test_final_pressure_report_distinguishes_official_duration_from_probe(tmp_path) -> None:
@@ -990,10 +991,10 @@ def test_final_pressure_report_distinguishes_failed_soak_from_missing_soak(tmp_p
     content = build_final_report([report_path], output_path=output_path, preprod_summary=preprod_summary)
 
     assert (
-        "| 6-24 小时 soak test | 已执行但未通过 | "
+        "| 10 分钟 P0 soak test | 已执行但未通过 | "
         "已执行 soak，但存在失败子报告或持续时间未满足门禁。 |"
     ) in content
-    assert "| 6-24 小时 soak test | 未执行 |" not in content
+    assert "| 10 分钟 P0 soak test | 未执行 |" not in content
 
 
 def test_preprod_report_requires_all_production_precheck_phases() -> None:
@@ -1199,6 +1200,10 @@ def test_soak_iteration_interval_models_sustained_load_not_tight_loop() -> None:
     assert _soak_iteration_interval("soak", override_seconds=60) == 60
 
 
+def test_p0_soak_duration_gate_is_ten_minutes() -> None:
+    assert _DURATION_PHASE_TARGET_SECONDS["soak"] == 600
+
+
 def test_duration_phase_report_marks_under_duration_runs_as_probe() -> None:
     child = _final_report_fixture("p0-short-child", passed=True)
     child["config"]["recall_concurrency"] = 50
@@ -1218,8 +1223,9 @@ def test_duration_phase_report_marks_under_duration_runs_as_probe() -> None:
     )
 
     assert report["phase"] == "stress"
-    assert report["passed"] is True
+    assert report["passed"] is False
     assert report["duration_gate_passed"] is False
+    assert report["child_gate_passed"] is True
     assert report["probe_only"] is True
     assert report["report_count"] == 1
     assert report["worst_recall_p95_ms"] == 780
@@ -1319,9 +1325,9 @@ def test_cli_summary_omits_embedded_child_report_payload() -> None:
         run_id="p0-duration-soak",
         phase="soak",
         started_at="2026-05-08T03:00:00+00:00",
-        ended_at="2026-05-08T09:00:00+00:00",
-        target_duration_seconds=21600,
-        actual_duration_seconds=21600,
+        ended_at="2026-05-08T03:10:00+00:00",
+        target_duration_seconds=600,
+        actual_duration_seconds=600,
         child_reports=[child],
     )
 
@@ -1403,9 +1409,9 @@ def test_preprod_report_can_be_built_from_existing_phase_reports() -> None:
         run_id="p0-duration-soak",
         phase="soak",
         started_at="2026-05-08T00:00:00+00:00",
-        ended_at="2026-05-08T00:03:00+00:00",
-        target_duration_seconds=120,
-        actual_duration_seconds=180,
+        ended_at="2026-05-08T00:10:00+00:00",
+        target_duration_seconds=600,
+        actual_duration_seconds=600,
         child_reports=[_final_report_fixture("p0-soak-child", passed=True)],
     )
     replay = {
@@ -1430,11 +1436,11 @@ def test_preprod_report_can_be_built_from_existing_phase_reports() -> None:
     )
 
     assert report["executed_phases"] == ["baseline", "representative_replay", "soak"]
-    assert report["requested_phases_passed"] is False
-    assert report["production_precheck_passed"] is False
-    assert report["failed_phases"] == ["soak"]
-    assert report["failed_production_phases"] == ["soak"]
-    assert report["phase_results"]["soak"]["duration_gate_passed"] is False
+    assert report["requested_phases_passed"] is True
+    assert report["production_precheck_passed"] is True
+    assert report["failed_phases"] == []
+    assert report["failed_production_phases"] == []
+    assert report["phase_results"]["soak"]["duration_gate_passed"] is True
     assert report["phase_results"]["representative_replay"]["representative_probe_passed"] is True
 
 

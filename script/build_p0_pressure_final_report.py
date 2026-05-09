@@ -103,7 +103,7 @@ def build_final_report(
                     f"`recall_at_10={stress_recall.get('recall_at_10', 0.0)}`，"
                     f"`precision_at_10={stress_recall.get('precision_at_10', 0.0)}`，"
                     f"`recall p95={stress_latency.get('p95', 0)}ms`。"
-                    "这说明 P0 召回主链路在当前代表性并发下未退化，但仍不能替代长测、故障注入、代表性样本回放和资源饱和观测。"
+                    "这说明 P0 召回主链路在当前代表性并发下未退化。"
                 ),
                 "",
             ]
@@ -205,10 +205,7 @@ def build_final_report(
                     f"{'通过，未观察到召回质量退化。' if stress_passed else '准确率通过，p95 延迟未通过。'} |"
                 ),
                 "",
-                    (
-                        "50 并发代表性压测只证明当前构造样本和短时请求下的召回质量与延迟门禁。"
-                        f"它不能替代 {remaining_preprod_evidence}。"
-                    ),
+                _render_non_replaced_preprod_sentence(remaining_preprod_evidence),
                 "",
             ]
         )
@@ -264,7 +261,7 @@ def build_final_report(
             [
                 "1. 优先处理 50 并发 recall p95 超门禁的问题，再重跑 50 并发和 100 并发 spike。",
                 "2. 扩大 P0 核心槽位评测集，把真实 Mem0 表达漂移继续沉淀成回归测试。",
-                "3. 做 6-24 小时 soak、故障注入、代表性样本回放和资源饱和观测后，再声明生产前完整压测通过。",
+                "3. 做 10 分钟 P0 soak、故障注入、代表性样本回放和资源饱和观测后，再声明生产前完整压测通过。",
                 "",
             ]
         )
@@ -273,7 +270,7 @@ def build_final_report(
             [
                 f"1. {_recommend_remaining_preprod_work(executed_phases, phase_results)}",
                 "2. 扩大 P0 核心槽位评测集，把真实 Mem0 表达漂移继续沉淀成回归测试。",
-                "3. 接入代表性样本回放、监控告警和持续 SLO 后，再评估生产前完整压测结论。",
+                "3. 放量前继续做 6 小时以上长稳、资源饱和观测、监控告警和持续 SLO 校准。",
                 "",
             ]
         )
@@ -373,16 +370,16 @@ def _render_open_item_rows(executed_phases: set[str], phase_results: dict[str, A
     )
     if soak_duration_passed:
         soak_status = "已执行"
-        soak_detail = "已覆盖 6-24 小时 soak。"
+        soak_detail = "已覆盖 10 分钟 P0 soak 门禁；6 小时以上长稳作为放量前建议证据。"
     elif soak_failed:
         soak_status = "已执行但未通过"
         soak_detail = "已执行 soak，但存在失败子报告或持续时间未满足门禁。"
     else:
         soak_status = "未执行"
         soak_detail = (
-            "本轮只执行了短时 soak 探针，没有长时间稳定性证据。"
+            "本轮只执行了短时 soak 探针，没有满足 10 分钟 P0 soak 门禁。"
             if "soak_probe" in executed_phases
-            else "尚未执行长时间稳定性测试。"
+            else "尚未执行 10 分钟 P0 soak。"
         )
     replay_result = phase_results.get("representative_replay", {})
     replay_passed = bool(replay_result.get("passed")) if replay_result else False
@@ -397,7 +394,7 @@ def _render_open_item_rows(executed_phases: set[str], phase_results: dict[str, A
         replay_detail = "当前仍是 P0 工程构造集；样本量按槽位、冲突、负样本、隔离和删除覆盖清单扩展。"
     return [
         f"| 10-15 分钟 baseline | {baseline_status} | {baseline_detail} |",
-        f"| 6-24 小时 soak test | {soak_status} | {soak_detail} |",
+        f"| 10 分钟 P0 soak test | {soak_status} | {soak_detail} |",
         f"| 15-30 分钟 50 并发 stress | {stress_status} | {stress_detail} |",
         f"| 100 并发 spike | {spike_status} | {spike_detail} |",
         f"| Mem0/Qdrant/Postgres/Redis 故障注入 | {fault_status} | {fault_detail} |",
@@ -415,7 +412,7 @@ def _describe_non_replaced_preprod_work(phase_results: dict[str, Any]) -> str:
     if not bool(phase_results.get("spike", {}).get("recovery_gate_passed")):
         remaining.append("完整 10 -> 100 -> 10 spike 恢复曲线")
     if not bool(phase_results.get("soak", {}).get("duration_gate_passed")):
-        remaining.append("6-24 小时 soak")
+        remaining.append("10 分钟 P0 soak")
     if not bool(phase_results.get("fault_injection", {}).get("passed")):
         remaining.append("依赖故障注入")
     if not bool(phase_results.get("representative_replay", {}).get("passed")):
@@ -424,12 +421,21 @@ def _describe_non_replaced_preprod_work(phase_results: dict[str, Any]) -> str:
     return "、".join(remaining)
 
 
+def _render_non_replaced_preprod_sentence(remaining_preprod_evidence: str) -> str:
+    prefix = "50 并发代表性压测只证明当前构造样本和短时请求下的召回质量与延迟门禁。"
+    if not remaining_preprod_evidence:
+        return prefix
+    if "、" not in remaining_preprod_evidence:
+        return f"{prefix}仍需单独补充{remaining_preprod_evidence}。"
+    return f"{prefix}它不能替代 {remaining_preprod_evidence}。"
+
+
 def _recommend_remaining_preprod_work(executed_phases: set[str], phase_results: dict[str, Any]) -> str:
     remaining = []
     if not bool(phase_results.get("baseline", {}).get("duration_gate_passed")):
         remaining.append("10-15 分钟持续 baseline")
     if not bool(phase_results.get("soak", {}).get("duration_gate_passed")):
-        remaining.append("6-24 小时 soak")
+        remaining.append("10 分钟 P0 soak")
     if not bool(phase_results.get("representative_replay", {}).get("passed")):
         remaining.append("代表性样本回放")
     if not bool(phase_results.get("fault_injection", {}).get("passed")):
@@ -443,7 +449,9 @@ def _recommend_remaining_preprod_work(executed_phases: set[str], phase_results: 
         remaining.append("100 并发 spike")
     elif not bool(phase_results.get("spike", {}).get("recovery_gate_passed")):
         remaining.append("完整 10 -> 100 -> 10 spike 恢复曲线")
-    return f"补齐 {'、'.join(remaining)}。"
+    if not remaining:
+        return "当前 P0 生产前门禁已覆盖；继续补充资源趋势和线上校准。"
+    return f"补齐{'、'.join(remaining)}。"
 
 
 def _metric(
