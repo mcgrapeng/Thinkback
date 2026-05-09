@@ -1,3 +1,6 @@
+import time
+from threading import Event
+
 from memory.backends import FakeMemoryBackend
 from memory.repositories import InMemoryMemoryRepository
 from memory.schemas import (
@@ -59,6 +62,28 @@ class FailingDeleteBackend(FakeMemoryBackend):
 class FailingDeleteManyBackend(FakeMemoryBackend):
     def delete_many(self, memory_ids: list[str]) -> int:
         raise RuntimeError("mem0 delete_many failed")
+
+
+class FailingLocalP0DeleteBackend(FakeMemoryBackend):
+    def add(self, messages, *, user_id, character_id, metadata=None):  # type: ignore[no-untyped-def]
+        text = " ".join(
+            message["content"].strip()
+            for message in messages
+            if message.get("content", "").strip()
+        )
+        if "豆包" in text:
+            return []
+        return super().add(
+            messages,
+            user_id=user_id,
+            character_id=character_id,
+            metadata=metadata,
+        )
+
+    def delete(self, memory_id: str) -> None:
+        if memory_id.startswith("local-p0:"):
+            raise RuntimeError("mem0 rejected local p0 id")
+        super().delete(memory_id)
 
 
 class SkipsNicknameOnReplayBackend(FakeMemoryBackend):
@@ -170,12 +195,43 @@ class CountingAddBackend(FakeMemoryBackend):
         return super().add(*args, **kwargs)
 
 
+class BlockingAddBackend(FakeMemoryBackend):
+    def __init__(self) -> None:
+        super().__init__()
+        self.started = Event()
+        self.release = Event()
+
+    def add(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+        self.started.set()
+        if not self.release.wait(timeout=5):
+            raise RuntimeError("blocking backend was not released")
+        return super().add(*args, **kwargs)
+
+
+class BlockingDeleteBackend(FakeMemoryBackend):
+    def __init__(self) -> None:
+        super().__init__()
+        self.started = Event()
+        self.release = Event()
+
+    def delete(self, memory_id: str) -> None:
+        self.started.set()
+        if not self.release.wait(timeout=5):
+            raise RuntimeError("blocking delete was not released")
+        super().delete(memory_id)
+
+
 class CountingRepository(InMemoryMemoryRepository):
     active_memory_reads = 0
+    summary_reads = 0
 
     def active_memories(self, user_id: str, character_id: str):  # type: ignore[no-untyped-def]
         self.active_memory_reads += 1
         return super().active_memories(user_id, character_id)
+
+    def get_summary(self, user_id: str, character_id: str):  # type: ignore[no-untyped-def]
+        self.summary_reads += 1
+        return super().get_summary(user_id, character_id)
 
 
 def test_append_is_idempotent_by_round_id() -> None:
@@ -226,6 +282,195 @@ def test_append_backend_failure_marks_task_failed_and_retry_does_not_succeed_as_
         pass
     else:
         raise AssertionError("expected retry to rerun backend add")
+
+
+def test_append_duplicate_round_does_not_resubmit_while_async_l3_write_is_running() -> None:
+    repository = InMemoryMemoryRepository()
+    backend = BlockingAddBackend()
+    service = MemoryService(repository=repository, backend=backend, l3_write_mode="async")
+
+    first = service.append(make_append(round_id="round-dog", content="我养了一只狗，名字叫豆包。"))
+    assert backend.started.wait(timeout=1)
+    second = service.append(make_append(round_id="round-dog", content="我养了一只狗，名字叫豆包。"))
+
+    assert first.status == "completed"
+    assert second.status == "already_done"
+    task = repository.get_task(first.task_id)
+    assert task is not None
+    assert task.status is TaskStatus.RUNNING
+
+    backend.release.set()
+    service.drain_l3_background_tasks(timeout=2)
+
+
+def test_async_append_returns_after_local_p0_backfill_before_mem0_add_finishes() -> None:
+    repository = InMemoryMemoryRepository()
+    backend = BlockingAddBackend()
+    service = MemoryService(repository=repository, backend=backend, l3_write_mode="async")
+
+    started_at = time.perf_counter()
+    response = service.append(make_append(round_id="round-dog", content="我养了一只狗，名字叫豆包。"))
+    elapsed = time.perf_counter() - started_at
+
+    assert elapsed < 0.5
+    assert response.status == "completed"
+    assert response.l3_events == [{"event": "DEFERRED", "reason": "l3_background_write"}]
+    assert backend.started.wait(timeout=1)
+
+    task = repository.get_task(response.task_id)
+    assert task is not None
+    assert task.status is TaskStatus.RUNNING
+
+    recall = service.recall(
+        RecallMemoryRequest(
+            user_id="user-1",
+            character_id="char-1",
+            session_id="session-1",
+            query="用户的狗叫什么？",
+            intent=RecallIntent.MEMORY_QUERY,
+        )
+    )
+    assert [item.content for item in recall.items if item.layer == "L3"] == ["User has a dog named 豆包"]
+
+    backend.release.set()
+    service.drain_l3_background_tasks(timeout=2)
+
+    task = repository.get_task(response.task_id)
+    assert task is not None
+    assert task.status is TaskStatus.COMPLETED
+    active = repository.active_memories("user-1", "char-1")
+    assert [memory.memory_text for memory in active] == ["User has a dog named 豆包"]
+    assert not active[0].backend_memory_id.startswith("local-p0:")
+
+
+def test_async_l3_write_queue_is_bounded_before_append_mutates_state() -> None:
+    repository = InMemoryMemoryRepository()
+    backend = BlockingAddBackend()
+    service = MemoryService(
+        repository=repository,
+        backend=backend,
+        l3_write_mode="async",
+        l3_max_pending_tasks=1,
+        l3_queue_wait_seconds=0.01,
+    )
+
+    first = service.append(make_append(round_id="round-dog-1", content="我养了一只狗，名字叫豆包。"))
+    assert backend.started.wait(timeout=1)
+
+    try:
+        service.append(make_append(round_id="round-dog-2", content="我养了一只狗，名字叫豆包。"))
+    except RuntimeError as exc:
+        assert "l3 background queue full" in str(exc)
+    else:
+        raise AssertionError("expected async l3 queue backpressure")
+
+    assert repository.get_round("round-dog-2") is None
+    assert repository.get_task("memory-extract:round-dog-2") is None
+
+    backend.release.set()
+    service.drain_l3_background_tasks(timeout=2)
+    task = repository.get_task(first.task_id)
+    assert task is not None
+    assert task.status is TaskStatus.COMPLETED
+
+
+def test_l3_background_status_reports_pending_capacity_and_cleanup() -> None:
+    repository = InMemoryMemoryRepository()
+    backend = BlockingAddBackend()
+    service = MemoryService(
+        repository=repository,
+        backend=backend,
+        l3_write_mode="async",
+        l3_executor_workers=3,
+        l3_max_pending_tasks=4,
+    )
+
+    response = service.append(make_append(round_id="round-dog", content="我养了一只狗，名字叫豆包。"))
+    assert backend.started.wait(timeout=1)
+
+    status = service.l3_background_status()
+    assert status == {
+        "write_mode": "async",
+        "executor_workers": 3,
+        "max_pending_tasks": 4,
+        "pending_write_tasks": 1,
+        "cleanup_tasks": 0,
+        "available_capacity": 3,
+    }
+
+    backend.release.set()
+    service.drain_l3_background_tasks(timeout=2)
+
+    task = repository.get_task(response.task_id)
+    assert task is not None
+    assert task.status is TaskStatus.COMPLETED
+    assert service.l3_background_status()["pending_write_tasks"] == 0
+    assert service.l3_background_status()["available_capacity"] == 4
+
+
+def test_async_append_does_not_wait_for_backend_delete_when_superseding_p0_slot() -> None:
+    repository = InMemoryMemoryRepository()
+    backend = BlockingDeleteBackend()
+    backend.memories["backend-cat-old"] = {
+        "id": "backend-cat-old",
+        "memory": "User has a cat named 团子",
+        "user_id": "user-1",
+        "agent_id": "char-1",
+        "metadata": {},
+        "score": 1.0,
+    }
+    repository.add_memory_index(
+        backend_memory_id="backend-cat-old",
+        user_id="user-1",
+        character_id="char-1",
+        source_refs=[{"session_id": "session-1", "round_id": "round-old"}],
+        memory_text="User has a cat named 团子",
+    )
+    service = MemoryService(repository=repository, backend=backend, l3_write_mode="async")
+
+    started_at = time.perf_counter()
+    response = service.append(make_append(round_id="round-new", content="更正一下，我的猫不叫团子，叫麻薯。"))
+    elapsed = time.perf_counter() - started_at
+
+    assert elapsed < 0.5
+    assert response.status == "completed"
+    assert backend.started.wait(timeout=1)
+    active = repository.active_memories("user-1", "char-1")
+    assert [memory.memory_text for memory in active] == ["User has a cat named 麻薯"]
+
+    backend.release.set()
+    service.drain_l3_background_tasks(timeout=2)
+
+
+def test_async_l3_write_does_not_resurrect_deleted_source_memory() -> None:
+    repository = InMemoryMemoryRepository()
+    backend = BlockingAddBackend()
+    service = MemoryService(repository=repository, backend=backend, l3_write_mode="async")
+
+    response = service.append(make_append(round_id="round-cat", content="我养了一只猫，名字叫团子。"))
+    assert backend.started.wait(timeout=1)
+
+    local_memory = next(memory for memory in repository.active_memories("user-1", "char-1") if "团子" in memory.memory_text)
+    service.delete(
+        DeleteMemoryRequest(
+            request_id="delete-cat",
+            user_id="user-1",
+            character_id="char-1",
+            scope=DeleteScope.MEMORY,
+            operation_id="op-delete-cat",
+            memory_id=local_memory.memory_id,
+        )
+    )
+
+    backend.release.set()
+    service.drain_l3_background_tasks(timeout=2)
+
+    task = repository.get_task(response.task_id)
+    assert task is not None
+    assert task.status is TaskStatus.COMPLETED
+    assert task.result["l3_events"] == [{"event": "SKIP", "reason": "source_ref_excluded"}]
+    assert repository.active_memories("user-1", "char-1") == []
+    assert backend.memories == {}
 
 
 def test_recall_skips_dirty_summary_but_keeps_l3() -> None:
@@ -393,8 +638,8 @@ def test_food_and_drink_preference_slots_do_not_supersede_each_other() -> None:
     )
 
     active_text = "\n".join(memory.memory_text for memory in repository.active_memories("user-1", "char-1"))
-    assert "User favorite drink: tea" in active_text
-    assert "User favorite food: sushi" in active_text
+    assert "User favorite drink: 茶" in active_text
+    assert "User favorite food: 寿司" in active_text
 
 
 def test_recall_passes_l3_score_threshold_to_backend() -> None:
@@ -689,6 +934,31 @@ def test_append_backfills_p0_slot_when_mem0_returns_no_event() -> None:
     )
 
     assert [item.content for item in response.items if item.layer == "L3"] == ["User has a dog named 豆包"]
+
+
+def test_delete_local_p0_backfilled_memory_does_not_call_backend_delete() -> None:
+    repository = InMemoryMemoryRepository()
+    backend = FailingLocalP0DeleteBackend()
+    service = MemoryService(repository=repository, backend=backend)
+
+    service.append(make_append(round_id="round-dog", content="我养了一只狗，名字叫豆包。"))
+    memory = next(memory for memory in repository.active_memories("user-1", "char-1") if "豆包" in memory.memory_text)
+    assert memory.backend_memory_id.startswith("local-p0:")
+
+    response = service.delete(
+        DeleteMemoryRequest(
+            request_id="delete-local-p0",
+            user_id="user-1",
+            character_id="char-1",
+            scope=DeleteScope.MEMORY,
+            operation_id="op-delete-local-p0",
+            memory_id=memory.memory_id,
+        )
+    )
+
+    assert response.status == "completed"
+    assert response.affected_memories == 1
+    assert repository.memories[memory.memory_id].memory_status.name == "DELETED"
 
 
 def test_append_backfill_uses_user_source_only_to_avoid_assistant_nickname_pollution() -> None:
@@ -1683,6 +1953,26 @@ def test_recall_reuses_active_memory_cache_for_repeated_scope_reads() -> None:
     assert repository.active_memory_reads == 1
 
 
+def test_recall_reuses_summary_cache_for_repeated_scope_reads() -> None:
+    repository = CountingRepository()
+    service = MemoryService(repository=repository, backend=FakeMemoryBackend())
+    service.append(make_append(round_id="round-summary", content="我喜欢猫。"))
+
+    for _ in range(3):
+        response = service.recall(
+            RecallMemoryRequest(
+                user_id="user-1",
+                character_id="char-1",
+                session_id="session-1",
+                query="刚才聊了什么？",
+                intent=RecallIntent.MEMORY_QUERY,
+            )
+        )
+        assert any(item.layer == "L2" for item in response.items)
+
+    assert repository.summary_reads == 1
+
+
 def test_append_invalidates_active_memory_cache_for_scope() -> None:
     repository = CountingRepository()
     service = MemoryService(repository=repository, backend=FakeMemoryBackend())
@@ -1818,6 +2108,7 @@ def test_mem0_birthday_correction_wording_removes_old_date_tail() -> None:
         "User's birthday falls on June 1st, correcting a previous record that incorrectly listed May 20th as their birth date",
         "User birthday: June 1st, previously May 20th",
         "User birthday has been updated to June 1st, not May 20th",
+        "User corrected their birthday to June 1st (not May 20th)",
     ]
 
     for example in examples:
@@ -2125,6 +2416,56 @@ def test_l3_index_rejects_pet_memory_when_source_round_lacks_pet_evidence() -> N
     assert "bad-cat" not in backend.memories
 
 
+def test_l3_index_rejects_non_p0_event_memory_from_source_round() -> None:
+    repository = InMemoryMemoryRepository()
+    backend = FakeMemoryBackend()
+    service = MemoryService(repository=repository, backend=backend)
+
+    service._index_l3_event(
+        {"id": "generic-event", "memory": "喜欢晚上复盘工作压力", "event": "ADD"},
+        user_id="user-1",
+        character_id="char-1",
+        source_refs=[{"session_id": "session-1", "round_id": "round-4"}],
+        l3_metadata=service._l3_metadata(
+            [{"session_id": "session-1", "round_id": "round-4"}],
+            {"source_text": "我喜欢晚上复盘工作压力，但不喜欢被说教。"},
+        ),
+    )
+
+    assert repository.active_memories("user-1", "char-1") == []
+    assert "generic-event" not in backend.memories
+
+
+def test_l3_index_uses_source_current_location_when_mem0_returns_previous_city() -> None:
+    repository = InMemoryMemoryRepository()
+    backend = FakeMemoryBackend()
+    service = MemoryService(repository=repository, backend=backend)
+    backend.memories["bad-location"] = {
+        "id": "bad-location",
+        "memory": "User lives in 杭州",
+        "event": "ADD",
+        "user_id": "user-1",
+        "agent_id": "char-1",
+        "metadata": {},
+        "score": 0.9,
+    }
+
+    service._index_l3_event(
+        {"id": "bad-location", "memory": "User lives in 杭州", "event": "ADD"},
+        user_id="user-1",
+        character_id="char-1",
+        source_refs=[{"session_id": "session-1", "round_id": "round-7"}],
+        l3_metadata=service._l3_metadata(
+            [{"session_id": "session-1", "round_id": "round-7"}],
+            {"source_text": "我之前住在杭州，现在已经搬到上海。"},
+        ),
+    )
+
+    active = repository.active_memories("user-1", "char-1")
+    assert [memory.memory_text for memory in active] == ["User lives in 上海"]
+    assert backend.memories["bad-location"]["memory"] == "User lives in 上海"
+
+
 def test_l3_index_accepts_pet_memory_with_transliterated_alias_when_source_has_pet_name() -> None:
     repository = InMemoryMemoryRepository()
     backend = FakeMemoryBackend()
@@ -2149,6 +2490,18 @@ def test_l3_index_accepts_roleplay_pet_memory_from_story_setting_wording() -> No
     repository = InMemoryMemoryRepository()
     backend = FakeMemoryBackend()
     service = MemoryService(repository=repository, backend=backend)
+    backend.memories["bad-communication"] = {
+        "id": "bad-communication",
+        "memory": (
+            "User communication preference: to have anxiety situations handled by breaking down "
+            "the problem first before receiving suggestions"
+        ),
+        "event": "ADD",
+        "user_id": "user-1",
+        "agent_id": "char-1",
+        "metadata": {},
+        "score": 0.9,
+    }
 
     service._index_l3_event(
         {
@@ -2196,10 +2549,22 @@ def test_l3_index_rejects_nickname_memory_when_source_round_lacks_nickname_evide
     assert "bad-nickname" not in backend.memories
 
 
-def test_l3_index_rejects_communication_memory_when_specific_preference_lacks_source_evidence() -> None:
+def test_l3_index_canonicalizes_communication_memory_from_source_evidence() -> None:
     repository = InMemoryMemoryRepository()
     backend = FakeMemoryBackend()
     service = MemoryService(repository=repository, backend=backend)
+    backend.memories["bad-communication"] = {
+        "id": "bad-communication",
+        "memory": (
+            "User communication preference: to have anxiety situations handled by breaking down "
+            "the problem first before receiving suggestions"
+        ),
+        "event": "ADD",
+        "user_id": "user-1",
+        "agent_id": "char-1",
+        "metadata": {},
+        "score": 0.9,
+    }
 
     service._index_l3_event(
         {
@@ -2219,8 +2584,9 @@ def test_l3_index_rejects_communication_memory_when_specific_preference_lacks_so
         ),
     )
 
-    assert repository.active_memories("user-1", "char-1") == []
-    assert "bad-communication" not in backend.memories
+    active = repository.active_memories("user-1", "char-1")
+    assert [memory.memory_text for memory in active] == ["User communication preference: 简洁直接的建议"]
+    assert backend.memories["bad-communication"]["memory"] == "User communication preference: 简洁直接的建议"
 
 
 def test_l3_index_rejects_non_birthday_memories_when_birthday_source_lacks_evidence() -> None:
@@ -2340,6 +2706,54 @@ def test_l3_index_rejects_drink_memory_when_sleep_source_lacks_drink_evidence() 
 
     assert repository.active_memories("user-1", "char-1") == []
     assert "bad-drink" not in backend.memories
+
+
+def test_l3_index_rejects_prefers_over_drink_memory_when_anxiety_source_lacks_drink_evidence() -> None:
+    repository = InMemoryMemoryRepository()
+    backend = FakeMemoryBackend()
+    service = MemoryService(repository=repository, backend=backend)
+
+    service._index_l3_event(
+        {
+            "id": "bad-drink",
+            "memory": "User prefers tea over coffee and no longer drinks coffee",
+            "event": "ADD",
+        },
+        user_id="user-1",
+        character_id="char-1",
+        source_refs=[{"session_id": "session-1", "round_id": "round-5"}],
+        l3_metadata=service._l3_metadata(
+            [{"session_id": "session-1", "round_id": "round-5"}],
+            {"source_text": "如果我焦虑，请先帮我拆解问题，再给建议。"},
+        ),
+    )
+
+    assert repository.active_memories("user-1", "char-1") == []
+    assert "bad-drink" not in backend.memories
+
+
+def test_l3_index_rejects_prefers_over_food_memory_when_anxiety_source_lacks_food_evidence() -> None:
+    repository = InMemoryMemoryRepository()
+    backend = FakeMemoryBackend()
+    service = MemoryService(repository=repository, backend=backend)
+
+    service._index_l3_event(
+        {
+            "id": "bad-food",
+            "memory": "User prefers sushi over hamburgers and no longer eats hamburgers",
+            "event": "ADD",
+        },
+        user_id="user-1",
+        character_id="char-1",
+        source_refs=[{"session_id": "session-1", "round_id": "round-5"}],
+        l3_metadata=service._l3_metadata(
+            [{"session_id": "session-1", "round_id": "round-5"}],
+            {"source_text": "如果我焦虑，请先帮我拆解问题，再给建议。"},
+        ),
+    )
+
+    assert repository.active_memories("user-1", "char-1") == []
+    assert "bad-food" not in backend.memories
 
 
 def test_l3_index_rejects_drink_memory_when_roleplay_source_lacks_drink_evidence() -> None:
@@ -2771,6 +3185,92 @@ def test_rebuild_skips_rounds_already_covered_by_active_l3_sources() -> None:
     )
 
     assert backend.add_count == append_add_count
+
+
+def test_async_rebuild_defers_uncovered_l3_replay_without_blocking() -> None:
+    repository = InMemoryMemoryRepository()
+    backend = BlockingAddBackend()
+    service = MemoryService(repository=repository, backend=backend, l3_write_mode="async")
+    request = make_append(
+        round_id="round-non-p0",
+        content="今天看了一部电影，感觉还不错。",
+    )
+    entry = repository.save_round(request)
+    repository.update_l1(entry)
+    repository.upsert_summary_from_journal("user-1", "char-1")
+
+    started_at = time.perf_counter()
+    response = service.rebuild(
+        RebuildMemoryRequest(
+            request_id="rebuild-async",
+            user_id="user-1",
+            character_id="char-1",
+            operation_id="op-rebuild-async",
+        )
+    )
+    elapsed = time.perf_counter() - started_at
+
+    assert elapsed < 0.5
+    assert response.status == "completed"
+    assert backend.started.wait(timeout=1)
+
+    extraction_task = repository.get_task("memory-extract:round-non-p0")
+    assert extraction_task is not None
+    assert extraction_task.status is TaskStatus.RUNNING
+
+    backend.release.set()
+    service.drain_l3_background_tasks(timeout=2)
+
+    extraction_task = repository.get_task("memory-extract:round-non-p0")
+    assert extraction_task is not None
+    assert extraction_task.status is TaskStatus.COMPLETED
+    assert repository.active_memories("user-1", "char-1") == []
+
+
+def test_l3_extract_task_request_id_is_bounded_for_long_rebuild_inputs() -> None:
+    repository = InMemoryMemoryRepository()
+    service = MemoryService(repository=repository, backend=FakeMemoryBackend())
+
+    long_request_id = "rebuild-" + ("suite-" * 30)
+    long_round_id = "round-" + ("x" * 80)
+
+    task, should_submit = service._ensure_l3_extract_task(
+        request_id=f"{long_request_id}:{long_round_id}",
+        user_id="user-1",
+        character_id="char-1",
+        round_id=long_round_id,
+    )
+
+    assert should_submit is True
+    assert task.task_id == f"memory-extract:{long_round_id}"
+    assert len(task.request_id) <= 128
+    assert task.request_id != f"{long_request_id}:{long_round_id}"
+
+
+def test_rebuild_does_not_resubmit_l3_extract_while_task_is_running() -> None:
+    repository = InMemoryMemoryRepository()
+    backend = BlockingAddBackend()
+    service = MemoryService(repository=repository, backend=backend, l3_write_mode="async")
+    service.append(make_append(round_id="round-non-p0", content="我喜欢蓝色的雨伞。"))
+    assert backend.started.wait(timeout=1)
+
+    response = service.rebuild(
+        RebuildMemoryRequest(
+            request_id="rebuild-while-extract-running",
+            user_id="user-1",
+            character_id="char-1",
+            operation_id="op-rebuild-while-extract-running",
+        )
+    )
+
+    assert response.status == "completed"
+    assert service.l3_background_status()["pending_write_tasks"] == 1
+    task = repository.get_task("memory-extract:round-non-p0")
+    assert task is not None
+    assert task.status is TaskStatus.RUNNING
+
+    backend.release.set()
+    service.drain_l3_background_tasks(timeout=2)
 
 
 def test_rebuild_is_idempotent_by_operation_id() -> None:

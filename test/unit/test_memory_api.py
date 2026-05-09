@@ -5,7 +5,24 @@ from memory.service import MemoryService
 
 class FailingProviderBackend(FakeMemoryBackend):
     def add(self, *args, **kwargs):  # type: ignore[no-untyped-def]
-        raise RuntimeError("mem0 http POST /memories failed: 502 provider_bad_request")
+        raise RuntimeError("mem0 library add failed: 502 provider_bad_request")
+
+
+class SaturatedMemoryService:
+    def append(self, _request):  # type: ignore[no-untyped-def]
+        raise RuntimeError("l3 background queue full: pending=1 max=1")
+
+
+class StatusMemoryService:
+    def l3_background_status(self) -> dict:
+        return {
+            "write_mode": "async",
+            "executor_workers": 2,
+            "max_pending_tasks": 64,
+            "pending_write_tasks": 7,
+            "cleanup_tasks": 1,
+            "available_capacity": 56,
+        }
 
 
 def append_payload() -> dict:
@@ -148,4 +165,29 @@ def test_mem0_provider_failure_returns_502_not_unhandled_500(client, monkeypatch
     response = client.post("/memory/append", json=append_payload())
 
     assert response.status_code == 502
-    assert "mem0 http POST /memories failed" in response.json()["detail"]
+    assert "mem0 library add failed" in response.json()["detail"]
+
+
+def test_l3_background_queue_saturation_returns_503(client, monkeypatch) -> None:
+    monkeypatch.setattr("api.dependencies._memory_service", SaturatedMemoryService())
+
+    response = client.post("/memory/append", json=append_payload())
+
+    assert response.status_code == 503
+    assert "l3 background queue full" in response.json()["detail"]
+
+
+def test_l3_background_status_route_returns_queue_state(client, monkeypatch) -> None:
+    monkeypatch.setattr("api.dependencies._memory_service", StatusMemoryService())
+
+    response = client.get("/memory/l3/background-status")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "write_mode": "async",
+        "executor_workers": 2,
+        "max_pending_tasks": 64,
+        "pending_write_tasks": 7,
+        "cleanup_tasks": 1,
+        "available_capacity": 56,
+    }

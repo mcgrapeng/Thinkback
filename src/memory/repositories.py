@@ -197,6 +197,7 @@ class MemoryRepository(Protocol):
         self,
         memory_id: str,
         *,
+        backend_memory_id: str | None = None,
         source_refs: list[dict[str, str]],
         memory_text: str,
         source_type: str = SourceType.CHAT_ROUND.value,
@@ -426,6 +427,7 @@ class InMemoryMemoryRepository(L1CacheMixin):
         self,
         memory_id: str,
         *,
+        backend_memory_id: str | None = None,
         source_refs: list[dict[str, str]],
         memory_text: str,
         source_type: str = SourceType.CHAT_ROUND.value,
@@ -440,6 +442,8 @@ class InMemoryMemoryRepository(L1CacheMixin):
         memory = self.memories.get(memory_id)
         if memory is None:
             return None
+        if backend_memory_id is not None:
+            memory.backend_memory_id = backend_memory_id
         memory.source_refs = source_refs
         memory.memory_text = memory_text
         memory.source_type = source_type
@@ -873,6 +877,7 @@ class SqlAlchemyMemoryRepository(L1CacheMixin):
         self,
         memory_id: str,
         *,
+        backend_memory_id: str | None = None,
         source_refs: list[dict[str, str]],
         memory_text: str,
         source_type: str = SourceType.CHAT_ROUND.value,
@@ -887,6 +892,7 @@ class SqlAlchemyMemoryRepository(L1CacheMixin):
         return self._run(
             self._update_memory_index(
                 memory_id,
+                backend_memory_id=backend_memory_id,
                 source_refs=source_refs,
                 memory_text=memory_text,
                 source_type=source_type,
@@ -904,6 +910,7 @@ class SqlAlchemyMemoryRepository(L1CacheMixin):
         self,
         memory_id: str,
         *,
+        backend_memory_id: str | None = None,
         source_refs: list[dict[str, str]],
         memory_text: str,
         source_type: str = SourceType.CHAT_ROUND.value,
@@ -919,6 +926,8 @@ class SqlAlchemyMemoryRepository(L1CacheMixin):
             record = await session.get(MemoryRecord, memory_id)
             if record is None:
                 return None
+            if backend_memory_id is not None:
+                record.backend_memory_id = backend_memory_id
             record.source_refs = source_refs
             record.memory_text = memory_text
             record.source_type = source_type

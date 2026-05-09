@@ -1,8 +1,8 @@
 # Thinkback
 
 Thinkback is the memory service for the AI virtual social stack. It owns the
-three-layer memory business workflow and calls an independently deployed Mem0
-REST service for L3 long-term memory.
+three-layer memory business workflow and uses Mem0 Library for L3 long-term
+memory.
 
 ## Scope
 
@@ -14,7 +14,7 @@ Included:
 - Redis configuration
 - Celery worker bootstrap
 - P0 memory workflows aligned with the three-layer memory architecture
-- Remote Mem0 REST API long-term memory adapter
+- Mem0 Library long-term memory adapter
 - Docker Compose local stack
 - Kubernetes API and worker manifests
 
@@ -45,23 +45,26 @@ Start local dependencies:
 make docker-up
 ```
 
-Thinkback talks to an independently deployed Mem0 REST service:
+Thinkback embeds Mem0 Library. Mem0 uses OpenAI for extraction/embeddings and
+an independently deployed Qdrant for L3 vector storage:
 
 ```bash
-MEM0_API_URL=https://mem0.example.internal
-MEM0_API_KEY=<secret>
-MEM0_HTTP_TIMEOUT_SECONDS=120
-```
-
-Thinkback, Mem0, and Qdrant are configured as three independent services. Both
-Thinkback and Mem0 should point to the same Qdrant endpoint, but only Mem0 owns
-L3 vector writes and semantic search. Thinkback uses `QDRANT_URL` and
-`QDRANT_API_KEY` for readiness diagnostics only:
-
-```bash
+OPENAI_API_KEY=<secret>
 QDRANT_URL=https://qdrant.example.internal
 QDRANT_API_KEY=<secret>
+MEMORY_QDRANT_COLLECTION=memories_qwen_1024
+MEMORY_LLM_MODEL=qwen3.5-flash
+MEMORY_EMBEDDING_MODEL=text-embedding-v4
+MEM0_HISTORY_DB_PATH=.mem0/history.db
+MEMORY_L3_WRITE_MODE=async
+MEMORY_L3_EXECUTOR_WORKERS=16
+MEMORY_L3_MAX_PENDING_TASKS=256
+MEMORY_L3_QUEUE_WAIT_SECONDS=5
+READINESS_TIMEOUT_SECONDS=30
 ```
+
+Thinkback and Qdrant can run on different hosts. The service must not bypass
+Mem0 Library and write Qdrant directly.
 
 Run a worker:
 
@@ -82,17 +85,9 @@ make docker-up
 PYTHONPATH=src .venv/bin/python script/real_mem0_pressure.py
 ```
 
-The real pressure script requires `MEM0_API_URL` and `MEM0_API_KEY`. Mem0 owns
-LLM, embedding, L3 vector writes, semantic search, update, and delete. Thinkback
-only probes Qdrant availability; it does not bypass Mem0 for L3 operations.
-
-For a local isolated Mem0 REST stack, use the local URL instead:
-
-```bash
-MEM0_API_URL=http://localhost:8888
-MEM0_API_KEY=<local-key>
-MEM0_HTTP_TIMEOUT_SECONDS=120
-```
+The real pressure script requires `OPENAI_API_KEY` and `QDRANT_URL`. Mem0
+Library owns LLM extraction, embedding, L3 vector writes, semantic search,
+update, and delete.
 
 ## Health
 

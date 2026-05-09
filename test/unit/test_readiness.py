@@ -18,7 +18,7 @@ async def test_collect_readiness_marks_timed_out_dependency_not_ready(monkeypatc
     monkeypatch.setattr(readiness, "check_database", slow_database_check)
     monkeypatch.setattr(readiness, "check_redis", ready_check)
     monkeypatch.setattr(readiness, "check_qdrant", ready_check)
-    monkeypatch.setattr(readiness, "check_mem0_api", ready_check)
+    monkeypatch.setattr(readiness, "check_mem0_library", ready_check)
 
     payload = await readiness.collect_readiness(timeout_seconds=0.01)
 
@@ -33,21 +33,50 @@ async def test_collect_readiness_marks_timed_out_dependency_not_ready(monkeypatc
 
 
 @pytest.mark.asyncio
-async def test_collect_readiness_checks_mem0_api_and_shared_qdrant(monkeypatch) -> None:
+async def test_collect_readiness_checks_mem0_library_and_shared_qdrant(monkeypatch) -> None:
     async def ready_check() -> dict[str, str]:
         return {"status": "ready", "detail": "ok"}
 
-    monkeypatch.setattr(readiness, "settings", Settings(mem0_api_url="https://mem0.example.internal"))
+    monkeypatch.setattr(
+        readiness,
+        "settings",
+        Settings(
+            openai_api_key="openai-secret",
+            qdrant_url="https://qdrant.example.internal",
+        ),
+    )
     monkeypatch.setattr(readiness, "check_database", ready_check)
     monkeypatch.setattr(readiness, "check_redis", ready_check)
     monkeypatch.setattr(readiness, "check_qdrant", ready_check)
-    monkeypatch.setattr(readiness, "check_mem0_api", ready_check)
+    monkeypatch.setattr(readiness, "check_mem0_library", ready_check)
 
     payload = await readiness.collect_readiness()
 
     assert payload["status"] == "ready"
     assert payload["dependencies"]["qdrant"] == {"status": "ready", "detail": "ok"}
     assert payload["dependencies"]["mem0"] == {"status": "ready", "detail": "ok"}
+
+
+@pytest.mark.asyncio
+async def test_collect_readiness_uses_configured_timeout_by_default(monkeypatch) -> None:
+    async def slow_but_ready_check() -> dict[str, str]:
+        await asyncio.sleep(0.02)
+        return {"status": "ready", "detail": "ok"}
+
+    monkeypatch.setattr(
+        readiness,
+        "settings",
+        Settings(readiness_timeout_seconds=0.001),
+    )
+    monkeypatch.setattr(readiness, "check_database", slow_but_ready_check)
+    monkeypatch.setattr(readiness, "check_redis", slow_but_ready_check)
+    monkeypatch.setattr(readiness, "check_qdrant", slow_but_ready_check)
+    monkeypatch.setattr(readiness, "check_mem0_library", slow_but_ready_check)
+
+    payload = await readiness.collect_readiness()
+
+    assert payload["status"] == "not_ready"
+    assert payload["dependencies"]["mem0"]["detail"] == "timed out after 0.001s"
 
 
 @pytest.mark.asyncio

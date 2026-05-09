@@ -42,12 +42,23 @@ _PHASE_ARGS = {
         "recall_requests": 100,
         "append_concurrency": 10,
     },
+    "soak": {
+        "recall_concurrency": 30,
+        "recall_requests": 100,
+        "append_concurrency": 10,
+    },
 }
 
 _DURATION_PHASE_TARGET_SECONDS = {
     "baseline": 10 * 60,
     "stress": 15 * 60,
     "soak": 6 * 60 * 60,
+}
+
+_DEFAULT_DURATION_PHASE_INTERVAL_SECONDS = {
+    "baseline": 0,
+    "stress": 0,
+    "soak": 300,
 }
 
 
@@ -69,8 +80,13 @@ def build_preprod_report(
         for phase in required_phases
         if phase in phase_results and not bool(phase_results[phase]["passed"])
     ]
+    failed_production_phases = [
+        phase
+        for phase in required_phases
+        if phase in phase_results and not bool(phase_results[phase].get("production_phase_passed", True))
+    ]
     requested_phases_passed = not failed_phases
-    production_precheck_passed = requested_phases_passed and not missing_phases
+    production_precheck_passed = requested_phases_passed and not missing_phases and not failed_production_phases
     return {
         "run_id": run_id,
         "started_at": started_at,
@@ -79,10 +95,28 @@ def build_preprod_report(
         "executed_phases": sorted(phase_reports),
         "missing_phases": missing_phases,
         "failed_phases": failed_phases,
+        "failed_production_phases": failed_production_phases,
         "requested_phases_passed": requested_phases_passed,
         "production_precheck_passed": production_precheck_passed,
         "phase_results": phase_results,
     }
+
+
+def build_preprod_report_from_phase_reports(
+    *,
+    run_id: str,
+    started_at: str,
+    ended_at: str,
+    phase_reports: dict[str, list[dict[str, Any]]],
+    required_phases: list[str],
+) -> dict[str, Any]:
+    return build_preprod_report(
+        run_id=run_id,
+        started_at=started_at,
+        ended_at=ended_at,
+        phase_reports=phase_reports,
+        required_phases=required_phases,
+    )
 
 
 def render_preprod_report_markdown(report: dict[str, Any]) -> str:
@@ -90,6 +124,7 @@ def render_preprod_report_markdown(report: dict[str, Any]) -> str:
     requested = "通过" if report.get("requested_phases_passed") else "未通过"
     missing = ", ".join(report.get("missing_phases", [])) or "-"
     failed = ", ".join(report.get("failed_phases", [])) or "-"
+    failed_production = ", ".join(report.get("failed_production_phases", [])) or "-"
     lines = [
         "# Thinkback P0 生产前压测汇总报告",
         "",
@@ -103,6 +138,7 @@ def render_preprod_report_markdown(report: dict[str, Any]) -> str:
         f"| 已执行阶段 | {', '.join(report.get('executed_phases', [])) or '-'} |",
         f"| 缺失阶段 | {missing} |",
         f"| 失败阶段 | {failed} |",
+        f"| 未满足正式生产阶段 | {failed_production} |",
         f"| 已执行阶段门禁 | {requested} |",
         f"| 生产前完整压测 | {conclusion} |",
         "",
@@ -363,11 +399,85 @@ def _load_latest_report(report_dir: Path, before: set[Path]) -> dict[str, Any]:
     return json.loads(created[-1].read_text(encoding="utf-8"))
 
 
+def _run_duration_child_command(
+    *,
+    phase: str,
+    iteration: int,
+    command: list[str],
+    report_dir: Path,
+    before: set[Path],
+    process_runner: Any = subprocess.run,
+) -> dict[str, Any]:
+    log_dir = report_dir / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_path = log_dir / f"p0-duration-{phase}-iteration-{iteration}.log"
+    try:
+        completed = process_runner(command, check=True, capture_output=True, text=True)
+    except subprocess.CalledProcessError as exc:
+        stdout = exc.stdout or ""
+        stderr = exc.stderr or ""
+        log_path.write_text(
+            _render_duration_child_log(command=command, stdout=stdout, stderr=stderr),
+            encoding="utf-8",
+        )
+        return _failed_duration_child_report(
+            phase=phase,
+            iteration=iteration,
+            command=command,
+            error=f"{exc}; log={log_path}",
+        )
+    stdout = getattr(completed, "stdout", "") or ""
+    stderr = getattr(completed, "stderr", "") or ""
+    log_path.write_text(
+        _render_duration_child_log(command=command, stdout=stdout, stderr=stderr),
+        encoding="utf-8",
+    )
+    report = _load_latest_report(report_dir, before)
+    report["duration_child_log_path"] = str(log_path)
+    return report
+
+
+def _render_duration_child_log(*, command: list[str], stdout: str, stderr: str) -> str:
+    return "\n".join(
+        [
+            f"COMMAND: {' '.join(command)}",
+            "",
+            "STDOUT:",
+            stdout,
+            "",
+            "STDERR:",
+            stderr,
+            "",
+        ]
+    )
+
+
+def _render_cli_summary(report: dict[str, Any]) -> str:
+    report_id = report.get("run_id", report.get("suite_id", "-"))
+    parts = [
+        f"run_id={report_id}",
+        f"phase={report.get('phase', '-')}",
+        f"passed={report.get('passed')}",
+    ]
+    if "duration_gate_passed" in report:
+        parts.append(f"duration_gate_passed={report.get('duration_gate_passed')}")
+        parts.append(f"actual_duration_seconds={report.get('actual_duration_seconds')}")
+        parts.append(f"report_count={report.get('report_count', 0)}")
+    if "production_precheck_passed" in report:
+        parts.append(f"production_precheck_passed={report.get('production_precheck_passed')}")
+        parts.append(f"failed_phases={','.join(report.get('failed_phases', [])) or '-'}")
+    if "recovery_gate_passed" in report:
+        parts.append(f"recovery_gate_passed={report.get('recovery_gate_passed')}")
+        parts.append(f"failed_legs={','.join(report.get('failed_legs', [])) or '-'}")
+    return "P0 report summary: " + " ".join(parts)
+
+
 def _run_duration_phase(
     *,
     phase: str,
     target_duration_seconds: int,
     max_iterations: int,
+    iteration_interval_seconds: int | None,
     report_dir: Path,
     python_executable: str,
     short_pressure_script: str,
@@ -388,8 +498,30 @@ def _run_duration_phase(
             script_path=short_pressure_script,
         )
         print(f"running P0 duration phase {phase} iteration {iteration}: {' '.join(command)}")
-        subprocess.run(command, check=True)
-        child_reports.append(_load_latest_report(report_dir, before))
+        child_report = _run_duration_child_command(
+            phase=phase,
+            iteration=iteration,
+            command=command,
+            report_dir=report_dir,
+            before=before,
+        )
+        child_reports.append(child_report)
+        print(
+            "completed P0 duration phase "
+            f"{phase} iteration {iteration}: "
+            f"suite_id={child_report.get('suite_id', child_report.get('run_id', '-'))} "
+            f"passed={child_report.get('passed')} "
+            f"log={child_report.get('duration_child_log_path', '-')}"
+        )
+        if not bool(child_report.get("passed")):
+            break
+        interval_seconds = _soak_iteration_interval(
+            phase,
+            override_seconds=iteration_interval_seconds,
+        )
+        remaining_seconds = target_duration_seconds - (time.monotonic() - started_monotonic)
+        if interval_seconds > 0 and remaining_seconds > 0:
+            time.sleep(min(interval_seconds, remaining_seconds))
     actual_duration_seconds = time.monotonic() - started_monotonic
     return build_duration_phase_report(
         run_id=f"p0-duration-{phase}-{datetime.now(UTC).strftime('%Y%m%dT%H%M%S')}-{uuid4().hex[:8]}",
@@ -400,6 +532,36 @@ def _run_duration_phase(
         actual_duration_seconds=actual_duration_seconds,
         child_reports=child_reports,
     )
+
+
+def _soak_iteration_interval(phase: str, override_seconds: int | None = None) -> int:
+    if override_seconds is not None:
+        return max(0, override_seconds)
+    return _DEFAULT_DURATION_PHASE_INTERVAL_SECONDS.get(phase, 0)
+
+
+def _failed_duration_child_report(
+    *,
+    phase: str,
+    iteration: int,
+    command: list[str],
+    error: str,
+) -> dict[str, Any]:
+    return {
+        "suite_id": f"p0-{phase}-iteration-{iteration}-failed",
+        "passed": False,
+        "failed_sections": ["duration_child_command"],
+        "duration_child_failure": {
+            "phase": phase,
+            "iteration": iteration,
+            "command": command,
+            "error": error,
+        },
+        "quality": {"passed": False, "failed_cases": [], "latency_ms": {"recall": {}}},
+        "concurrent_recall": {"passed": False, "failed_cases": [], "latency_ms": {"recall": {}}},
+        "append_probe": {"passed": False, "failed_cases": [error], "latency_ms": {"append": {}}},
+        "post_delete": {"passed": False, "failed_cases": [], "latency_ms": {"recall": {}}},
+    }
 
 
 def _run_spike_phase(
@@ -447,7 +609,18 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--duration-phase", choices=["baseline", "stress", "soak"])
     parser.add_argument("--target-duration-seconds", type=int)
     parser.add_argument("--max-iterations", type=int, default=0)
+    parser.add_argument(
+        "--iteration-interval-seconds",
+        type=int,
+        help="Delay between successful duration child suites. Defaults to 300s for soak and 0 for other phases.",
+    )
     parser.add_argument("--full-spike", action="store_true")
+    parser.add_argument(
+        "--phase-report",
+        action="append",
+        default=[],
+        help="Existing phase report in phase=path format. Repeat for multiple phases.",
+    )
     return parser.parse_args()
 
 
@@ -462,7 +635,7 @@ def main() -> None:
         json_path, md_path = write_spike_phase_report(report, output_dir=Path(args.output_dir))
         print(f"spike phase report json: {json_path}")
         print(f"spike phase report markdown: {md_path}")
-        print(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True))
+        print(_render_cli_summary(report))
         if not report["passed"]:
             raise RuntimeError(f"P0 full spike failed: {report['failed_legs']}")
         return
@@ -476,6 +649,7 @@ def main() -> None:
             phase=args.duration_phase,
             target_duration_seconds=target_duration_seconds,
             max_iterations=args.max_iterations,
+            iteration_interval_seconds=args.iteration_interval_seconds,
             report_dir=Path(args.report_dir),
             python_executable=args.python_executable,
             short_pressure_script=args.short_pressure_script,
@@ -483,12 +657,28 @@ def main() -> None:
         json_path, md_path = write_duration_phase_report(report, output_dir=Path(args.output_dir))
         print(f"duration phase report json: {json_path}")
         print(f"duration phase report markdown: {md_path}")
-        print(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True))
+        print(_render_cli_summary(report))
         if not report["passed"]:
             raise RuntimeError(f"P0 duration phase failed: {report['failed_child_reports']}")
         return
+    if args.phase_report:
+        phase_reports = _load_phase_report_args(args.phase_report)
+        report = build_preprod_report_from_phase_reports(
+            run_id=f"p0-preprod-summary-{datetime.now(UTC).strftime('%Y%m%dT%H%M%S')}-{uuid4().hex[:8]}",
+            started_at=datetime.now(UTC).isoformat(),
+            ended_at=datetime.now(UTC).isoformat(),
+            phase_reports=phase_reports,
+            required_phases=P0_PREPROD_REQUIRED_PHASES,
+        )
+        json_path, md_path = write_preprod_report(report, output_dir=Path(args.output_dir))
+        print(f"preprod report json: {json_path}")
+        print(f"preprod report markdown: {md_path}")
+        print(_render_cli_summary(report))
+        if not report["requested_phases_passed"]:
+            raise RuntimeError(f"P0 preprod requested phases failed: {report['failed_phases']}")
+        return
     if not args.phase:
-        raise RuntimeError("--phase is required unless --duration-phase is set")
+        raise RuntimeError("--phase or --phase-report is required unless --duration-phase is set")
 
     started_at = datetime.now(UTC).isoformat()
     run_id = f"p0-preprod-{datetime.now(UTC).strftime('%Y%m%dT%H%M%S')}-{uuid4().hex[:8]}"
@@ -515,14 +705,14 @@ def main() -> None:
     json_path, md_path = write_preprod_report(report, output_dir=Path(args.output_dir))
     print(f"preprod report json: {json_path}")
     print(f"preprod report markdown: {md_path}")
-    print(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True))
+    print(_render_cli_summary(report))
     if not report["requested_phases_passed"]:
         raise RuntimeError(f"P0 preprod requested phases failed: {report['failed_phases']}")
 
 
 def _summarize_phase(phase: str, reports: list[dict[str, Any]]) -> dict[str, Any]:
     failed_child_reports = [
-        str(report.get("suite_id", "-"))
+        _report_id(report)
         for report in reports
         if not bool(report.get("passed"))
     ]
@@ -560,20 +750,56 @@ def _summarize_phase(phase: str, reports: list[dict[str, Any]]) -> dict[str, Any
         for report in spike_reports
         if not bool(report.get("recovery_gate_passed"))
     ]
-    passed = not failed_child_reports and duration_gate_passed and recovery_gate_passed
+    representative_reports = [
+        report
+        for report in reports
+        if "duration_gate_passed" not in report and "recovery_gate_passed" not in report
+    ]
+    representative_probe_passed = bool(representative_reports) and all(
+        bool(report.get("passed"))
+        for report in representative_reports
+    )
+    passed = (
+        not failed_child_reports
+        and not failed_duration_reports
+        and not failed_spike_reports
+    )
+    production_phase_passed = not failed_child_reports
+    if duration_required:
+        production_phase_passed = production_phase_passed and duration_gate_passed
+    if spike_required:
+        production_phase_passed = production_phase_passed and recovery_gate_passed
     return {
         "phase": phase,
         "passed": passed,
+        "production_phase_passed": production_phase_passed,
         "report_count": len(reports),
         "failed_child_reports": failed_child_reports,
         "duration_gate_passed": duration_gate_passed,
         "failed_duration_reports": failed_duration_reports,
         "recovery_gate_passed": recovery_gate_passed,
         "failed_spike_reports": failed_spike_reports,
-        "suite_ids": [str(report.get("suite_id", report.get("run_id", "-"))) for report in reports],
+        "representative_probe_passed": representative_probe_passed,
+        "suite_ids": [_report_id(report) for report in reports],
         "worst_recall_p95_ms": _worst_recall_latency(reports, "p95"),
         "worst_recall_p99_ms": _worst_recall_latency(reports, "p99"),
     }
+
+
+def _load_phase_report_args(phase_report_args: list[str]) -> dict[str, list[dict[str, Any]]]:
+    phase_reports: dict[str, list[dict[str, Any]]] = {}
+    for item in phase_report_args:
+        if "=" not in item:
+            raise ValueError("--phase-report must use phase=path format")
+        phase, raw_path = item.split("=", 1)
+        if phase not in P0_PREPROD_REQUIRED_PHASES:
+            raise ValueError(f"unsupported P0 preprod phase report: {phase}")
+        path = Path(raw_path)
+        report = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(report, dict):
+            raise ValueError(f"phase report must be a JSON object: {path}")
+        phase_reports.setdefault(phase, []).append(dict(report))
+    return phase_reports
 
 
 def _worst_recall_latency(reports: list[dict[str, Any]], percentile: str) -> int:
@@ -589,6 +815,10 @@ def _recall_latency(report: dict[str, Any], percentile: str) -> int:
     if legacy_value is not None:
         return int(legacy_value)
     return int(report.get(f"worst_recall_{percentile}_ms", 0))
+
+
+def _report_id(report: dict[str, Any]) -> str:
+    return str(report.get("suite_id", report.get("run_id", "-")))
 
 
 if __name__ == "__main__":

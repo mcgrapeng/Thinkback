@@ -44,12 +44,23 @@ def test_env_example_declares_runtime_settings() -> None:
         "REDIS_HOST=",
         "QDRANT_URL=",
         "CELERY_BROKER_URL=",
-        "MEM0_API_URL=",
-        "MEM0_API_KEY=",
-        "MEM0_HTTP_TIMEOUT_SECONDS=",
+        "OPENAI_API_KEY=",
+        "MEMORY_OPENAI_BASE_URL=",
+        "MEMORY_QDRANT_COLLECTION=",
+        "MEMORY_EMBEDDING_DIMS=",
+        "MEMORY_LLM_MODEL=",
+        "MEMORY_EMBEDDING_MODEL=",
+        "MEM0_HISTORY_DB_PATH=",
+        "READINESS_TIMEOUT_SECONDS=",
+        "MEMORY_L3_EXECUTOR_WORKERS=",
+        "MEMORY_L3_MAX_PENDING_TASKS=",
+        "MEMORY_L3_QUEUE_WAIT_SECONDS=",
     ]:
         assert variable in env_example
     assert "QDRANT_API_KEY=" in env_example
+    assert "MEM0_API_URL=" not in env_example
+    assert "MEM0_API_KEY=" not in env_example
+    assert "MEM0_HTTP_TIMEOUT_SECONDS=" not in env_example
     assert "MEMORY_LLM_API_KEY=" not in env_example
     assert "QDRANT_URL=https://qdrant.example.internal" in env_example
 
@@ -75,9 +86,17 @@ def test_k8s_config_and_secret_examples_include_runtime_settings() -> None:
     assert "QDRANT_URL" in configmap
     assert "QDRANT_API_KEY" in secret
     assert "MEM0_BACKEND_MODE" not in configmap
-    assert "MEM0_API_URL" in configmap
-    assert "MEM0_HTTP_TIMEOUT_SECONDS" in configmap
+    assert "MEM0_API_URL" not in configmap
+    assert "MEM0_HTTP_TIMEOUT_SECONDS" not in configmap
+    assert "OPENAI_API_KEY" in secret
+    assert "MEMORY_OPENAI_BASE_URL" in configmap
+    assert "MEMORY_QDRANT_COLLECTION" in configmap
+    assert "MEMORY_LLM_MODEL" in configmap
+    assert "MEMORY_L3_EXECUTOR_WORKERS" in configmap
+    assert "MEMORY_L3_MAX_PENDING_TASKS" in configmap
+    assert "MEMORY_L3_QUEUE_WAIT_SECONDS" in configmap
+    assert "READINESS_TIMEOUT_SECONDS" in configmap
     assert "CELERY_BROKER_URL" in configmap
     assert "POSTGRES_PASSWORD" in secret
-    assert "MEM0_API_KEY" in secret
+    assert "MEM0_API_KEY" not in secret
     assert "MEMORY_LLM_API_KEY" not in secret

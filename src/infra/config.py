@@ -39,9 +39,25 @@ class Settings(BaseSettings):
     memory_backend: Literal["redis"] = "redis"
     qdrant_url: str = "https://qdrant.example.internal"
     qdrant_api_key: str = Field(default="", description="Shared Qdrant API key")
-    mem0_api_url: str = "https://mem0.example.internal"
-    mem0_api_key: str = Field(default="", description="Mem0 REST API key")
-    mem0_http_timeout_seconds: float = 120.0
+    openai_api_key: str = Field(default="", description="OpenAI API key for Mem0 Library")
+    memory_openai_base_url: str = ""
+    memory_qdrant_collection: str = "memories_qwen_1024"
+    memory_embedding_dims: int = 1024
+    memory_llm_model: str = "qwen3.5-flash"
+    memory_embedding_model: str = "text-embedding-v4"
+    mem0_history_db_path: str = ".mem0/history.db"
+    memory_l3_write_mode: Literal["sync", "async"] = "async"
+    memory_l3_executor_workers: int = 16
+    memory_l3_max_pending_tasks: int = 256
+    memory_l3_queue_wait_seconds: float = 5.0
+    readiness_timeout_seconds: float = 30.0
+
+    @field_validator("memory_l3_executor_workers")
+    @classmethod
+    def validate_memory_l3_executor_workers(cls, value: int) -> int:
+        if value < 1:
+            raise ValueError("memory_l3_executor_workers must be >= 1")
+        return value
 
     celery_broker_url: str = "redis://localhost:6379/0"
     celery_result_backend: str = "redis://localhost:6379/1"

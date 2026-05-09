@@ -1,200 +1,277 @@
-# AI 虚拟社交记忆服务 P0 压测指标
+# AI虚拟社交记忆服务 P0 压测评测方案
 
-本文档定义 Thinkback 记忆服务 P0 阶段的压测目标、指标口径、场景矩阵、执行方法、报告格式和通过门禁。它只约束首版主链路，不把 P0 扩展成 P1/P2 能力。
+本文档说明 Thinkback 记忆服务 P0 阶段怎么压测、看哪些指标、哪些失败会拦截，以及什么情况下可以说“通过”。
 
-P0 压测采用主流工程实践，而不是照搬某个通用行业阈值。Google SRE 提供的是 SLI/SLO 方法：少量关键指标、明确测量条件、关注延迟、流量、错误和饱和度；k6 提供阈值机制和负载类型参考，Locust 提供并发用户建模方式。记忆服务还必须额外验证语义正确性。本文档里的具体阈值是 Thinkback 当前 P0 的产品与工程门禁，不宣称为行业通用标准。
+它不是行业通用 SLO，也不是生产容量承诺。它是当前 P0 阶段的工程评测方案，重点拦截三类风险：记错、串记忆、删不掉。
 
-参考资料：
+建议阅读顺序：
 
-- Google SRE《Service Level Objectives》：https://sre.google/sre-book/service-level-objectives/
-- Google SRE《Monitoring Distributed Systems》：https://sre.google/sre-book/monitoring-distributed-systems/
-- Grafana k6 thresholds：https://grafana.com/docs/k6/latest/using-k6/thresholds/
-- Grafana k6 load test types：https://grafana.com/docs/k6/latest/testing-guides/test-types/
-- Locust documentation：https://docs.locust.io/
+1. 想先看结论：读 1、2、4。
+2. 想理解指标：读 1、5、6、7。
+3. 想执行压测：读 9、10、11。
+4. 想对齐报告字段：读 [P0 压测报告字段规范](AI虚拟社交记忆服务P0压测报告字段.md)。
 
-指标状态说明：
+## 0. 读前术语
 
-| 状态 | 含义 |
+| 术语 | 在本文里的意思 |
 | --- | --- |
-| 自动门禁 | 当前脚本已有独立字段并参与失败判定。 |
-| 用例门禁 | 当前脚本通过固定 case 或断言判定失败，但独立指标字段还没有完全拆出。 |
-| 分段报告 | 当前脚本通过 quality、concurrent_recall、append_probe、post_delete 等分段给出 pass/fail 和请求统计，独立指标字段待补齐。 |
-| 自动报告 | 当前脚本已输出结果，但是否作为硬门禁取决于测试级别。 |
-| 半自动 | 需要结合报告、日志或数据库记录判读。 |
-| 待补齐 | P0 应关注，但当前脚本尚未完整自动化。 |
+| append / recall | append 是写入记忆；recall 是根据问题召回相关记忆。 |
+| L1 / L2 / L3 | L1 是当前会话缓存；L2 是阶段摘要；L3 是长期记忆。 |
+| active / dirty | active 表示当前有效；dirty 表示摘要受删除或修正影响，不能直接拿来回答。 |
+| source_refs | 一条长期记忆来自哪些会话和轮次。删除、重建时要靠它避免旧事实复活。 |
+| dev gate / release gate | dev gate 是日常开发门禁；release gate 是发布候选前的更完整检查。 |
+| top10 / top_k | recall 最多返回的前 N 条 L3 记忆。本文 P0 质量指标默认看前 10 条。 |
+| p95 / p99 | 尾延迟。p95 表示 95% 请求不超过该耗时；p99 表示 99% 请求不超过该耗时。 |
 
-## 1. P0 边界
+## 1. 这些指标是否主流
 
-P0 压测要回答六个问题：
+| 类别 | 判断 | 说明 |
+| --- | --- | --- |
+| 延迟、错误、吞吐、饱和 | 主流，不过度 | SRE 和压测常见指标。 |
+| recall、precision、top1、MRR | 主流，不过度 | 信息检索和排序常见口径。 |
+| `item_precision_at_10` | 偏细，先观察 | 防止 top10 混入大量无关记忆。 |
+| 冲突、删除、重复 active、dirty/source_refs | 域内必要 | 用来拦截记错、串记忆、删不掉。 |
+| smoke、baseline、stress、spike、soak | 主流，不过度 | 压测分型常规做法。 |
+| `10/50/100` 并发数字 | 工程探针 | 不是行业标准，也不是线上容量承诺。 |
 
-| 问题 | 判断标准 |
-| --- | --- |
-| 写入是否可靠 | 完整轮次能写入，重复请求不产生重复记忆，Mem0 瞬时失败可观测。 |
-| 召回是否准确 | 核心槽位能召回当前事实，不召回旧事实和无关事实。 |
-| 隔离是否严格 | user、character、现实事实、剧情设定之间不串记忆。 |
-| 删除和重建是否可靠 | 删除后不再召回，重建后不复活已删除记忆。 |
-| 负载下是否稳定 | 小规模并发下不破坏召回、隔离、幂等和删除语义。 |
-| 性能是否可接受 | append、recall、delete、rebuild 的延迟有 p50/p95/p99 和失败门禁。 |
+结论很直接：
 
-P0 压测不验证以下能力：高质量 LLM 阶段摘要、完整安全分类器、线上真实大样本分布、长期语义抑制、写入栅栏和衰减治理。
+- 指标大类是业界主流的：服务稳定性看延迟、错误、吞吐、饱和；检索质量看 recall、precision、top1、MRR。
+- 记忆服务额外看删除残留、冲突污染、跨角色泄漏，不是行业通用指标，但不是过度设计；它们正好对应“记错、串记忆、删不掉”。
+- 真正作为 P0 硬门禁的只有核心质量、语义失败和 recall 延迟；资源、吞吐、外部依赖耗时大多是生产前观察项。
+- 当前没有发现“指标过度严格到不合理”的问题。
+- 更大的风险是反过来：如果不跑 soak 和资源观测，短压测很容易把长期稳定性误判成已经达标。
 
-P0 的核心判断不是“跑了多少请求”，而是“在真实 Mem0/OpenAI/Qdrant/PostgreSQL 链路下，核心记忆语义是否稳定正确”。压测必须同时看正确性和性能，不能只看 HTTP 200。
+当前仍需补齐的不是更多语义指标，而是三类证据：
 
-## 2. P0 门禁分层
+| 缺口 | 为什么重要 | 当前状态 |
+| --- | --- | --- |
+| 6 小时正式 soak | 证明长期稳定、队列不持续积压、外部依赖不周期性失败。 | 10 分钟探针通过；6 小时正式门禁未通过。 |
+| 资源饱和观测 | 证明 CPU、内存、连接池、队列和 Qdrant 没有逼近上限。 | L3 队列已有接口；其他资源观测待固化。 |
+| 真实流量校准 | 证明 10/50/100 并发和读写比例贴近线上。 | 当前仍是 P0 工程探针，不能当线上容量承诺。 |
 
-P0 结论必须分层表达，避免把一次短压测通过写成生产可上线。
+## 2. 当前结论
 
-| 层级 | 用途 | 最小测试 | 通过条件 |
+P0 dev gate 只拦核心风险。生产前完整压测还要额外证明容量、稳定性、故障韧性和样本代表性。
+
+截至 2026-05-09 23:00 CST，当前证据快照如下：
+
+| 结论项 | 当前判断 | 证据 |
+| --- | --- | --- |
+| P0 主链路短压测 | 已通过 | 已核对 30 并发短探针样本 `p0-short-20260509T145319-c9b8eeeb` 通过，`concurrent_recall recall p95=41ms`。 |
+| Release 候选质量 | 主要证据已满足，仍建议扩大样本 | baseline、stress、spike、故障注入、代表性样本回放均已有通过报告。 |
+| 生产前完整压测 | 未通过 | 生产前汇总失败在 `soak`；10 分钟探针通过，但未满足 6 小时最低门禁。 |
+| 线上长期稳定 | 不能声明 | 还需要灰度、真实样本、监控告警和持续 SLO。 |
+
+主要证据：
+
+- 已核对最终报告：[p0-final-20260509](reports/p0-final-20260509.md)
+- 已核对生产前汇总：[p0-preprod-summary-20260509T145827-67b59566](reports/p0-preprod-summary-20260509T145827-67b59566.md)
+- 10 分钟 baseline：[p0-duration-baseline-20260509T134848-d3fab670](reports/p0-duration-baseline-20260509T134848-d3fab670.md)
+- 15 分钟 stress：[p0-duration-stress-20260509T140724-f66de6e7](reports/p0-duration-stress-20260509T140724-f66de6e7.md)
+- 100 并发 spike：[p0-spike-full-20260509T141020-d0c53d5c](reports/p0-spike-full-20260509T141020-d0c53d5c.md)
+- 故障注入：[p0-fault-injection-20260509T143431-cd67cd5d](reports/p0-fault-injection-20260509T143431-cd67cd5d.md)
+- 代表性样本回放：[p0-representative-replay-20260509T141037-7190dddc](reports/p0-representative-replay-20260509T141037-7190dddc.md)
+- 10 分钟 soak 探针：[p0-duration-soak-20260509T145809-56124c2a](reports/p0-duration-soak-20260509T145809-56124c2a.md)
+- 6 小时 soak 尝试失败：[p0-duration-soak-20260509T143811-6b5f37c7](reports/p0-duration-soak-20260509T143811-6b5f37c7.md)
+
+10 分钟 soak 探针只能说明当前节奏下两轮短套件通过，不能替代 6 小时正式 soak。生产前结论以 `p0-preprod-summary-*` 为准。
+
+如果新的 6 小时 soak 正在运行，运行中的短压测子报告只作为过程证据；生产前结论以完成后的阶段汇总报告为准。
+
+## 3. 为什么不能只看 HTTP 200
+
+传统接口压测主要看延迟、流量、错误和资源饱和。记忆服务还要判断“回答能不能拿到正确记忆”。
+
+一个请求返回 200，只说明接口有响应，不代表记忆系统正确：
+
+| 风险 | 例子 | 为什么严重 |
+| --- | --- | --- |
+| 记错 | 用户把猫名从“团子”改成“麻薯”，系统仍召回“团子”。 | 角色会长期使用旧事实。 |
+| 串记忆 | A 角色知道了 B 角色里的猫名。 | 破坏角色隔离和用户信任。 |
+| 删不掉 | 删除猫名后，重建又把它召回。 | 删除语义失效，后续很难治理。 |
+
+所以 P0 同时看两类指标：
+
+| 类型 | 关注点 | P0 做法 |
+| --- | --- | --- |
+| 业务正确性 | 记忆是否正确、隔离、可删除。 | dev gate 直接拦截。 |
+| 工程稳定性 | 延迟、错误、重试、并发、资源。 | recall 延迟拦 dev gate，其余分层观察或生产前补齐。 |
+
+## 4. 结论边界
+
+不要把一次短压测通过写成“生产可上线”。本文把结论分三层：
+
+| 层级 | 要证明什么 | 必看内容 | 允许结论 |
 | --- | --- | --- | --- |
-| P0 dev gate | 每次重要修改后的快速回归。 | 10 并发 recall + 3 并发 append 的真实短压测。 | 核心质量、删除/重建、隔离、非瞬时失败、10 并发 recall 延迟全部通过。 |
-| P0 release gate | 判断 P0 主链路是否具备发布候选质量。 | 连续 5 轮 dev gate + 50 并发 recall 代表性压测。 | 5 轮无语义失败；50 并发下召回质量不退化；延迟若未过门禁，必须作为发布风险处理。 |
-| 生产前预检 | 上线前稳定性与容量验证。 | baseline、stress、spike、soak、故障注入、代表性样本回放。 | 全部有报告且通过；仍不等同于线上长期稳定。 |
+| P0 dev gate | 主链路无明显记错、串记忆、删不掉。 | 10 并发 recall、3 并发 append、质量用例、删除重建。 | P0 主链路短压测通过。 |
+| Release gate | 发布候选质量是否稳定。 | 多轮 dev gate、表达漂移回归、50 并发代表性压测、baseline。 | 具备 P0 release 候选质量。 |
+| 生产前压测 | 容量、长稳、故障韧性、样本代表性。 | stress、spike、soak、故障注入、样本回放、资源观测。 | 达到生产前压测标准。 |
 
-截至 2026-05-08 的 [P0 压测最终报告](reports/p0-pressure-final-20260508.md) 和 [P0 生产前压测汇总报告](reports/p0-preprod-summary-20260508T025700.md) 显示：P0 dev gate 已连续 5 轮通过，最新真实短压测也通过，10 并发 `recall p95=161ms`、`recall p99=168ms`；最新 50 并发代表性压测召回准确率和延迟门禁均通过，`recall p95=795ms`、`recall p99=823ms`；baseline dry run、50 并发 stress 短探针、100 并发 spike 短探针、30 并发 soak_probe 均未观察到质量退化；Mem0 unavailable 故障注入验证了 readiness 可观测失败和恢复。但正式 10-15 分钟 baseline、15-30 分钟 stress、完整 10 -> 100 -> 10 spike、6-24 小时 soak、Qdrant/Postgres/Redis 故障注入和代表性样本回放仍未补齐，因此不能声明已达到生产前完整压测标准。
+线上长期稳定还需要灰度发布、真实样本回放、监控告警和持续 SLO。它不是本文档能单独证明的结论。
 
-这些门禁不是“行业统一数值”。行业实践提供的是方法：定义少量关键 SLI、写清测量条件、区分负载类型、把阈值接入自动失败；具体数值要由 Thinkback 的产品体验、依赖链路和历史基线决定。
+## 5. P0 dev gate：真正拦截什么
 
-## 3. 核心质量指标
+本节是日常开发最重要的部分。为了避免“表里写了硬门禁，但脚本没有独立字段”的误解，这里把门禁拆成三类。
 
-| 指标 | 口径 | P0 目标 | 适用层级 | 状态 |
-| --- | --- | --- | --- | --- |
-| `critical_slot_pass_rate` | 昵称、宠物、地点、生日、饮品、食物、睡眠提醒、剧情隔离等 P0 核心槽位 case 的通过率。 | 当前口径是“核心槽位 case 必须全过”；独立聚合字段待补齐。 | dev gate / release gate | 用例门禁。 |
-| `case_pass_rate` | 所有 P0 case 中通过的比例。 | `>= 0.98`，短压测推荐 `1.0`。 | dev gate / release gate | 自动门禁。 |
-| `recall_at_10` | 正样本 case 的期望事实是否出现在 top10 L3 召回中。 | `>= 0.95`，短压测推荐 `1.0`。 | dev gate / release gate | 自动门禁。 |
-| `precision_at_10` | case 级精确率：命中期望事实且不包含禁用事实的比例。 | `>= 0.95`，短压测推荐 `1.0`。 | dev gate / release gate | 自动门禁。 |
-| `item_precision_at_10` | item 级精确率：top10 L3 item 中相关 item 的比例。 | 先记录基线；若 top10 长期混入无关 L3，release 前再设硬门禁。 | release gate | 自动报告。 |
-| `top1_hit_rate` | 正样本第一个 L3 结果是否命中目标事实。 | 先记录基线，用于观察排序质量，不作为 P0 dev gate 硬门禁。 | release gate | 自动报告。 |
-| `mrr` | Mean Reciprocal Rank，目标事实首次出现排名的倒数均值。 | 先记录基线，用于观察排序质量，不作为 P0 dev gate 硬门禁。 | release gate | 自动报告。 |
-| `conflict_pollution_rate` | 召回结果包含旧值、被纠正值或同槽位冲突值的 case 比例。 | `<= 0.02`。 | dev gate / release gate | 自动门禁。 |
-| `false_positive_rate` | 负样本仍召回 L3 或命中禁用词的比例。 | `<= 0.02`。 | dev gate / release gate | 自动门禁。 |
-| `irrelevant_l3_per_query` | 每个查询平均无关 L3 item 数。 | 先记录基线；短压测出现明显无关 L3 必须排查过滤和 top_k。 | release gate | 自动报告。 |
-| `known_drift_regression_pass_rate` | 已发现的 Mem0 英文、同义、转写表达是否仍能被归一化和召回。 | 已知漂移样本要求全部通过；真实压测发现的新漂移必须进入固定 regression case。 | release gate | 半自动，单测已覆盖部分样本，压测报告需记录真实漂移故障。 |
+### 5.1 自动硬门禁
 
-`precision_at_10` 是 case 级指标，不是严格 IR item 级 precision。报告必须同时输出 `item_precision_at_10`，避免“case 过了但 top10 混入大量无关记忆”的误判。
+这些指标当前已有独立字段，并会参与失败判定。
 
-当样本量较小时，比例阈值要按 case 数解释。比如 20 个 case 下 `case_pass_rate >= 0.98` 实际等价于全部通过；短压测应直接按核心 case 全过判断，样本扩展后再使用比例阈值观察整体趋势。
+| 指标 | 人话解释 | P0 门禁 | 失败含义 |
+| --- | --- | --- | --- |
+| `case_pass_rate` | 所有 P0 用例中通过的比例。 | `>= 0.98`，短压测小样本按全过理解。 | 小用例集里有明显失败。 |
+| `recall_at_10` | 问一个已知事实，前 10 条 L3 里是否找到了正确答案。 | `>= 0.95`。 | 系统“找不到”。 |
+| `precision_at_10` | 前 10 条里既有正确答案，又没有禁用旧事实。 | `>= 0.95`。 | 系统“找不准”。 |
+| `conflict_pollution_rate` | 召回里是否混入旧值、纠正前的值或冲突值。 | `<= 0.02`。 | 新旧事实同时出现。 |
+| `false_positive_rate` | 不知道的事实是否被系统瞎补。 | `<= 0.02`。 | 系统把无关记忆当答案。 |
+| `duplicate_active_rate` | 同一槽位是否同时存在多条 active 记忆。 | `0`。 | 同一事实多个版本并存。 |
 
-P0 核心槽位不应只被总通过率掩盖。只要核心槽位出现漏召回、旧值污染、角色串记忆或跨角色泄漏，即使总通过率仍高，也应判定为 P0 质量失败。
+样本量小时要按实际 case 数理解比例。比如 20 个 case 下，`case_pass_rate >= 0.98` 实际等价于全部通过。
 
-## 4. 可靠性指标
+### 5.2 用例或分段硬门禁
 
-| 指标 | 口径 | P0 目标 | 适用层级 | 状态 |
-| --- | --- | --- | --- | --- |
-| `append_success_rate` | append 分段请求成功比例。 | dev gate 要求覆盖到的 append 探针全过；独立 success rate 字段待补齐。 | dev gate / release gate | 分段报告。 |
-| `recall_success_rate` | recall 分段请求成功比例。 | dev gate 要求覆盖到的 recall 探针全过；独立 success rate 字段待补齐。 | dev gate / release gate | 分段报告。 |
-| `delete_success_rate` | delete 分段请求成功比例。 | dev gate 要求覆盖到的删除探针全过；独立 success rate 字段待补齐。 | dev gate / release gate | 分段报告。 |
-| `rebuild_success_rate` | rebuild 分段请求成功比例。 | dev gate 要求覆盖到的重建探针全过；独立 success rate 字段待补齐。 | dev gate / release gate | 分段报告。 |
-| `idempotency_failure_rate` | 重复 `round_id` / `operation_id` 导致重复写入、重复删除或状态错误的比例。 | `0`。 | release gate | 待补齐。 |
-| `duplicate_active_rate` | 同一 user×character×context 下同槽位重复 active 记忆比例。 | `0`。 | dev gate / release gate | 自动门禁。 |
-| `transient_retry_rate` | 发生 502、503、504、timeout 等瞬时失败并触发重试的请求比例；重试次数单独看 `retry_count`。 | 先观测，过高必须排查 Mem0/OpenAI/Qdrant。 | dev gate / release gate | 自动报告。 |
-| `non_transient_failure_count` | 非瞬时失败数量。 | dev gate 要求 `0`。 | dev gate / release gate | 自动门禁。 |
-| `http_5xx_rate` | Thinkback 对外接口 5xx 比例。 | dev gate 要求分段无 5xx；独立比率在生产前长测中记录趋势，线上 SLO 上线前再定。 | dev gate / 生产前预检 | 半自动。 |
-| `timeout_rate` | 客户端超时或 Mem0 超时比例。 | dev gate 要求分段无 timeout；独立比率在生产前长测中记录趋势，线上 SLO 上线前再定。 | dev gate / 生产前预检 | 半自动。 |
+这些风险会拦 P0，但当前主要通过固定 case、断言或分段结果覆盖，不一定都有可靠的独立指标字段。
 
-可靠性指标要按操作拆分：append、recall、delete、rebuild 不应混成一个总成功率。append 受 LLM/embedding 影响较大，可以允许延迟高，但不能允许不可观测失败。
+| 风险 | 当前覆盖方式 | 门禁口径 |
+| --- | --- | --- |
+| 核心槽位错误 | `slot_conflict`、`negative_control`、`isolation` 等 case。 | 核心 case 必须全过。 |
+| 单条记忆删除残留 | `post_delete` 分段的 `deleted-cat-not-recalled` case。 | 本轮样本中不得召回被删事实。 |
+| 重建后旧事实复活 | 删除后执行 rebuild，再跑 `post_delete` case。 | 本轮样本中不得复活被删事实。 |
+| 跨角色串记忆 | 隔离 case 覆盖同 user 不同 character。 | 本轮样本中不得串角色记忆。 |
+| 现实/剧情混入 | 隔离 case 覆盖 real_user 与 roleplay。 | 本轮样本中不得互相污染。 |
+| append 探针失败 | `append_probe` 分段。 | 并发 append 探针失败数必须为 0。 |
+| 非瞬时失败 | `request_metrics.non_transient_failure_count` 和分段异常。 | 本轮 dev gate 不接受不可解释失败。 |
 
-## 5. 删除、重建和隔离指标
+这里的 `0` 是“本轮评测样本内不得出现”。它不是线上长期错误率 SLO，也不能替代生产监控。
 
-| 指标 | 口径 | P0 目标 | 适用层级 | 状态 |
-| --- | --- | --- | --- | --- |
-| `delete_memory_residue_rate` | 删除单条 L3 后，被删事实仍出现在召回结果的比例。 | `0`。 | dev gate / release gate | 用例门禁，当前由 post_delete case 覆盖。 |
-| `delete_session_residue_rate` | 删除会话来源后，该会话独有事实仍被召回的比例。 | `0`。 | release gate | 待补齐。 |
-| `delete_all_residue_rate` | 删除 user×character 全部记忆后仍召回任何旧 L1/L2/L3 的比例。 | `0`。 | release gate | 待补齐。 |
-| `rebuild_resurrection_rate` | 重建后，已删除 L3 或其旧事实重新出现的比例。 | `0`。 | dev gate / release gate | 用例门禁，当前由 post_delete case 覆盖。 |
-| `dirty_summary_recall_rate` | dirty L2 仍进入 prompt 的比例。 | `0`。 | release gate | 待补齐。 |
-| `cross_user_leak_rate` | 跨 user 召回污染比例。 | `0`。 | release gate | 待补齐。 |
-| `cross_character_leak_rate` | 同 user 跨 character 召回污染比例。 | `0`。 | dev gate / release gate | 用例门禁，当前由隔离 case 覆盖。 |
-| `roleplay_real_mix_rate` | 现实事实与剧情设定互相混入召回的比例。 | `0`。 | dev gate / release gate | 用例门禁，当前由剧情隔离 case 覆盖。 |
-| `source_ref_loss_rate` | L3 业务索引丢失来源引用的比例。 | `0`。 | release gate | 半自动抽查，独立统计待补齐。 |
+### 5.3 短压测延迟门禁
 
-删除压测按门禁分层：dev gate 至少覆盖单条 L3 删除、dirty L2 不进 prompt、重建不复活；release gate 必须补齐会话来源删除和全部记忆删除。三类作用域都要进最终 P0 报告，但不能把单条删除通过解释成所有删除作用域都已覆盖。
+P0 dev gate 只把 recall 延迟作为硬门禁，因为 recall 在交互链路上。append、delete、rebuild 延迟会报告，但不作为 P0 dev gate 的独立延迟门禁。
 
-## 6. 性能指标
+| 指标 | P0 门禁 | 为什么要拦 |
+| --- | --- | --- |
+| 10 并发 `recall p95` | `<= 1500ms`。 | 大多数交互不能明显卡顿。 |
+| 10 并发 `recall p99` | `<= 3000ms`。 | 极慢请求不能破坏体验。 |
 
-| 指标 | 口径 | P0 目标 | 适用层级 | 状态 |
-| --- | --- | --- | --- | --- |
-| `p50_append_latency_ms` | append 中位延迟。 | 记录基线，用于观察版本间退化。 | release gate | 自动报告。 |
-| `p95_append_latency_ms` | append p95 延迟。 | 当前观察线，连续压测形成基线后再调整；真实 LLM 抖动下先作为软门禁。 | release gate | 自动报告。 |
-| `p99_append_latency_ms` | append p99 延迟。 | 当前观察线，超过必须排查 Mem0/OpenAI/Qdrant；不宣称为通用 SLA。 | release gate | 自动报告。 |
-| `p50_recall_latency_ms` | recall 中位延迟。 | 记录基线，用于观察版本间退化，不作为 P0 硬门禁。 | release gate | 自动报告。 |
-| `p95_recall_latency_ms` | recall p95 延迟。 | dev gate `<= 1500ms`。 | dev gate / release gate | 自动门禁。 |
-| `p99_recall_latency_ms` | recall p99 延迟。 | dev gate `<= 3000ms`。 | dev gate / release gate | 自动门禁。 |
-| `p95_delete_latency_ms` | delete p95 延迟。 | 当前观察线，连续压测形成基线后再调整。 | release gate | 自动报告。 |
-| `p95_rebuild_latency_ms` | rebuild p95 延迟。 | 当前观察线；真实回放量变大后必须重设。 | release gate | 自动报告。 |
-| `throughput_recall_rps` | 在通过质量门禁时的 recall 吞吐。 | 记录基线，后续版本不得明显退化。 | 生产前预检 | 待补齐。 |
-| `throughput_append_rps` | 在通过质量门禁时的 append 吞吐。 | 记录基线，受 Mem0/LLM 限流影响。 | 生产前预检 | 待补齐。 |
-| `db_memory_index_latency_ms` | recall 读取业务索引的耗时。 | 先观测，用于解释高并发尾延迟。 | 生产前预检 | 待补齐。 |
-| `mem0_search_latency_ms` | 需要语义检索时 Mem0 search 的耗时。 | 先观测。 | 生产前预检 | 待补齐。 |
-| `server_queue_or_threadpool_wait_ms` | API 线程池排队或服务端队列等待。 | 先观测。 | 生产前预检 | 待补齐。 |
+## 6. 核心指标怎么理解
 
-由于 Mem0 的 `/memories` 可能同步调用 LLM 和 embedding，append 延迟受外部服务影响较大。压测报告必须同时输出请求数、重试数和非瞬时失败数，避免把外部抖动误判为召回算法问题。
+下面用同一个例子解释几个容易混淆的指标，并说明每个指标的分母是什么。
 
-性能门禁分两类：
+假设用户先说“我的猫叫团子”，后来纠正为“我的猫叫麻薯”。现在问：“用户的猫叫什么？”
 
-| 类型 | 说明 |
-| --- | --- |
-| 短压测硬门禁 | 核心质量、recall p95/p99、5xx、timeout、删除复活、隔离泄漏、非瞬时失败。 |
-| 生产前软门禁 | append p95/p99、吞吐、soak 稳定性、依赖抖动下的重试比例。软门禁失败不代表 P0 功能不可用，但必须记录风险和排查项。 |
+| 指标 | 分母 | 怎么看 | 例子 |
+| --- | --- | --- | --- |
+| `case_pass_rate` | 全部 P0 case。 | 每个 case 是否通过自己的断言。 | 20 个 case 失败 1 个，分数是 19/20。 |
+| `recall_at_10` | 当前脚本按全部 case 计算。 | 正样本要找到当前事实；负样本要保持干净。 | 猫名 case top10 有“麻薯”算通过。 |
+| `precision_at_10` | 当前脚本按全部 case 计算。 | 找到当前事实，且不夹带旧事实。 | top10 同时有“麻薯”和“团子”算失败。 |
+| `conflict_pollution_rate` | 全部 P0 case。 | 有多少 case 召回了旧值或冲突值。 | 纠正后仍召回“团子”就计入污染。 |
+| `false_positive_rate` | 负样本 case。 | 问未知事实时是否瞎补。 | 问“鸟叫什么”却返回猫狗记忆就计入误召回。 |
+| `duplicate_active_rate` | active 记忆条数。 | 同一槽位是否有多个 active 版本。 | 猫名同时 active “团子”和“麻薯”算重复。 |
+| `top1_hit_rate` | 正样本 case。 | 第一条结果是不是正确事实。 | 第 1 条是“猫叫麻薯”算通过。 |
+| `mrr` | 正样本 case。 | 正确答案越靠前分数越高。 | 正确答案第 1 条得 1 分，第 5 条得 1/5 分。 |
+| `item_precision_at_10` | top10 返回的 L3 条目数。 | top10 每一条有多少是真的相关。 | 10 条里 8 条相关，分数是 0.8。 |
 
-样本规模要写进报告。20 个 recall 请求只能做快速回归，p99 更接近最大值探针；100+ 请求适合代表性 stress；长测或容量评估再看更稳定的 p95/p99。不能用一次短压测的 p99 直接推断线上长期尾延迟。
+简单记法：
 
-## 7. P0 场景矩阵
+- `recall_at_10` 看“找没找到”。
+- `precision_at_10` 看“找到了，但有没有夹带旧错事实”。
+- `item_precision_at_10` 看“返回的每一条是不是都相关”。
+- `top1_hit_rate` 和 `mrr` 看“正确答案排得靠不靠前”。
+
+## 7. 观察指标：报告但不拦 P0 dev gate
+
+这些指标用于定位问题、观察趋势，或在生产前补齐。它们不是 P0 dev gate 的硬门禁。
+
+### 7.1 召回排序
+
+| 指标 | 人话解释 | 当前处理 |
+| --- | --- | --- |
+| `item_precision_at_10` | top10 中每一条记忆有多少是真的相关。 | 先记录基线；无关记忆过多时再设硬门禁。 |
+| `top1_hit_rate` | 第一条结果是否就是正确记忆。 | 观察排序质量。 |
+| `mrr` | 正确答案排得越靠前，分数越高。 | 观察排序质量。 |
+| `irrelevant_l3_per_query` | 每次查询平均混入多少无关 L3。 | 观察过滤和 top_k 是否合理。 |
+
+### 7.2 操作可靠性
+
+| 指标 | 人话解释 | 当前处理 |
+| --- | --- | --- |
+| `append_success_rate` / `recall_success_rate` / `delete_success_rate` / `rebuild_success_rate` | 各操作是否成功。 | 目前由分段结果覆盖。 |
+| `transient_retry_rate` | 502、503、504、timeout 等瞬时失败触发重试的比例。 | 自动报告；过高时排查 Mem0/OpenAI/Qdrant。 |
+| `http_5xx_rate` / `timeout_rate` | 对外 5xx 和超时比例。 | 长测中观察趋势，线上 SLO 前再定。 |
+| `idempotency_failure_rate` | 重复操作是否产生重复副作用。 | release gate 补齐。 |
+| `delete_session_residue_rate` / `delete_all_residue_rate` | 会话删除、全部删除是否有残留。 | release gate 补齐。 |
+| `dirty_summary_recall_rate` / `source_ref_loss_rate` | dirty L2 是否进入 prompt、L3 来源引用是否丢失。 | release gate 或生产前补齐。 |
+
+### 7.3 资源容量与外部依赖
+
+| 指标 | 人话解释 | 当前处理 |
+| --- | --- | --- |
+| `throughput_recall_rps` / `throughput_append_rps` | 在质量通过时能承载多少吞吐。 | 生产前记录基线。 |
+| `cpu_utilization_pct` / `memory_rss_mb` | CPU 和内存是否接近饱和或持续增长。 | 生产前补齐。 |
+| `db_pool_in_use` / `redis_pool_in_use` | 数据库和 Redis 连接池是否耗尽。 | 生产前补齐。 |
+| `l3_pending_write_tasks` / `l3_available_capacity` | L3 后台抽取队列是否长期积压。 | 生产前记录趋势；打满时按背压问题处理。 |
+| `qdrant_request_latency_ms` / `external_rate_limit_count` | Qdrant 耗时和外部依赖限流。 | 生产前补齐。 |
+
+## 8. P0 场景覆盖
+
+P0 用例不追求“大而全”，只覆盖最容易让记忆服务失信的场景。
 
 | 场景 | 必测内容 |
 | --- | --- |
 | 核心槽位纠正 | 昵称、宠物名、生日、所在地、工作状态、饮品、食物、睡眠提醒、沟通偏好。 |
 | 多槽位并存 | 猫和狗不能互相覆盖，饮品和食物不能互相覆盖。 |
-| 旧值污染 | 纠正后的召回不得包含旧值，如阿鹏、团子、杭州、咖啡、汉堡、5月20日。 |
+| 旧值污染 | 纠正后不得包含旧值，如阿鹏、团子、杭州、咖啡、汉堡、5月20日。 |
 | 负样本 | 未提供鸟、兔等信息时，不得用猫狗记忆填充。 |
 | 作用域隔离 | 不同 user、不同 character 不得串记忆。 |
-| 剧情隔离 | 现实猫和剧情猫互不污染；问剧情只召回剧情设定，问现实只召回现实事实。 |
-| 删除验证 | 删除单条 L3 后，L3 不召回，相关 dirty L2 不进 prompt。 |
-| 重建验证 | 重建不复活已删除记忆，不重复制造 active 记忆。 |
-| 幂等 | 重复 append、delete、rebuild 不产生重复副作用。 |
-| 长会话 | 50/100 轮后核心槽位仍能召回当前值。 |
+| 剧情隔离 | 现实猫和剧情猫互不污染。 |
+| 删除和重建 | 删除后不召回，重建不复活，不重复制造 active 记忆。 |
 | 并发 | 并发写入和并发召回不破坏幂等、隔离和冲突收敛。 |
-| 代表性样本 | release gate 不只看当前少量核心 case，还要覆盖主要槽位、冲突、负样本、隔离、删除和高频表达；样本量按覆盖清单决定，不把固定数量写成行业硬标准。 |
-| 表达漂移 | Mem0 抽取结果出现英文、转写、同义表达时不丢业务索引；已发现漂移必须进入回归集。 |
-| 故障注入 | Mem0 超时、Qdrant 短暂不可用、Postgres 慢查询时有明确失败或降级行为。 |
+| 长会话 | 50/100 轮后核心槽位仍能召回当前值。 |
+| 表达漂移 | Mem0 抽取出英文、转写、同义表达时仍能归一化。 |
+| 故障注入 | Mem0、Qdrant、Postgres、Redis 异常均可观测，不产生静默错误。 |
 
-### 7.1 P0 核心槽位
+核心槽位示例：
 
-P0 必测槽位如下：
-
-| 槽位 | 正样本 | 冲突样本 | 负样本 |
+| 槽位 | 当前事实 | 旧值或冲突值 | 负样本关注点 |
 | --- | --- | --- | --- |
-| 昵称 | 当前称呼“小鹏”。 | 旧称呼“阿鹏”。 | 宠物名不得被当昵称。 |
-| 宠物名 | 猫“麻薯”、狗“豆包”。 | 猫旧名“团子”。 | 鸟、兔未知时不得填充猫狗。 |
-| 地点 | 当前上海。 | 旧地点杭州。 | 地点不得被抽成宠物名。 |
-| 工作状态 | 接受 Moonshot offer。 | 仍在评估机会。 | 普通情绪不应污染工作状态。 |
-| 沟通偏好 | 简洁直接建议。 | 先安慰、说教。 | 焦虑处理流程不能覆盖沟通偏好。 |
-| 生日 | 6月1日。 | 5月20日。 | 日期不能被其他事件污染。 |
-| 饮品/食物 | 茶、寿司。 | 咖啡、汉堡。 | 饮品和食物不得互相覆盖。 |
-| 睡眠提醒 | 接受温和提醒。 | 讨厌提醒睡觉。 | 工作压力偏好不得覆盖睡眠提醒。 |
-| 剧情设定 | 剧情猫“露露”。 | 现实猫“麻薯”。 | 现实追问不得召回剧情猫。 |
+| 昵称 | 小鹏 | 阿鹏 | 宠物名不得当昵称。 |
+| 宠物名 | 猫“麻薯”、狗“豆包” | 猫旧名“团子” | 鸟、兔未知时不得填充猫狗。 |
+| 地点 | 上海 | 杭州 | 地点不得被抽成宠物名。 |
+| 工作状态 | 接受 Moonshot offer | 仍在评估机会 | 普通情绪不应污染工作状态。 |
+| 沟通偏好 | 简洁直接建议 | 先安慰、说教 | 焦虑处理流程不能覆盖沟通偏好。 |
+| 生日 | 6月1日 | 5月20日 | 日期不能被其他事件污染。 |
+| 饮品/食物 | 茶、寿司 | 咖啡、汉堡 | 饮品和食物不得互相覆盖。 |
+| 睡眠提醒 | 接受温和提醒 | 讨厌提醒睡觉 | 工作压力偏好不得覆盖睡眠提醒。 |
+| 剧情设定 | 剧情猫“露露” | 现实猫“麻薯” | 现实追问不得召回剧情猫。 |
 
-### 7.2 并发矩阵
+## 9. 压测类型
 
-| 级别 | 目标 | 建议持续时间 | P0 门禁 |
+| 类型 | 目标 | 建议持续时间 | 结论边界 |
 | --- | --- | --- | --- |
-| smoke | 单用户完整链路。 | 1 轮。 | 必须 100% 通过。 |
-| short | 10 并发 recall + 3 并发 append。 | 1-5 分钟。 | 质量门禁必须通过。 |
-| baseline | 10 并发 recall + 10 并发 append。 | 10-15 分钟。 | 质量不退化，记录吞吐和 p95/p99。 |
-| stress | 50 并发 recall + 10 并发 append。 | 15-30 分钟。 | 不允许语义、隔离、删除错误；延迟超门禁必须记录发布风险。 |
-| spike | 10 -> 100 -> 10 并发 recall。 | 5-10 分钟。 | spike 后召回质量恢复正常。 |
-| soak | 10-30 并发混合读写。 | 6-24 小时。 | 无内存泄漏、连接泄漏、错误率持续上升。 |
+| smoke | 单用户完整链路。 | 1 轮。 | 只证明链路可跑。 |
+| short | 10 并发 recall + 3 并发 append。 | 1-5 分钟。 | P0 dev gate。 |
+| baseline | 10 并发 recall + 10 并发 append。 | 10-15 分钟。 | release gate 参考。 |
+| stress | 50 并发 recall + 10 并发 append。 | 15-30 分钟。 | 生产前容量参考。 |
+| spike | 10 -> 100 -> 10 并发 recall。 | 5-10 分钟。 | 看峰值后是否恢复。 |
+| soak | 10-30 并发混合读写。 | 最少 6 小时，推荐 6-24 小时。 | 看泄漏和长期稳定性。 |
 
-短压测用于开发阶段快速判断；baseline/stress/spike/soak 用于生产前容量和稳定性验收，不用于替代语义质量断言。
+当前 10、50、100 并发是工程探针，不是线上容量承诺。有真实流量后，要按峰值 RPS、读写比例、部署副本数和外部依赖限流重新校准。
 
-## 8. 推荐执行方式
+soak 不是无节流地循环跑 short suite。它要模拟稳定生产负载。
 
-### 8.1 本地真实短压测
+默认每 5 分钟跑一轮 30 并发 recall + 10 并发 append 探针，并持续观察 L3 后台队列、错误率、延迟和资源是否漂移。
 
-用于每次重要修改后的快速验收：
+如果去掉间隔后触发 `l3 background queue full`，结论应写成“持续写入把 L3 后台抽取打满”。
+
+这是容量或背压风险，不应通过放宽语义正确性指标来掩盖。
+
+## 10. 执行方法
+
+### 10.1 本地真实短压测
 
 ```bash
-env MEM0_API_KEY=${MEM0_API_KEY:?set MEM0_API_KEY} \
-MEM0_API_URL=${MEM0_API_URL:?set MEM0_API_URL} \
+env OPENAI_API_KEY=${OPENAI_API_KEY:?set OPENAI_API_KEY} \
 POSTGRES_PORT=55432 \
 POSTGRES_DATABASE=thinkback_real \
 REDIS_PORT=56379 \
@@ -208,218 +285,128 @@ PYTHONPATH=src .venv/bin/python script/real_mem0_p0_short_pressure.py \
   --report-dir docs/reports
 ```
 
-短压测至少生成两个文件：
+短压测至少生成：
 
 ```text
 docs/reports/<suite_id>.json
 docs/reports/<suite_id>.md
 ```
 
-### 8.2 多轮重复压测
+### 10.2 多轮重复压测
 
-用于排除 Mem0/LLM 抽取随机性：
+重复执行 10.1 的短压测命令 5 轮。5 轮中任一轮失败，都不能把 P0 质量判定为稳定。
 
-```bash
-for i in 1 2 3 4 5; do
-  env MEM0_API_KEY=${MEM0_API_KEY:?set MEM0_API_KEY} \
-  MEM0_API_URL=${MEM0_API_URL:?set MEM0_API_URL} \
-  POSTGRES_PORT=55432 \
-  POSTGRES_DATABASE=thinkback_real \
-  REDIS_PORT=56379 \
-  REDIS_PASSWORD= \
-  QDRANT_URL=${QDRANT_URL:?set QDRANT_URL} \
-  THINKBACK_API_URL=${THINKBACK_API_URL:?set THINKBACK_API_URL} \
-  PYTHONPATH=src .venv/bin/python script/real_mem0_p0_short_pressure.py \
-    --recall-concurrency 10 \
-    --recall-requests 20 \
-    --append-concurrency 3 \
-    --report-dir docs/reports
-done
-```
+### 10.3 生产前补齐项
 
-5 轮中任一轮失败，都不能把 P0 质量判定为稳定。
+- baseline：10-15 分钟。
+- stress：50 并发，15-30 分钟。
+- spike：10 -> 100 -> 10 并发。
+- soak：最少 6 小时，推荐 6-24 小时，默认每轮间隔 300 秒。
+- fault injection：覆盖 Mem0、Qdrant、Postgres、Redis。
+- representative replay：覆盖当前工程构造样本，并逐步接入线上代表性样本。
 
-### 8.3 生产前长测
+如果使用 k6/Locust，只用它们产生负载；业务质量指标仍要由 Thinkback 的语义断言负责。
 
-生产前至少补齐：
+soak 执行示例：
 
 ```bash
-# baseline：10-15 分钟
-# stress：50 并发，15-30 分钟
-# spike：10 -> 100 -> 10 并发
-# soak：6-24 小时
+env THINKBACK_API_URL=${THINKBACK_API_URL:?set THINKBACK_API_URL} \
+PYTHONPATH=src .venv/bin/python script/real_mem0_p0_preprod_pressure.py \
+  --duration-phase soak \
+  --target-duration-seconds 21600 \
+  --iteration-interval-seconds 300 \
+  --report-dir docs/reports \
+  --output-dir docs/reports
 ```
 
-如果使用 k6/Locust，应把 Thinkback 的业务质量指标也纳入阈值，而不是只看 HTTP 延迟。HTTP 压测工具适合产生负载；记忆服务必须额外跑语义断言。
+队列状态可以通过接口确认：
 
-### 8.4 故障注入
-
-P0 生产前至少演练：
-
-| 故障 | 注入方式 | 期望 |
-| --- | --- | --- |
-| Mem0 502/503/504 | 代理或 mock transport 注入。 | 触发重试，失败可观测。 |
-| Mem0 超时 | 拉高 Mem0 响应时间。 | 不产生业务索引和后端存储不一致的静默成功。 |
-| Qdrant 不可达 | 停止 Qdrant 或阻断端口。 | append/recall 明确失败或降级，报告记录原因。 |
-| Postgres 慢查询 | 限速或锁表演练。 | API 不挂死，错误可观测。 |
-| Redis 短暂不可用 | 停止 Redis。 | readiness 失败，主链路按设计处理。 |
-
-故障注入必须在隔离环境执行，不能在共享开发库里直接破坏服务。
-
-## 9. 报告格式
-
-每次真实压测至少输出稳定字段。下面的 JSON 是目标稳定结构；当前脚本尚未输出的字段必须写 `null`，并在 `metric_automation_status` 中标明状态。用例门禁可以写实际 case 结果，但必须说明“由 case 覆盖”，不能用 `0.0` 假装已经有独立统计字段。
-
-当前脚本应优先输出下面的稳定字段；历史 JSON 中的 `delete_residue_rate` 仅兼容映射为单条 L3 删除后的 `delete_memory_residue_rate`，不代表会话删除和全部删除也已覆盖；历史 JSON 中的 `cross_scope_leak_rate` 仅兼容映射为跨角色和剧情隔离 case，不代表跨 user 独立指标已覆盖。报告汇总时必须保留这层兼容说明。
-
-```json
-{
-  "run_id": "real-quality-...",
-  "case_count": 0,
-  "case_pass_rate": 0.0,
-  "recall_at_10": 0.0,
-  "precision_at_10": 0.0,
-  "item_precision_at_10": 0.0,
-  "top1_hit_rate": 0.0,
-  "mrr": 0.0,
-  "conflict_pollution_rate": 0.0,
-  "false_positive_rate": 0.0,
-  "delete_memory_residue_rate": 0.0,
-  "delete_session_residue_rate": null,
-  "delete_all_residue_rate": null,
-  "rebuild_resurrection_rate": 0.0,
-  "cross_user_leak_rate": null,
-  "cross_character_leak_rate": 0.0,
-  "roleplay_real_mix_rate": 0.0,
-  "dirty_summary_recall_rate": null,
-  "source_ref_loss_rate": null,
-  "duplicate_active_rate": 0.0,
-  "critical_slot_pass_rate": null,
-  "known_drift_regression_pass_rate": null,
-  "http_5xx_rate": null,
-  "timeout_rate": null,
-  "idempotency_failure_rate": null,
-  "transient_retry_rate": 0.0,
-  "operation_success_rate": {
-    "append": null,
-    "recall": null,
-    "delete": null,
-    "rebuild": null
-  },
-  "request_metrics": {
-    "request_count": 0,
-    "retry_count": 0,
-    "transient_failure_count": 0,
-    "non_transient_failure_count": 0
-  },
-  "latency_ms": {
-    "append": {"p50": 0, "p95": 0, "p99": 0},
-    "recall": {"p50": 0, "p95": 0, "p99": 0},
-    "delete": {"p50": 0, "p95": 0, "p99": 0},
-    "rebuild": {"p50": 0, "p95": 0, "p99": 0}
-  },
-  "failed_cases": [],
-  "failed_metrics": [],
-  "failed_sections": [],
-  "metric_automation_status": {
-    "critical_slot_pass_rate": "case_gate_independent_field_pending",
-    "delete_memory_residue_rate": "case_gate_post_delete",
-    "delete_session_residue_rate": "pending",
-    "delete_all_residue_rate": "pending",
-    "rebuild_resurrection_rate": "case_gate_post_delete_and_active_count",
-    "dirty_summary_recall_rate": "pending",
-    "cross_user_leak_rate": "pending",
-    "cross_character_leak_rate": "case_gate_isolation",
-    "roleplay_real_mix_rate": "case_gate_independent_field_pending",
-    "operation_success_rate": "section_pass_fail_independent_fields_pending",
-    "known_drift_regression_pass_rate": "semi_automatic",
-    "source_ref_loss_rate": "semi_automatic_independent_field_pending",
-    "http_5xx_rate": "semi_automatic",
-    "timeout_rate": "semi_automatic",
-    "idempotency_failure_rate": "pending",
-    "transient_retry_rate": "automatic_report"
-  }
-}
+```bash
+curl ${THINKBACK_API_URL}/memory/l3/background-status
 ```
 
-脚本可以分阶段补齐指标，但报告字段名应尽量稳定，方便后续接入 CI 或压测平台。对于历史报告仍使用旧聚合字段的情况，例如 `delete_residue_rate` 或 `cross_scope_leak_rate`，报告汇总脚本必须映射到上面的细分字段，并说明字段口径，不能把旧聚合字段解释成所有删除或所有隔离指标已经通过。
+## 11. 报告内容要求
 
-Markdown 报告必须包含：
+短压测 Markdown 报告至少包含：
 
 | 部分 | 内容 |
 | --- | --- |
 | 结论 | 通过/未通过、suite_id、执行时间、失败分段。 |
-| 核心门禁 | 核心槽位、recall、precision、冲突污染、误召回、重复 active。 |
+| 自动硬门禁 | case、recall、precision、冲突污染、误召回、重复 active。 |
 | 分段结果 | quality、concurrent_recall、append_probe、post_delete。 |
 | 延迟 | append/recall/delete/rebuild 的 p95。 |
-| 限制 | 样本覆盖、未执行的 soak、100 并发、故障注入、代表性回放说明。 |
+| 限制 | 样本覆盖、soak、spike、故障注入、代表性回放的执行状态说明。 |
 
-## 10. 失败处理规则
+生产前报告还应补充：
 
-1. 任何召回失败都要保存 `run_id`、case 名、query、召回文本、active memory 列表和 Mem0 返回样本。
-2. 如果是 Mem0 表达漂移，先把真实表达补成回归测试，再修归一化或冲突槽位。
-3. 如果是隔离泄漏，优先修作用域或 context 过滤，不能通过降低 top_k 掩盖。
-4. 如果是删除复活，优先查 source_refs、deleted refs、rebuild 输入范围和 active/superseded 状态。
-5. 如果是外部瞬时失败，记录 retry 指标；不能把未重试成功的失败算作质量通过。
-6. 任何阈值调整都必须写进本文档，不能只改脚本让报告变绿。
-7. 如果是并发下失败，必须先区分语义失败、HTTP 失败、超时失败和报告聚合误差。
-8. 如果是延迟失败，必须同时看 Mem0、OpenAI、Qdrant、Postgres、数据库连接和服务端排队的分段耗时。
-9. 如果指标尚未自动化，报告必须标明“未自动化/半自动”，不能把未测指标写成已通过。
-
-## 11. 当前 P0 门禁
-
-P0 dev gate 必须满足：
-
-| 指标 | 门禁 | 状态 |
-| --- | --- | --- |
-| `critical_slot_pass_rate` | 核心槽位 case 全过 | 用例门禁，独立字段待补齐。 |
-| `case_pass_rate` | `>= 0.98` | 自动门禁。 |
-| `recall_at_10` | `>= 0.95` | 自动门禁。 |
-| `precision_at_10` | `>= 0.95` | 自动门禁。 |
-| `item_precision_at_10` | 当前先报告基线；release gate 前如发现 top10 无关 L3 过多，再设硬门禁。 | 自动报告。 |
-| `conflict_pollution_rate` | `<= 0.02` | 自动门禁。 |
-| `false_positive_rate` | `<= 0.02` | 自动门禁。 |
-| `delete_memory_residue_rate` | `0` | 用例门禁，当前由 post_delete case 覆盖。 |
-| `rebuild_resurrection_rate` | `0` | 用例门禁，当前由 post_delete case 覆盖。 |
-| `cross_character_leak_rate` | `0` | 用例门禁，当前由隔离 case 覆盖。 |
-| `roleplay_real_mix_rate` | `0` | 用例门禁，当前由剧情隔离 case 覆盖。 |
-| `duplicate_active_rate` | `0` | 自动门禁。 |
-| `non_transient_failure_count` | `0` | 自动门禁。 |
-| 10 并发 `recall p95` | `<= 1500ms` | 自动门禁。 |
-| 10 并发 `recall p99` | `<= 3000ms` | 自动门禁。 |
-
-如果真实 Mem0/OpenAI/Qdrant 出现瞬时抖动，可以接受重试后通过，但必须在报告中保留 `transient_failure_count` 和 `retry_count`。
-
-P0 release gate 必须另外满足：
-
-| 类别 | 门禁 |
+| 部分 | 内容 |
 | --- | --- |
-| 多轮重复 | 连续 5 轮 P0 短压测全部通过。 |
-| 表达漂移 | 已发现真实漂移样本全部进入回归测试，并在修复后通过。 |
-| 样本扩展 | 固定 P0 核心 case 必须全过；release 前应补齐主要槽位、冲突、负样本、隔离、删除和高频表达覆盖，未补齐时必须在报告中写成限制。 |
-| 50 并发代表性压测 | 召回质量不退化；延迟若超过门禁，必须列为发布风险并给出修复计划。 |
-| baseline | 10 并发混合读写 10-15 分钟，无质量退化。 |
+| 资源与环境 | 测试环境、服务副本数、数据库和缓存配置、CPU、内存、连接池、队列等待、外部依赖限流。 |
+| 阶段门禁 | baseline、stress、spike、soak、fault_injection、representative_replay 的通过状态。 |
+| 未完成项 | 未执行、部分执行、未满足持续时间或未自动化的字段。 |
 
-生产前预检再补齐：
+用例门禁可以写实际 case 结果，但要说明“由 case 覆盖”。
 
-| 类别 | 门禁 |
-| --- | --- |
-| 代表性样本回放 | 工程构造 case 覆盖主要槽位、冲突、负样本、隔离和删除；有真实或仿真数据后按覆盖率扩展，不把固定样本数写成行业标准。 |
-| stress | 50 并发 recall + 10 并发 append 15-30 分钟，无隔离、删除、冲突错误。 |
-| spike | 峰值 100 并发 recall 后，质量指标恢复到 P0 门禁。 |
-| soak | 6-24 小时无错误率持续上升、连接泄漏、内存泄漏。 |
-| 故障注入 | Mem0/Qdrant/Postgres/Redis 异常均可观测，不产生静默错误。 |
+尚未自动化的字段写 `null`，并在 `metric_automation_status` 中标明状态。
 
-## 12. 当前状态口径
+稳定 JSON 字段见 [P0 压测报告字段规范](AI虚拟社交记忆服务P0压测报告字段.md)。
 
-报告结论要避免混淆：
+## 12. 失败处置
+
+1. 保存 `run_id`、case 名、query、召回文本、active memory 列表和 Mem0 返回样本。
+2. 表达漂移先补回归测试，再修归一化或冲突槽位。
+3. 隔离泄漏优先查作用域和 context 过滤，不通过降低 top_k 掩盖。
+4. 删除复活优先查 source_refs、deleted refs、rebuild 输入范围和 active/superseded 状态。
+5. 外部瞬时失败要记录 retry 指标；未重试成功不能算质量通过。
+6. 阈值调整必须写进本文档，不能只改脚本让报告变绿。
+7. 延迟失败要同时看 Mem0、OpenAI、Qdrant、Postgres、连接池和服务端排队。
+
+## 13. 结论表述口径
 
 | 说法 | 允许条件 |
 | --- | --- |
 | P0 主链路短压测通过 | `script/real_mem0_p0_short_pressure.py` 通过并生成报告。 |
 | P0 质量回归通过 | `script/real_mem0_quality_regression.py` 通过。 |
 | P0 release gate 通过 | 多轮重复、表达漂移回归、50 并发代表性压测、baseline 均有报告且风险可接受。 |
-| P0 达到生产前压测标准 | release gate、stress、spike、soak、故障注入、代表性样本回放均有报告且通过。 |
-| 线上长期稳定 | 还需要灰度发布、真实样本回放、监控告警和持续 SLO。 |
+| P0 达到生产前压测标准 | release gate、stress、spike、soak、故障注入、样本回放和资源观测都通过。 |
+| 线上长期稳定 | 灰度发布、真实样本回放、监控告警和持续 SLO 都稳定。 |
 
-未执行的长测不能写成“已通过”，只能写成“未执行/待补齐/风险项”。
+未执行、部分执行、未满足持续时间或未自动化的长测、故障注入和资源观测，只能写成“未执行/部分执行/待补齐/风险项”。
+
+## 附录 A. 指标自动化状态
+
+| 状态 | 含义 |
+| --- | --- |
+| 自动门禁 | 当前脚本已有独立字段并参与失败判定。 |
+| 用例门禁 | 当前脚本通过固定 case 或断言判定失败，但独立指标字段还没有完全拆出。 |
+| 分段报告 | 当前脚本通过 quality、concurrent_recall、append_probe、post_delete 给出 pass/fail 和统计，独立字段待补。 |
+| 自动报告 | 当前脚本已输出结果，但是否作为硬门禁取决于测试级别。 |
+| 半自动 | 需要结合报告、日志或数据库记录判读。 |
+| 待补齐 | P0 应关注，但当前脚本尚未完整自动化。 |
+
+| 指标 | 当前状态 | 说明 |
+| --- | --- | --- |
+| `case_pass_rate` | 自动门禁 | 独立字段参与失败判定。 |
+| `recall_at_10` | 自动门禁 | 独立字段参与失败判定。 |
+| `precision_at_10` | 自动门禁 | 独立字段参与失败判定。 |
+| `conflict_pollution_rate` | 自动门禁 | 独立字段参与失败判定。 |
+| `false_positive_rate` | 自动门禁 | 独立字段参与失败判定。 |
+| `duplicate_active_rate` | 自动门禁 | 独立字段参与失败判定。 |
+| `critical_slot_pass_rate` | 用例门禁 | 当前由核心 case 覆盖，独立字段仍为 `null`。 |
+| `delete_memory_residue_rate` | 用例门禁 | 当前由 `post_delete` 分段覆盖。 |
+| `rebuild_resurrection_rate` | 用例门禁 | 当前由删除后 rebuild 和 active count 断言覆盖。 |
+| `cross_character_leak_rate` | 用例门禁 | 当前由隔离 case 覆盖。 |
+| `roleplay_real_mix_rate` | 用例门禁 | 当前由现实/剧情隔离 case 覆盖。 |
+| `operation_success_rate` | 分段报告 | 当前通过分段 pass/fail 表达。 |
+| `transient_retry_rate` | 自动报告 | 当前自动输出，用于排查瞬时失败。 |
+| `http_5xx_rate` / `timeout_rate` | 半自动 | 需要结合报告或日志判读。 |
+| `dirty_summary_recall_rate` / `source_ref_loss_rate` | 待补齐 | 需要独立字段或固定回归。 |
+| `idempotency_failure_rate` | 待补齐 | release gate 补齐。 |
+
+## 参考资料
+
+- Google SRE《Service Level Objectives》：https://sre.google/sre-book/service-level-objectives/
+- Google SRE《Monitoring Distributed Systems》：https://sre.google/sre-book/monitoring-distributed-systems/
+- Grafana k6 thresholds：https://grafana.com/docs/k6/latest/using-k6/thresholds/
+- Grafana k6 load test types：https://grafana.com/docs/k6/latest/testing-guides/test-types/
+- Locust documentation：https://docs.locust.io/

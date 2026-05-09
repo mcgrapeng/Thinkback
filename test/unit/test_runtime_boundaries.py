@@ -15,11 +15,11 @@ def test_mem0_config_builder_targets_qdrant_memory_collection() -> None:
     assert not Path("src/memory/mem0_client.py").exists()
 
 
-def test_mem0_boundary_does_not_instantiate_memory_engine() -> None:
+def test_mem0_boundary_uses_library_adapter_without_direct_qdrant_client() -> None:
     source = Path("src/memory/backends.py").read_text(encoding="utf-8")
 
-    assert "Memory.from_config" not in source
-    assert "build_mem0_config" not in source
+    assert "Memory.from_config" in source
+    assert "build_mem0_library_config" in source
     assert "QdrantClient" not in source
 
 
@@ -47,32 +47,48 @@ def test_default_memory_service_uses_sql_repository(monkeypatch) -> None:
             super().__init__()
 
     monkeypatch.setattr(dependencies, "_memory_service", None)
-    monkeypatch.setattr(dependencies, "Mem0HttpMemoryBackend", FakeHttpBackend)
+    monkeypatch.setattr(dependencies, "Mem0LibraryMemoryBackend", FakeHttpBackend)
     service = dependencies.get_memory_service()
 
     assert isinstance(service.repository, SqlAlchemyMemoryRepository)
 
 
-def test_memory_service_can_use_mem0_http_backend_from_settings(monkeypatch) -> None:
+def test_memory_service_can_use_mem0_library_backend_from_settings(monkeypatch) -> None:
     import api.dependencies as dependencies
     from infra.config import Settings
-    from memory.backends import Mem0HttpMemoryBackend
+    from memory.backends import Mem0LibraryMemoryBackend
 
     monkeypatch.setattr(dependencies, "_memory_service", None)
     monkeypatch.setattr(
         dependencies,
         "settings",
         Settings(
-            mem0_api_url="http://localhost:8889",
-            mem0_api_key="test-key",
+            openai_api_key="openai-secret",
+            memory_openai_base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+            qdrant_url="https://qdrant.example.internal",
+            qdrant_api_key="qdrant-secret",
+            memory_qdrant_collection="thinkback_memories_test",
         ),
     )
     service = dependencies.get_memory_service()
 
-    assert isinstance(service.backend, Mem0HttpMemoryBackend)
-    assert service.backend.api_url == "http://localhost:8889"
-    assert service.backend.api_key == "test-key"
-    assert service.backend.timeout_seconds == 120.0
+    assert isinstance(service.backend, Mem0LibraryMemoryBackend)
+    assert service.backend.config["llm"]["config"]["api_key"] == "openai-secret"
+    assert (
+        service.backend.config["llm"]["config"]["openai_base_url"]
+        == "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    )
+    assert service.backend.config["embedder"]["config"]["api_key"] == "openai-secret"
+    assert service.backend.config["vector_store"]["config"]["url"] == "https://qdrant.example.internal"
+    assert service.backend.config["vector_store"]["config"]["api_key"] == "qdrant-secret"
+    assert (
+        service.backend.config["vector_store"]["config"]["collection_name"]
+        == "thinkback_memories_test"
+    )
+    assert service.l3_write_mode == "async"
+    assert service.l3_executor_workers == 16
+    assert service.l3_max_pending_tasks == 256
+    assert service.l3_queue_wait_seconds == 5.0
 
 
 def test_memory_routes_call_sync_service_in_threadpool() -> None:
@@ -96,7 +112,7 @@ def test_real_pressure_script_reuses_configurable_mem0_backend() -> None:
     source = Path("script/real_mem0_pressure.py").read_text(encoding="utf-8")
 
     assert "get_memory_backend(settings)" in source
-    assert "Mem0MemoryBackend()" not in source
+    assert "Mem0HttpMemoryBackend" not in source
     assert "QdrantClient" not in source
     assert "repository.memories.values()" not in source
 

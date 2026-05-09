@@ -32,7 +32,7 @@ src/api/
 | 文件 | 职责 |
 | --- | --- |
 | `app.py` | FastAPI app factory、路由注册、trace/access log 中间件。 |
-| `dependencies.py` | 注入 `MemoryService`。默认使用 `SqlAlchemyMemoryRepository + Mem0HttpMemoryBackend`。 |
+| `dependencies.py` | 注入 `MemoryService`。默认使用 `SqlAlchemyMemoryRepository + Mem0LibraryMemoryBackend`。 |
 | `health.py` | `/health`、`/health/live`、`/health/ready`。 |
 | `memory.py` | `/memory/append`、`/memory/recall`、`/memory/delete`、`/memory/rebuild`、任务查询。 |
 
@@ -54,7 +54,7 @@ src/memory/
 | `schemas.py` | API 请求/响应模型、枚举、三层记忆契约。 |
 | `service.py` | 记忆业务工作流：写入、召回、删除、重建、任务查询。 |
 | `repositories.py` | 内存仓库和 SQLAlchemy 仓库；保存 L1 派生缓存、L2、可靠轮次、L3 业务索引和任务状态。 |
-| `backends.py` | 长期记忆后端协议、Fake 后端、远程 Mem0 REST 后端。 |
+| `backends.py` | 长期记忆后端协议、Fake 后端、Mem0 Library 后端。 |
 | `tasks.py` | Celery 任务扩展位置。 |
 
 关键边界：
@@ -62,7 +62,7 @@ src/memory/
 1. `service.py` 不直接操作 SQLAlchemy model。
 2. `repositories.py` 不调用 Mem0。
 3. `backends.py` 不关心业务表，只封装长期记忆后端。
-4. `backends.py` 只调用 Mem0 REST，不配置 Mem0 内部的 LLM、Embedding，也不直接操作 Qdrant。
+4. `backends.py` 只调用 Mem0 Library，不直接操作 Qdrant。
 
 ## 4. src/infra
 
@@ -80,15 +80,15 @@ src/infra/
 
 | 文件 | 职责 |
 | --- | --- |
-| `config.py` | 读取 `.env` 和环境变量，生成数据库、Redis、Mem0 REST 和共享 Qdrant 诊断配置。 |
+| `config.py` | 读取 `.env` 和环境变量，生成数据库、Redis、OpenAI、Mem0 Library 和共享 Qdrant 配置。 |
 | `database/models.py` | 五张 `tb_` 业务表的 SQLAlchemy model。 |
 | `database/engine.py` | Async SQLAlchemy engine、session factory、数据库 readiness。 |
 | `database/base.py` | Declarative Base，并导入 models 给 Alembic metadata 使用。 |
 | `cache/redis_client.py` | Redis readiness 和客户端边界。 |
-| `readiness.py` | 聚合依赖检查，包括数据库、Redis、共享 Qdrant 和 Mem0 REST。 |
+| `readiness.py` | 聚合依赖检查，包括数据库、Redis、共享 Qdrant 和 Mem0 Library。 |
 | `tasks/celery_app.py` | Celery app bootstrap。 |
 
-Thinkback 不保留 `infra/vectorstore` 业务模块。L3 写入和检索只通过远程 Mem0 REST API 进行；`readiness.py` 里的 Qdrant 访问仅用于 `/health/ready` 连通性诊断。
+Thinkback 不保留 `infra/vectorstore` 业务模块。L3 写入和检索只通过 Mem0 Library 进行；业务代码不得绕过 Mem0 直接写 Qdrant。
 
 ## 5. alembic
 
@@ -117,7 +117,7 @@ script/
 └── real_mem0_pressure.py
 ```
 
-真实 5 轮压测脚本，使用真实 Mem0 REST API 和 PostgreSQL。脚本不支持 fake 模式，缺少 Mem0 API 配置或依赖不可达时直接失败。
+真实 5 轮压测脚本，使用真实 Mem0 Library、OpenAI、Qdrant 和 PostgreSQL。脚本不支持 fake 模式，缺少 OpenAI/Qdrant 配置或依赖不可达时直接失败。
 
 P0 压测指标、阈值、报告格式和失败处理规则见 `docs/AI虚拟社交记忆服务P0压测指标.md`。
 
@@ -138,7 +138,7 @@ test/unit/
 | 测试 | 覆盖内容 |
 | --- | --- |
 | `test_memory_contracts.py` | 请求契约、枚举、完整轮次校验。 |
-| `test_memory_backends.py` | Fake 后端、远程 Mem0 REST adapter、Mem0 范围删除安全边界。 |
+| `test_memory_backends.py` | Fake 后端、Mem0 Library adapter、Mem0 范围删除安全边界。 |
 | `test_memory_service.py` | 写入幂等、失败任务、删除、重建、防复活。 |
 | `test_memory_api.py` | API 主流程和业务错误状态码。 |
 | `test_memory_end_to_end.py` | 5 轮假后端全链路。 |

@@ -9,7 +9,7 @@ import time
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
-from urllib.error import HTTPError
+from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 from uuid import uuid4
 
@@ -412,6 +412,14 @@ def _is_transient_http_failure(exc: HTTPError) -> bool:
     return any(marker in lowered for marker in transient_markers)
 
 
+def _is_transient_network_failure(exc: BaseException) -> bool:
+    if isinstance(exc, TimeoutError):
+        return True
+    reason = getattr(exc, "reason", exc)
+    lowered = str(reason).lower()
+    return any(marker in lowered for marker in ("timed out", "timeout", "temporarily unavailable"))
+
+
 def _post_json(
     base_url: str,
     path: str,
@@ -456,6 +464,23 @@ def _post_json(
                     request_metrics.non_transient_failure_count += 1
             detail = "transient HTTP failure" if transient else exc.reason
             raise RuntimeError(f"HTTP {exc.code} from {path}: {detail}") from exc
+        except (TimeoutError, URLError, OSError) as exc:
+            if latency_metrics and operation:
+                latency_metrics.record(operation, time.perf_counter() - started_at)
+            transient = _is_transient_network_failure(exc)
+            if transient and attempt < max_attempts:
+                if request_metrics:
+                    request_metrics.retry_count += 1
+                    request_metrics.transient_failure_count += 1
+                time.sleep(sleep_seconds)
+                continue
+            if request_metrics:
+                if transient:
+                    request_metrics.transient_failure_count += 1
+                else:
+                    request_metrics.non_transient_failure_count += 1
+            detail = "transient network failure" if transient else str(exc)
+            raise RuntimeError(f"network failure from {path}: {detail}") from exc
     raise RuntimeError(f"HTTP request attempts exhausted for {path}")
 
 
@@ -644,8 +669,8 @@ def _assert_deleted_rebuild_does_not_inflate(
 def main() -> None:
     load_dotenv()
     settings = Settings()
-    if not settings.mem0_api_url or not settings.mem0_api_key:
-        raise RuntimeError("MEM0_API_URL and MEM0_API_KEY are required")
+    if not settings.openai_api_key or not settings.qdrant_url:
+        raise RuntimeError("OPENAI_API_KEY and QDRANT_URL are required")
     base_url = os.environ.get("THINKBACK_API_URL", "http://127.0.0.1:18082")
     repository = SqlAlchemyMemoryRepository()
     scope = _new_scope()

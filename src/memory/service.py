@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import re
+from concurrent.futures import Future, ThreadPoolExecutor, wait
 from enum import StrEnum
 from hashlib import sha256
+from threading import BoundedSemaphore, Lock
 from time import monotonic
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 
 from memory.backends import MemoryBackend
 from memory.repositories import (
@@ -65,12 +67,37 @@ class MemoryService:
         backend: MemoryBackend,
         history_source: HistorySource | None = None,
         active_memory_cache_ttl_seconds: float = 2.0,
+        l3_write_mode: Literal["sync", "async"] = "sync",
+        l3_executor: ThreadPoolExecutor | None = None,
+        l3_executor_workers: int = 2,
+        l3_max_pending_tasks: int = 64,
+        l3_queue_wait_seconds: float = 0.25,
     ) -> None:
+        if l3_executor_workers < 1:
+            raise ValueError("l3_executor_workers must be >= 1")
+        if l3_max_pending_tasks < 1:
+            raise ValueError("l3_max_pending_tasks must be >= 1")
+        if l3_queue_wait_seconds < 0:
+            raise ValueError("l3_queue_wait_seconds must be >= 0")
         self.repository = repository
         self.backend = backend
         self.history_source = history_source
         self.active_memory_cache_ttl_seconds = active_memory_cache_ttl_seconds
         self._active_memory_cache: dict[tuple[str, str], tuple[float, list[Any]]] = {}
+        self._summary_cache: dict[tuple[str, str], tuple[float, Any | None]] = {}
+        self.l3_write_mode = l3_write_mode
+        self.l3_executor_workers = l3_executor_workers
+        self.l3_max_pending_tasks = l3_max_pending_tasks
+        self.l3_queue_wait_seconds = l3_queue_wait_seconds
+        self._l3_executor = l3_executor or ThreadPoolExecutor(
+            max_workers=l3_executor_workers,
+            thread_name_prefix="thinkback-l3",
+        )
+        self._l3_write_capacity = BoundedSemaphore(l3_max_pending_tasks)
+        self._l3_futures_lock = Lock()
+        self._l3_pending_write_slots = 0
+        self._l3_background_futures: set[Future[None]] = set()
+        self._l3_cleanup_futures: set[Future[None]] = set()
 
     def append(self, request: AppendMemoryRequest) -> AppendMemoryResponse:
         existing = self.repository.get_round(request.round_id)
@@ -78,8 +105,18 @@ class MemoryService:
         if existing:
             self._assert_round_matches_request(existing, request)
             existing_task = self.repository.get_task(task_id)
-            if existing_task is None or existing_task.status is TaskStatus.COMPLETED:
+            if existing_task is None or existing_task.status in {
+                TaskStatus.PENDING,
+                TaskStatus.RUNNING,
+                TaskStatus.COMPLETED,
+            }:
                 return AppendMemoryResponse(status="already_done", task_id=task_id, round_id=request.round_id)
+
+        restricted_or_unsafe = self._is_restricted_or_unsafe(request.messages)
+        l3_slot_reserved = False
+        if self.l3_write_mode == "async" and not restricted_or_unsafe:
+            self._reserve_l3_background_write_slot()
+            l3_slot_reserved = True
 
         previous_task = self.repository.get_task(task_id)
         task = previous_task or TaskEntry(
@@ -98,7 +135,7 @@ class MemoryService:
         try:
             entry = existing or self.repository.save_round(request)
             self.repository.update_l1(entry)
-            if self._is_restricted_or_unsafe(request.messages):
+            if restricted_or_unsafe:
                 l3_events = [{"event": "SKIP", "reason": "restricted_or_unsafe_memory_content"}]
                 self.repository.mark_rounds_deleted(
                     request.user_id,
@@ -112,13 +149,6 @@ class MemoryService:
                 )
             else:
                 self._upsert_default_summary(request.user_id, request.character_id)
-                l3_events = self._add_l3_from_messages(
-                    [{"role": message.role.value, "content": message.content} for message in request.messages],
-                    user_id=request.user_id,
-                    character_id=request.character_id,
-                    source_refs=[{"session_id": request.session_id, "round_id": request.round_id}],
-                    request_metadata=request.metadata,
-                )
                 self._backfill_p0_slots_from_round_source(
                     source_text=" ".join(
                         message.content.strip()
@@ -131,8 +161,42 @@ class MemoryService:
                     source_refs=[{"session_id": request.session_id, "round_id": request.round_id}],
                     request_metadata=request.metadata,
                 )
-                self._invalidate_active_memory_cache(request.user_id, request.character_id)
+                self._invalidate_scope_caches(request.user_id, request.character_id)
+                if self.l3_write_mode == "async":
+                    l3_events = [{"event": "DEFERRED", "reason": "l3_background_write"}]
+                    self._submit_l3_write(
+                        task,
+                        messages=[
+                            {"role": message.role.value, "content": message.content}
+                            for message in request.messages
+                        ],
+                        user_id=request.user_id,
+                        character_id=request.character_id,
+                        source_refs=[{"session_id": request.session_id, "round_id": request.round_id}],
+                        request_metadata=request.metadata,
+                        slot_reserved=l3_slot_reserved,
+                    )
+                    l3_slot_reserved = False
+                    return AppendMemoryResponse(
+                        status="completed",
+                        task_id=task.task_id,
+                        round_id=request.round_id,
+                        l3_events=l3_events,
+                    )
+                l3_events = self._run_l3_write(
+                    messages=[
+                        {"role": message.role.value, "content": message.content}
+                        for message in request.messages
+                    ],
+                    user_id=request.user_id,
+                    character_id=request.character_id,
+                    source_refs=[{"session_id": request.session_id, "round_id": request.round_id}],
+                    request_metadata=request.metadata,
+                )
         except Exception as exc:
+            if l3_slot_reserved:
+                self._release_l3_background_write_slot()
+                l3_slot_reserved = False
             task.status = TaskStatus.FAILED
             task.last_error = str(exc)
             self.repository.save_task(task)
@@ -150,6 +214,163 @@ class MemoryService:
             round_id=request.round_id,
             l3_events=l3_events,
         )
+
+    def drain_l3_background_tasks(self, timeout: float | None = None) -> None:
+        with self._l3_futures_lock:
+            futures = list(self._l3_background_futures | self._l3_cleanup_futures)
+        if not futures:
+            return
+        wait(futures, timeout=timeout)
+        for future in futures:
+            if future.done():
+                future.result()
+
+    def l3_background_status(self) -> dict[str, int | str]:
+        with self._l3_futures_lock:
+            pending_write_tasks = self._l3_pending_write_slots
+            cleanup_tasks = len(self._l3_cleanup_futures)
+        return {
+            "write_mode": self.l3_write_mode,
+            "executor_workers": self.l3_executor_workers,
+            "max_pending_tasks": self.l3_max_pending_tasks,
+            "pending_write_tasks": pending_write_tasks,
+            "cleanup_tasks": cleanup_tasks,
+            "available_capacity": max(0, self.l3_max_pending_tasks - pending_write_tasks),
+        }
+
+    @staticmethod
+    def _bounded_internal_request_id(*parts: str) -> str:
+        raw = ":".join(part for part in parts if part)
+        if len(raw) <= 128:
+            return raw
+        digest = sha256(raw.encode("utf-8")).hexdigest()[:32]
+        return f"memory-extract:{digest}"
+
+    def _submit_l3_write(
+        self,
+        task: TaskEntry,
+        *,
+        messages: list[dict[str, str]],
+        user_id: str,
+        character_id: str,
+        source_refs: list[dict[str, str]],
+        request_metadata: dict,
+        slot_reserved: bool = False,
+    ) -> None:
+        reserved_here = False
+        if not slot_reserved:
+            self._reserve_l3_background_write_slot()
+            reserved_here = True
+        try:
+            future = self._l3_executor.submit(
+                self._complete_async_l3_write,
+                task.task_id,
+                messages,
+                user_id,
+                character_id,
+                source_refs,
+                request_metadata,
+            )
+        except Exception:
+            if reserved_here:
+                self._release_l3_background_write_slot()
+            raise
+        with self._l3_futures_lock:
+            self._l3_background_futures.add(future)
+        future.add_done_callback(self._finish_l3_background_write)
+
+    def _reserve_l3_background_write_slot(self) -> None:
+        acquired = self._l3_write_capacity.acquire(timeout=self.l3_queue_wait_seconds)
+        if not acquired:
+            pending = self._l3_pending_write_count()
+            raise RuntimeError(
+                "l3 background queue full: "
+                f"pending={pending} max={self.l3_max_pending_tasks}"
+            )
+        with self._l3_futures_lock:
+            self._l3_pending_write_slots += 1
+
+    def _release_l3_background_write_slot(self) -> None:
+        with self._l3_futures_lock:
+            if self._l3_pending_write_slots > 0:
+                self._l3_pending_write_slots -= 1
+        self._l3_write_capacity.release()
+
+    def _l3_pending_write_count(self) -> int:
+        with self._l3_futures_lock:
+            return self._l3_pending_write_slots
+
+    def _finish_l3_background_write(self, future: Future[None]) -> None:
+        with self._l3_futures_lock:
+            self._l3_background_futures.discard(future)
+        self._release_l3_background_write_slot()
+
+    def _finish_l3_cleanup(self, future: Future[None]) -> None:
+        with self._l3_futures_lock:
+            self._l3_cleanup_futures.discard(future)
+
+    def _delete_backend_memory(self, memory_id: str) -> None:
+        if self.l3_write_mode == "async":
+            future = self._l3_executor.submit(self.backend.delete, memory_id)
+            with self._l3_futures_lock:
+                self._l3_cleanup_futures.add(future)
+            future.add_done_callback(self._finish_l3_cleanup)
+            return
+        self.backend.delete(memory_id)
+
+    def _complete_async_l3_write(
+        self,
+        task_id: str,
+        messages: list[dict[str, str]],
+        user_id: str,
+        character_id: str,
+        source_refs: list[dict[str, str]],
+        request_metadata: dict,
+    ) -> None:
+        task = self.repository.get_task(task_id)
+        if task is None:
+            return
+        try:
+            l3_events = self._run_l3_write(
+                messages=messages,
+                user_id=user_id,
+                character_id=character_id,
+                source_refs=source_refs,
+                request_metadata=request_metadata,
+            )
+        except Exception as exc:
+            task.status = TaskStatus.FAILED
+            task.last_error = str(exc)
+            self.repository.save_task(task)
+            return
+        task.status = TaskStatus.COMPLETED
+        task.last_error = None
+        task.result = {
+            "round_id": source_refs[0].get("round_id") if source_refs else None,
+            "l3_events": [self._redact_event(event) for event in l3_events],
+        }
+        self.repository.save_task(task)
+
+    def _run_l3_write(
+        self,
+        *,
+        messages: list[dict[str, str]],
+        user_id: str,
+        character_id: str,
+        source_refs: list[dict[str, str]],
+        request_metadata: dict,
+    ) -> list[dict]:
+        if self._source_refs_excluded(user_id, character_id, source_refs):
+            return [{"event": "SKIP", "reason": "source_ref_excluded"}]
+        l3_events = self._add_l3_from_messages(
+            messages,
+            user_id=user_id,
+            character_id=character_id,
+            source_refs=source_refs,
+            request_metadata=request_metadata,
+        )
+        self._invalidate_scope_caches(user_id, character_id)
+        return l3_events
 
     def recall(self, request: RecallMemoryRequest) -> RecallMemoryResponse:
         if request.intent in {
@@ -169,7 +390,7 @@ class MemoryService:
             )
             items.append(MemoryItem(layer="L1", content=content, source=entry.round_id))
 
-        summary = self.repository.get_summary(request.user_id, request.character_id)
+        summary = self._summary(request.user_id, request.character_id)
         if summary and summary.summary_state is SummaryState.ACTIVE and summary.summary_text:
             items.append(MemoryItem(layer="L2", content=summary.summary_text, source=summary.summary_id))
         elif summary and summary.summary_state is SummaryState.STALE and summary.summary_text:
@@ -286,7 +507,7 @@ class MemoryService:
             "session_id": request.session_id,
         }
         self.repository.save_task(task)
-        self._invalidate_active_memory_cache(request.user_id, request.character_id)
+        self._invalidate_scope_caches(request.user_id, request.character_id)
         return DeleteMemoryResponse(
             status="completed",
             task_id=task.task_id,
@@ -344,6 +565,7 @@ class MemoryService:
                     request.character_id,
                     l2_rounds,
                 )
+                self._invalidate_summary_cache(request.user_id, request.character_id)
             if request.rebuild_l3:
                 deleted_refs = self.repository.deleted_source_refs(
                     request.user_id,
@@ -357,7 +579,13 @@ class MemoryService:
                         for ref in memory.source_refs
                     )
                 ]
-                self.backend.delete_many([memory.backend_memory_id for memory in stale_memories])
+                self.backend.delete_many(
+                    [
+                        memory.backend_memory_id
+                        for memory in stale_memories
+                        if self._is_backend_managed_memory_id(memory.backend_memory_id)
+                    ]
+                )
                 for memory in stale_memories:
                     self.repository.mark_memory_superseded(memory.memory_id)
                 for entry in self._uncovered_rebuild_rounds(request, rounds, deleted_refs):
@@ -367,11 +595,33 @@ class MemoryService:
                     ]
                     if self._messages_are_restricted_or_unsafe(messages):
                         continue
-                    self._add_l3_from_messages(
-                        messages,
+                    source_refs = [{"session_id": entry.session_id, "round_id": entry.round_id}]
+                    if self.l3_write_mode == "async":
+                        extract_task, should_submit = self._ensure_l3_extract_task(
+                            request_id=self._bounded_internal_request_id(
+                                request.request_id,
+                                entry.round_id,
+                            ),
+                            user_id=request.user_id,
+                            character_id=request.character_id,
+                            round_id=entry.round_id,
+                        )
+                        if not should_submit:
+                            continue
+                        self._submit_l3_write(
+                            extract_task,
+                            messages=messages,
+                            user_id=request.user_id,
+                            character_id=request.character_id,
+                            source_refs=source_refs,
+                            request_metadata={},
+                        )
+                        continue
+                    self._run_l3_write(
+                        messages=messages,
                         user_id=request.user_id,
                         character_id=request.character_id,
-                        source_refs=[{"session_id": entry.session_id, "round_id": entry.round_id}],
+                        source_refs=source_refs,
                         request_metadata={},
                     )
         except Exception as exc:
@@ -387,7 +637,7 @@ class MemoryService:
             "history_version": request.history_version,
         }
         self.repository.save_task(task)
-        self._invalidate_active_memory_cache(request.user_id, request.character_id)
+        self._invalidate_scope_caches(request.user_id, request.character_id)
         return RebuildMemoryResponse(
             status="completed",
             task_id=task.task_id,
@@ -409,6 +659,37 @@ class MemoryService:
             result=task.result,
         )
 
+    def _ensure_l3_extract_task(
+        self,
+        *,
+        request_id: str,
+        user_id: str,
+        character_id: str,
+        round_id: str,
+    ) -> tuple[TaskEntry, bool]:
+        task_id = f"memory-extract:{round_id}"
+        existing = self.repository.get_task(task_id)
+        if existing is not None and existing.status in {
+            TaskStatus.PENDING,
+            TaskStatus.RUNNING,
+            TaskStatus.COMPLETED,
+        }:
+            return existing, False
+        task = existing or TaskEntry(
+            task_id=task_id,
+            request_id=self._bounded_internal_request_id(request_id),
+            op_type=OperationType.WRITE_ROUND,
+            scope={"user_id": user_id, "character_id": character_id},
+            status=TaskStatus.RUNNING,
+        )
+        task.request_id = self._bounded_internal_request_id(request_id)
+        task.status = TaskStatus.RUNNING
+        task.last_error = None
+        if existing and existing.status is TaskStatus.FAILED:
+            task.retry_count += 1
+        self.repository.save_task(task)
+        return task, True
+
     def _delete_one_memory(self, request: DeleteMemoryRequest) -> list[str]:
         if not request.memory_id:
             raise ValueError("memory_id is required for memory deletion")
@@ -423,7 +704,8 @@ class MemoryService:
         if not memory:
             return []
 
-        self.backend.delete(memory.backend_memory_id)
+        if self._is_backend_managed_memory_id(memory.backend_memory_id):
+            self.backend.delete(memory.backend_memory_id)
         self.repository.mark_memory_deleted(memory.memory_id)
         self._mark_superseded_slot_sources_deleted(
             user_id=request.user_id,
@@ -438,6 +720,7 @@ class MemoryService:
                 source_ref.get("session_id"),
             )
         self.repository.mark_summary(request.user_id, request.character_id, SummaryState.DIRTY)
+        self._invalidate_summary_cache(request.user_id, request.character_id)
         return [memory.memory_id]
 
     def _delete_session_memories(self, request: DeleteMemoryRequest) -> list[str]:
@@ -452,7 +735,8 @@ class MemoryService:
                 if remaining_refs:
                     self.repository.update_memory_source_refs(memory.memory_id, remaining_refs)
                 else:
-                    self.backend.delete(memory.backend_memory_id)
+                    if self._is_backend_managed_memory_id(memory.backend_memory_id):
+                        self.backend.delete(memory.backend_memory_id)
                     self.repository.mark_memory_deleted(memory.memory_id)
                 affected.append(memory.memory_id)
         self.repository.clear_l1(request.user_id, request.character_id, request.session_id)
@@ -462,16 +746,24 @@ class MemoryService:
             request.session_id,
         )
         self.repository.mark_summary(request.user_id, request.character_id, SummaryState.DIRTY)
+        self._invalidate_summary_cache(request.user_id, request.character_id)
         return affected
 
     def _delete_all_memories(self, request: DeleteMemoryRequest) -> list[str]:
         active_memories = self.repository.active_memories(request.user_id, request.character_id)
-        self.backend.delete_many([memory.backend_memory_id for memory in active_memories])
+        self.backend.delete_many(
+            [
+                memory.backend_memory_id
+                for memory in active_memories
+                if self._is_backend_managed_memory_id(memory.backend_memory_id)
+            ]
+        )
         for memory in active_memories:
             self.repository.mark_memory_deleted(memory.memory_id)
         self.repository.clear_l1(request.user_id, request.character_id)
         self.repository.mark_rounds_deleted(request.user_id, request.character_id)
         self.repository.mark_summary(request.user_id, request.character_id, SummaryState.DIRTY)
+        self._invalidate_summary_cache(request.user_id, request.character_id)
         return [memory.memory_id for memory in active_memories]
 
     def _active_memories(self, user_id: str, character_id: str) -> list[Any]:
@@ -488,6 +780,25 @@ class MemoryService:
 
     def _invalidate_active_memory_cache(self, user_id: str, character_id: str) -> None:
         self._active_memory_cache.pop((user_id, character_id), None)
+
+    def _summary(self, user_id: str, character_id: str) -> Any | None:
+        cache_key = (user_id, character_id)
+        now = monotonic()
+        cached = self._summary_cache.get(cache_key)
+        if cached is not None:
+            cached_at, cached_summary = cached
+            if now - cached_at <= self.active_memory_cache_ttl_seconds:
+                return cached_summary
+        summary = self.repository.get_summary(user_id, character_id)
+        self._summary_cache[cache_key] = (now, summary)
+        return summary
+
+    def _invalidate_summary_cache(self, user_id: str, character_id: str) -> None:
+        self._summary_cache.pop((user_id, character_id), None)
+
+    def _invalidate_scope_caches(self, user_id: str, character_id: str) -> None:
+        self._invalidate_active_memory_cache(user_id, character_id)
+        self._invalidate_summary_cache(user_id, character_id)
 
     def _dedupe_and_clip(self, items: list[MemoryItem], token_budget: int) -> list[MemoryItem]:
         priority = {"L3": 3, "L2": 2, "L1": 1}
@@ -628,6 +939,15 @@ class MemoryService:
             character_id=character_id,
             metadata=l3_metadata,
         )
+        if self._source_refs_excluded(user_id, character_id, source_refs):
+            self.backend.delete_many(
+                [
+                    str(event.get("id", ""))
+                    for event in events
+                    if self._is_backend_managed_memory_id(str(event.get("id", "")))
+                ]
+            )
+            return [{"event": "SKIP", "reason": "source_ref_excluded"}]
         for event in events:
             self._index_l3_event(
                 event,
@@ -736,6 +1056,9 @@ class MemoryService:
         memory_text = self._canonical_memory_text_from_source(original_memory_text, l3_metadata)
         if not backend_id or event.get("event") not in {"ADD", "UPDATE"}:
             return
+        if self._source_refs_excluded(user_id, character_id, source_refs):
+            self.backend.delete(backend_id)
+            return
 
         raw_event_metadata = event.get("metadata")
         event_metadata: dict[str, Any] = (
@@ -775,6 +1098,31 @@ class MemoryService:
                 self.backend.update(backend_id, memory_text)
             return
 
+        same_source_local = self._same_source_local_p0_memory(
+            user_id=user_id,
+            character_id=character_id,
+            memory_text=memory_text,
+            l3_metadata=l3_metadata,
+        )
+        if same_source_local is not None:
+            self.repository.update_memory_index(
+                same_source_local.memory_id,
+                backend_memory_id=backend_id,
+                source_refs=source_refs,
+                memory_text=memory_text,
+                source_type=str(l3_metadata["source_type"]),
+                fact_subject=str(l3_metadata["fact_subject"]),
+                context_type=str(l3_metadata["context_type"]),
+                roleplay_mode=str(l3_metadata["roleplay_mode"]),
+                data_classification=str(l3_metadata["data_classification"]),
+                memory_type=str(l3_metadata["memory_type"]),
+                backend_categories=backend_categories,
+                metadata={**index_metadata, "p0_source_backfill": True, "backend_materialized": True},
+            )
+            if memory_text != original_memory_text:
+                self.backend.update(backend_id, memory_text)
+            return
+
         if self._is_older_than_active_conflicting_memory(
             user_id=user_id,
             character_id=character_id,
@@ -809,6 +1157,27 @@ class MemoryService:
         if memory_text != original_memory_text:
             self.backend.update(backend_id, memory_text)
 
+    def _same_source_local_p0_memory(
+        self,
+        *,
+        user_id: str,
+        character_id: str,
+        memory_text: str,
+        l3_metadata: dict[str, Any],
+    ) -> Any | None:
+        return next(
+            (
+                memory
+                for memory in self.repository.active_memories(user_id, character_id)
+                if self._is_same_source_local_p0_memory(
+                    memory,
+                    memory_text=memory_text,
+                    l3_metadata=l3_metadata,
+                )
+            ),
+            None,
+        )
+
     def _supersede_conflicting_memories(
         self,
         *,
@@ -829,8 +1198,13 @@ class MemoryService:
                 continue
             if self._conflict_partition(memory) != new_partition:
                 continue
-            self.backend.delete(memory.backend_memory_id)
+            if self._is_backend_managed_memory_id(memory.backend_memory_id):
+                self._delete_backend_memory(memory.backend_memory_id)
             self.repository.mark_memory_superseded(memory.memory_id)
+
+    @staticmethod
+    def _is_backend_managed_memory_id(memory_id: str) -> bool:
+        return not memory_id.startswith("local-p0:")
 
     def _is_older_than_active_conflicting_memory(
         self,
@@ -856,9 +1230,40 @@ class MemoryService:
             if self._conflict_partition(memory) != new_partition:
                 continue
             existing_cursor = self._source_cursor(memory.metadata)
-            if existing_cursor is not None and new_cursor <= existing_cursor:
+            if existing_cursor is None:
+                continue
+            if new_cursor < existing_cursor:
+                return True
+            if new_cursor == existing_cursor and not self._is_same_source_local_p0_memory(
+                memory,
+                memory_text=memory_text,
+                l3_metadata=l3_metadata or {},
+            ):
                 return True
         return False
+
+    @staticmethod
+    def _is_same_source_local_p0_memory(
+        memory: Any,
+        *,
+        memory_text: str,
+        l3_metadata: dict[str, Any],
+    ) -> bool:
+        backend_memory_id = str(getattr(memory, "backend_memory_id", ""))
+        if not backend_memory_id.startswith("local-p0:"):
+            return False
+        if MemoryService._memory_conflict_slot(getattr(memory, "memory_text", "")) != MemoryService._memory_conflict_slot(memory_text):
+            return False
+        existing_refs = {source_ref_key(ref) for ref in getattr(memory, "source_refs", [])}
+        raw_refs = l3_metadata.get("source_refs")
+        if not isinstance(raw_refs, list):
+            return False
+        new_refs = {
+            source_ref_key(ref)
+            for ref in raw_refs
+            if isinstance(ref, dict)
+        }
+        return bool(existing_refs & new_refs)
 
     @staticmethod
     def _source_cursor(metadata: dict[str, Any]) -> tuple[str, str] | None:
@@ -1024,6 +1429,8 @@ class MemoryService:
             )
             return nickname in source_text and any(marker in lowered_source for marker in nickname_markers)
         slot = cls._memory_conflict_slot(memory_text)
+        if slot is None:
+            return False
         if slot == "birthday":
             return cls._source_has_any(source_text, ("生日", "birthday"))
         source_slots = {
@@ -1175,7 +1582,7 @@ class MemoryService:
         if not source_text:
             return None
         memory_slot = cls._memory_conflict_slot(memory_text)
-        if memory_slot != "preferred_nickname":
+        if memory_slot is None:
             return None
         for source_memory_text in cls._p0_canonical_memories_from_source(source_text):
             if cls._memory_conflict_slot(source_memory_text) == memory_slot:
@@ -1390,6 +1797,7 @@ class MemoryService:
             return None
         patterns = (
             r"\bfrom\s+.+?\s+to\s+(.+?)(?:[.;。]|$)",
+            r"\bcorrected\s+(?:their\s+)?birthday\s+to\s+(.+?)(?:\s*\(|,|\s+not\b|[.;。]|$)",
             r"\bbirthday\s+falls\s+on\s+(.+?)(?:,|\s+correcting\b|[.;。]|$)",
             r"\bbirthday\s+has\s+been\s+updated\s+to\s+(.+?)(?:,|\s+not\b|[.;。]|$)",
             r"\bbirthday\s*(?:is|:)\s*(.+?)(?:[.;。]|$)",
@@ -1479,6 +1887,7 @@ class MemoryService:
                 r"\bswitched\s+from\s+regularly\s+drinking\s+.+?\s+to\s+preferring\s+(.+?)\s+as\s+their\s+daily\s+beverage\b",
                 r"\bswitched\s+from\s+.+?\s+to\s+(.+?)\s+as\s+their\s+preferred\s+beverage\b",
                 r"\bswitched\s+from\s+.+?\s+to\s+(.+?)\s+as\s+their\s+preferred\s+drink\b",
+                r"\bprefers\s+(.+?)\s+over\s+.+?\s+and\s+no\s+longer\s+drinks?\b",
                 r"\bno\s+longer\s+drinks?\s+.+?,\s+only\s+(.+?)(?:[.;。]|$)",
                 r"\bno\s+longer\s+drinking\s+.+?,\s+only\s+(.+?)(?:[.;。]|$)",
                 r"\bfavorite\s+drink\s*(?:is|:)\s*(.+?)(?:[.;。]|$)",
@@ -1499,6 +1908,7 @@ class MemoryService:
                 r"\bswitched\s+food\s+preference\s+from\s+.+?\s+to\s+(.+?)(?:[.;。]|$)",
                 r"\bswitched\s+their\s+food\s+preference\s+from\s+.+?\s+to\s+(.+?)(?:[.;。]|$)",
                 r"\bfood\s+preference\s+changed\s+to\s+(.+?)(?:[.;。]|$)",
+                r"\bprefers\s+(.+?)\s+over\s+.+?\s+and\s+no\s+longer\s+eats?\b",
                 r"\bno\s+longer\s+eats?\s+.+?,\s+only\s+(.+?)(?:[.;。]|$)",
                 r"\bno\s+longer\s+eating\s+.+?,\s+only\s+(.+?)(?:[.;。]|$)",
                 r"\bfavorite\s+food\s*(?:is|:)\s*(.+?)(?:[.;。]|$)",
@@ -1656,6 +2066,7 @@ class MemoryService:
             and self._round_allowed_in_default_summary(entry)
         ]
         self.repository.upsert_summary_from_rounds(user_id, character_id, rounds)
+        self._invalidate_summary_cache(user_id, character_id)
 
     @staticmethod
     def _round_allowed_in_default_summary(entry: JournalEntry) -> bool:
@@ -1700,6 +2111,15 @@ class MemoryService:
             or existing.round_fingerprint != request_fingerprint(request)
         ):
             raise ValueError("round_id conflict: existing round scope or fingerprint does not match")
+
+    def _source_refs_excluded(
+        self,
+        user_id: str,
+        character_id: str,
+        source_refs: list[dict[str, str]],
+    ) -> bool:
+        excluded_refs = self.repository.excluded_source_refs(user_id, character_id)
+        return any(source_ref_key(source_ref) in excluded_refs for source_ref in source_refs)
 
     def _rebuild_rounds(self, request: RebuildMemoryRequest) -> list[JournalEntry]:
         excluded_refs = self.repository.deleted_source_refs(request.user_id, request.character_id)

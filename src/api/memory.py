@@ -39,7 +39,9 @@ async def _run_memory_call(method: Callable[P, R], *args: P.args, **kwargs: P.kw
         raise HTTPException(status_code=status_code, detail=detail) from exc
     except RuntimeError as exc:
         detail = str(exc)
-        if "mem0 http" in detail or "memory backend" in detail:
+        if "l3 background queue full" in detail:
+            raise HTTPException(status_code=503, detail=detail) from exc
+        if "mem0 library" in detail or "memory backend" in detail:
             raise HTTPException(status_code=502, detail=detail) from exc
         raise
 
@@ -85,3 +87,10 @@ async def get_memory_task(
     if task is None:
         raise HTTPException(status_code=404, detail="memory task not found")
     return task
+
+
+@router.get("/l3/background-status")
+async def get_l3_background_status(
+    service: MemoryService = Depends(get_memory_service),
+) -> dict:
+    return await _run_memory_call(service.l3_background_status)

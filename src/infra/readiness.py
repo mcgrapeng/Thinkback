@@ -6,10 +6,10 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urljoin
 from urllib.request import Request, urlopen
 
+from api.dependencies import get_memory_backend
 from infra.cache.redis_client import check_redis
 from infra.config import settings
 from infra.database.engine import check_database
-from memory.backends import Mem0HttpMemoryBackend
 
 DependencyCheck = Callable[[], Awaitable[dict[str, str]]]
 
@@ -57,16 +57,22 @@ async def _run_dependency_check(
         return name, {"status": "not_ready", "detail": str(exc)}
 
 
-async def collect_readiness(timeout_seconds: float = 2.0) -> dict[str, object]:
+async def collect_readiness(timeout_seconds: float | None = None) -> dict[str, object]:
+    effective_timeout_seconds = (
+        settings.readiness_timeout_seconds if timeout_seconds is None else timeout_seconds
+    )
     checks: dict[str, DependencyCheck] = {
         "database": check_database,
         "redis": check_redis,
         "qdrant": check_qdrant,
-        "mem0": check_mem0_api,
+        "mem0": check_mem0_library,
     }
     dependencies = dict(
         await asyncio.gather(
-            *(_run_dependency_check(name, check, timeout_seconds) for name, check in checks.items())
+            *(
+                _run_dependency_check(name, check, effective_timeout_seconds)
+                for name, check in checks.items()
+            )
         )
     )
     status = (
@@ -75,12 +81,8 @@ async def collect_readiness(timeout_seconds: float = 2.0) -> dict[str, object]:
     return {"status": status, "dependencies": dependencies}
 
 
-async def check_mem0_api() -> dict[str, str]:
-    backend = Mem0HttpMemoryBackend(
-        api_url=settings.mem0_api_url,
-        api_key=settings.mem0_api_key,
-        timeout_seconds=2.0,
-    )
+async def check_mem0_library() -> dict[str, str]:
+    backend = get_memory_backend(settings)
     return await asyncio.to_thread(backend.health_check)
 
 

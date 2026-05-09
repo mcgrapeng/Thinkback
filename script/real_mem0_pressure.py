@@ -1,8 +1,8 @@
-"""Run a real 5-round pressure scenario against remote Mem0 REST.
+"""Run a real 5-round pressure scenario against Mem0 Library.
 
 This script intentionally does not support fake mode. It validates configuration
 up front, then exercises append, recall, delete, rebuild, and recall again with
-the real Mem0 adapter.
+the real Mem0 Library adapter and shared Qdrant.
 """
 
 from __future__ import annotations
@@ -35,10 +35,10 @@ from memory.service import MemoryService
 
 def _require_real_config(settings: Settings) -> None:
     missing = []
-    if not settings.mem0_api_url:
-        missing.append("MEM0_API_URL")
-    if not settings.mem0_api_key:
-        missing.append("MEM0_API_KEY")
+    if not settings.openai_api_key:
+        missing.append("OPENAI_API_KEY")
+    if not settings.qdrant_url:
+        missing.append("QDRANT_URL")
     if missing:
         raise RuntimeError(f"real pressure test requires: {', '.join(missing)}")
 
