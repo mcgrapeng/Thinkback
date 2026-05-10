@@ -48,6 +48,14 @@ class QualityScope:
             session_id=session_id,
         )
 
+    def for_user(self, user_id: str, session_id: str) -> QualityScope:
+        return QualityScope(
+            run_id=self.run_id,
+            user_id=user_id,
+            character_id=self.character_id,
+            session_id=session_id,
+        )
+
 
 @dataclass(frozen=True)
 class EvaluationCase:
@@ -279,11 +287,35 @@ def build_quality_report(
         "category_metrics": category_metrics,
         "request_metrics": request_metrics_dict,
         "latency_ms": (latency_metrics or LatencyMetrics()).as_dict(),
+        "metric_automation_status": _metric_automation_status(),
     }
     failed_metrics = _failed_metric_gates(report)
     report["failed_metrics"] = failed_metrics
     report["passed"] = not failed_cases and not failed_metrics
     return report
+
+
+def _metric_automation_status() -> dict[str, str]:
+    return {
+        "case_pass_rate": "automatic",
+        "recall_at_10": "automatic",
+        "precision_at_10": "automatic",
+        "item_precision_at_10": "automatic",
+        "top1_hit_rate": "automatic",
+        "mrr": "automatic",
+        "irrelevant_l3_per_query": "automatic",
+        "conflict_pollution_rate": "automatic",
+        "false_positive_rate": "automatic",
+        "duplicate_active_rate": "automatic",
+        "delete_memory_residue_rate": "case_gate",
+        "delete_session_residue_rate": "pending",
+        "delete_all_residue_rate": "pending",
+        "rebuild_resurrection_rate": "case_gate",
+        "cross_user_leak_rate": "case_gate_independent_field_pending",
+        "cross_character_leak_rate": "case_gate",
+        "roleplay_real_mix_rate": "case_gate",
+        "known_drift_regression_pass_rate": "manual_review",
+    }
 
 
 def _nearest_rank_ms(ordered_samples: list[float], percentile: float) -> int:
@@ -323,7 +355,7 @@ def _normalized_partition_value(value: str, default: str) -> str:
 
 def _failed_metric_gates(report: dict[str, Any]) -> list[dict[str, Any]]:
     gates: tuple[tuple[str, str, float], ...] = (
-        ("case_pass_rate", ">=", 0.98),
+        ("case_pass_rate", "==", 1.0),
         ("recall_at_10", ">=", 0.95),
         ("precision_at_10", ">=", 0.95),
         ("false_positive_rate", "<=", 0.02),
@@ -338,7 +370,7 @@ def _failed_metric_gates(report: dict[str, Any]) -> list[dict[str, Any]]:
         elif operator == "<=" and actual > expected:
             failed.append({"metric": metric, "actual": actual, "expected": f"<= {expected}"})
         elif operator == "==" and actual != expected:
-            failed.append({"metric": metric, "actual": actual, "expected": "== 0"})
+            failed.append({"metric": metric, "actual": actual, "expected": f"== {expected:g}"})
     return failed
 
 
@@ -678,6 +710,10 @@ def main() -> None:
     latency_metrics = LatencyMetrics()
 
     print(f"quality scope: run_id={scope.run_id}")
+    other_user_scope = scope.for_user(
+        f"{scope.run_id}-other-user",
+        f"{scope.run_id}-other-user-session",
+    )
     other_character_scope = scope.for_character(
         f"{scope.run_id}-other-character",
         f"{scope.run_id}-other-session",
@@ -707,6 +743,14 @@ def main() -> None:
             "fact_subject": "story_world",
             "backend_categories": ["story_world"],
         },
+        request_metrics=request_metrics,
+        latency_metrics=latency_metrics,
+    )
+    _append_round(
+        base_url,
+        other_user_scope,
+        1,
+        "我只告诉另一个用户：我的猫叫奶盖。",
         request_metrics=request_metrics,
         latency_metrics=latency_metrics,
     )
@@ -837,6 +881,13 @@ def main() -> None:
             query="剧情设定里的猫叫什么？",
             expected_terms=["露露"],
             forbidden_terms=["麻薯", "团子"],
+        ),
+        EvaluationCase(
+            name="negative-cross-user-cat",
+            category="isolation",
+            query="用户的猫叫什么？",
+            expected_terms=["麻薯"],
+            forbidden_terms=["奶盖"],
         ),
         EvaluationCase(
             name="negative-cross-character-cat",

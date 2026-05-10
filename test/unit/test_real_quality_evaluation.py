@@ -203,6 +203,20 @@ def test_quality_scope_round_ids_are_unique_across_characters() -> None:
     assert scope.round_id(1) != other_scope.round_id(1)
 
 
+def test_quality_scope_round_ids_are_unique_across_users() -> None:
+    scope = QualityScope(
+        run_id="quality-run",
+        user_id="user-1",
+        character_id="character-a",
+        session_id="session-a",
+    )
+    other_scope = scope.for_user("user-2", "session-b")
+
+    assert scope.user_id != other_scope.user_id
+    assert scope.character_id == other_scope.character_id
+    assert scope.round_id(1) != other_scope.round_id(1)
+
+
 def test_quality_report_includes_request_metrics() -> None:
     metrics = RequestMetrics(request_count=4, retry_count=2, transient_failure_count=2)
 
@@ -248,7 +262,7 @@ def test_quality_report_includes_duplicate_active_rate() -> None:
     assert report["duplicate_active_rate"] == 1 / 3
 
 
-def test_quality_report_exposes_p0_stable_metric_fields() -> None:
+def test_quality_report_exposes_quality_stable_metric_fields() -> None:
     report = build_quality_report([], [], active_memory_count=0, active_after_rebuild=0)
 
     assert report["delete_memory_residue_rate"] == 0.0
@@ -266,6 +280,13 @@ def test_quality_report_exposes_p0_stable_metric_fields() -> None:
     assert report["timeout_rate"] is None
     assert report["idempotency_failure_rate"] is None
     assert report["transient_retry_rate"] == 0.0
+    assert report["metric_automation_status"]["recall_at_10"] == "automatic"
+    assert report["metric_automation_status"]["irrelevant_l3_per_query"] == "automatic"
+    assert report["metric_automation_status"]["delete_memory_residue_rate"] == "case_gate"
+    assert (
+        report["metric_automation_status"]["cross_user_leak_rate"]
+        == "case_gate_independent_field_pending"
+    )
 
 
 def test_quality_report_caps_transient_retry_rate_by_request_count() -> None:
@@ -351,6 +372,38 @@ def test_quality_report_lists_failed_metrics_when_gate_fails_without_failed_case
             "expected": "== 0",
         }
     ]
+
+
+def test_quality_report_requires_all_core_cases_to_pass() -> None:
+    cases = [
+        EvaluationCase(
+            name="nickname",
+            category="slot_conflict",
+            query="现在应该怎么称呼用户？",
+            expected_terms=["小鹏"],
+            forbidden_terms=["阿鹏"],
+        ),
+        EvaluationCase(
+            name="location",
+            category="slot_conflict",
+            query="用户现在住在哪？",
+            expected_terms=["上海"],
+            forbidden_terms=["杭州"],
+        ),
+    ]
+    results = [
+        QueryResult(case_name="nickname", recalled_text="User prefers to be called 小鹏"),
+        QueryResult(case_name="location", recalled_text=""),
+    ]
+
+    report = build_quality_report(cases, results, active_memory_count=2, active_after_rebuild=2)
+
+    assert report["case_pass_rate"] == 0.5
+    assert {
+        "metric": "case_pass_rate",
+        "actual": 0.5,
+        "expected": "== 1",
+    } in report["failed_metrics"]
 
 
 def test_http_502_timeout_is_transient_for_quality_runner() -> None:

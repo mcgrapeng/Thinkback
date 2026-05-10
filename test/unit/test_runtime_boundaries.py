@@ -23,7 +23,7 @@ def test_mem0_boundary_uses_library_adapter_without_direct_qdrant_client() -> No
     assert "QdrantClient" not in source
 
 
-def test_memory_service_exposes_p0_public_workflows() -> None:
+def test_memory_service_exposes_public_workflows() -> None:
     from memory.backends import FakeMemoryBackend
     from memory.repositories import InMemoryMemoryRepository
     from memory.service import MemoryService
@@ -104,14 +104,14 @@ def test_memory_routes_call_sync_service_in_threadpool() -> None:
     assert "_run_memory_call(service.rebuild, request)" in source
 
 
-def test_real_pressure_script_uses_sql_repository_not_in_memory() -> None:
+def test_real_validation_script_uses_sql_repository_not_in_memory() -> None:
     source = Path("script/real_mem0_pressure.py").read_text(encoding="utf-8")
 
     assert "SqlAlchemyMemoryRepository" in source
     assert "InMemoryMemoryRepository" not in source
 
 
-def test_real_pressure_script_reuses_configurable_mem0_backend() -> None:
+def test_real_validation_script_reuses_configurable_mem0_backend() -> None:
     source = Path("script/real_mem0_pressure.py").read_text(encoding="utf-8")
 
     assert "get_memory_backend(settings)" in source
@@ -120,7 +120,7 @@ def test_real_pressure_script_reuses_configurable_mem0_backend() -> None:
     assert "repository.memories.values()" not in source
 
 
-def test_real_pressure_script_generates_unique_scope_and_ids() -> None:
+def test_real_validation_script_generates_unique_scope_and_ids() -> None:
     from script.real_mem0_pressure import _new_run_scope
 
     first = _new_run_scope("20260504T010203")
@@ -134,7 +134,7 @@ def test_real_pressure_script_generates_unique_scope_and_ids() -> None:
     assert first.operation_id("delete") != second.operation_id("delete")
 
 
-def test_real_pressure_delete_target_uses_any_active_memory_not_text_keywords() -> None:
+def test_real_validation_delete_target_uses_any_active_memory_not_text_keywords() -> None:
     from script.real_mem0_pressure import _select_delete_target
 
     target = SimpleNamespace(
@@ -148,7 +148,7 @@ def test_real_pressure_delete_target_uses_any_active_memory_not_text_keywords() 
     assert _select_delete_target(repository, "user-1", "char-1") is target
 
 
-def test_real_pressure_delete_target_fails_when_no_active_l3_memory() -> None:
+def test_real_validation_delete_target_fails_when_no_active_l3_memory() -> None:
     from script.real_mem0_pressure import _select_delete_target
 
     repository = SimpleNamespace(active_memories=lambda user_id, character_id: [])
@@ -158,10 +158,10 @@ def test_real_pressure_delete_target_fails_when_no_active_l3_memory() -> None:
     except RuntimeError as exc:
         assert "no active L3 memory" in str(exc)
     else:
-        raise AssertionError("expected missing active memory to fail pressure test")
+        raise AssertionError("expected missing active memory to fail validation")
 
 
-def test_real_pressure_l3_generation_failure_points_to_mem0_provider() -> None:
+def test_real_validation_l3_generation_failure_points_to_mem0_provider() -> None:
     from script.real_mem0_pressure import _assert_l3_generated
 
     repository = SimpleNamespace(active_memories=lambda user_id, character_id: [])
@@ -172,4 +172,4 @@ def test_real_pressure_l3_generation_failure_points_to_mem0_provider() -> None:
         assert "produced no active L3 memories" in str(exc)
         assert "Mem0 LLM/embedding provider" in str(exc)
     else:
-        raise AssertionError("expected missing generated L3 memory to fail pressure test")
+        raise AssertionError("expected missing generated L3 memory to fail validation")

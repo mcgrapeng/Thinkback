@@ -7,7 +7,7 @@
 ```text
 Thinkback/
 ├── alembic/                 数据库迁移
-├── docs/                    架构、部署、迁移、压测指标和项目文档
+├── docs/                    架构、部署、迁移、评测方案和项目文档
 ├── k8s/                     Kubernetes 部署清单
 ├── script/                  运维和真实链路脚本
 ├── src/                     应用源码
@@ -97,7 +97,7 @@ alembic/
 ├── env.py
 ├── script.py.mako
 └── versions/
-    └── 20260504_0001_memory_p0_tables.py
+    └── <首版记忆服务表结构迁移>
 ```
 
 首版迁移创建：
@@ -117,9 +117,14 @@ script/
 └── real_mem0_pressure.py
 ```
 
-真实 5 轮压测脚本，使用真实 Mem0 Library、OpenAI、Qdrant 和 PostgreSQL。脚本不支持 fake 模式，缺少 OpenAI/Qdrant 配置或依赖不可达时直接失败。
+真实主链路质量验证脚本，使用真实 Mem0 Library、OpenAI、Qdrant 和 PostgreSQL。
+脚本不支持 fake 模式，缺少 OpenAI/Qdrant 配置或依赖不可达时直接失败。
 
-P0 压测指标、阈值、报告格式和失败处理规则见 `docs/AI虚拟社交记忆服务P0压测指标.md`。
+首版记忆质量评测、报告字段、报告模板和失败处理规则见
+`docs/AI虚拟社交记忆服务首版主链路质量评测方案.md`、
+`docs/AI虚拟社交记忆服务首版主链路质量评测报告字段.md` 和
+`docs/AI虚拟社交记忆服务首版主链路质量评测报告模板.md`。
+性能与稳定性测试见 `docs/AI虚拟社交记忆服务性能与稳定性测试方案.md`。
 
 ## 7. test
 
@@ -142,4 +147,4 @@ test/unit/
 | `test_memory_service.py` | 写入幂等、失败任务、删除、重建、防复活。 |
 | `test_memory_api.py` | API 主流程和业务错误状态码。 |
 | `test_memory_end_to_end.py` | 5 轮假后端全链路。 |
-| `test_runtime_boundaries.py` | 默认仓库、线程池调用、真实压测脚本边界。 |
+| `test_runtime_boundaries.py` | 默认仓库、线程池调用、真实验证脚本边界。 |

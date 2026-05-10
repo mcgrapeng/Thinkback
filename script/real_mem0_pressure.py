@@ -1,4 +1,4 @@
-"""Run a real 5-round pressure scenario against Mem0 Library.
+"""Run a real 5-round validation scenario against Mem0 Library.
 
 This script intentionally does not support fake mode. It validates configuration
 up front, then exercises append, recall, delete, rebuild, and recall again with
@@ -40,7 +40,7 @@ def _require_real_config(settings: Settings) -> None:
     if not settings.qdrant_url:
         missing.append("QDRANT_URL")
     if missing:
-        raise RuntimeError(f"real pressure test requires: {', '.join(missing)}")
+        raise RuntimeError(f"real validation requires: {', '.join(missing)}")
 
 
 def _check_database() -> None:
@@ -119,7 +119,7 @@ def _assert_l3_generated(repository: _ActiveMemoryRepository, user_id: str, char
     active_count = len(repository.active_memories(user_id, character_id))
     if active_count < 1:
         raise RuntimeError(
-            "real pressure test produced no active L3 memories; "
+            "real validation produced no active L3 memories; "
             "check Mem0 LLM/embedding provider availability, quota, and /memories response events"
         )
 
@@ -131,7 +131,7 @@ def _select_delete_target(
         if getattr(memory, "memory_status", MemoryStatus.ACTIVE) == MemoryStatus.ACTIVE:
             return memory
     raise RuntimeError(
-        f"no active L3 memory found for real pressure scope user_id={user_id}, "
+        f"no active L3 memory found for real validation scope user_id={user_id}, "
         f"character_id={character_id}"
     )
 
@@ -149,7 +149,7 @@ def main() -> None:
     )
     scope = _new_run_scope()
     print(
-        "real pressure scope: "
+        "real validation scope: "
         f"run_id={scope.run_id}, user_id={scope.user_id}, "
         f"character_id={scope.character_id}, session_id={scope.session_id}"
     )
