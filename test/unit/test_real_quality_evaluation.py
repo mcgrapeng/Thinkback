@@ -46,6 +46,8 @@ from script.real_mem0_quality_regression import (
     build_quality_report,
 )
 
+QUALITY_REPORT_PREFIX = "AI虚拟社交记忆服务首版主链路质量评测报告"
+
 
 def test_quality_report_counts_recall_precision_false_positive_and_conflicts() -> None:
     cases = [
@@ -265,13 +267,13 @@ def test_quality_report_includes_duplicate_active_rate() -> None:
 def test_quality_report_exposes_quality_stable_metric_fields() -> None:
     report = build_quality_report([], [], active_memory_count=0, active_after_rebuild=0)
 
-    assert report["delete_memory_residue_rate"] == 0.0
+    assert report["delete_memory_residue_rate"] is None
     assert report["delete_session_residue_rate"] is None
     assert report["delete_all_residue_rate"] is None
-    assert report["rebuild_resurrection_rate"] == 0.0
+    assert report["rebuild_resurrection_rate"] is None
     assert report["cross_user_leak_rate"] is None
-    assert report["cross_character_leak_rate"] == 0.0
-    assert report["roleplay_real_mix_rate"] == 0.0
+    assert report["cross_character_leak_rate"] is None
+    assert report["roleplay_real_mix_rate"] is None
     assert report["dirty_summary_recall_rate"] is None
     assert report["source_ref_loss_rate"] is None
     assert report["critical_slot_pass_rate"] is None
@@ -283,10 +285,113 @@ def test_quality_report_exposes_quality_stable_metric_fields() -> None:
     assert report["metric_automation_status"]["recall_at_10"] == "automatic"
     assert report["metric_automation_status"]["irrelevant_l3_per_query"] == "automatic"
     assert report["metric_automation_status"]["delete_memory_residue_rate"] == "case_gate"
-    assert (
-        report["metric_automation_status"]["cross_user_leak_rate"]
-        == "case_gate_independent_field_pending"
-    )
+    assert report["metric_automation_status"]["cross_user_leak_rate"] == "case_gate"
+
+
+def test_quality_report_computes_scope_leak_rates_from_tagged_cases() -> None:
+    cases = [
+        EvaluationCase(
+            name="cross-user-clean",
+            category="isolation",
+            query="用户的猫叫什么？",
+            expected_terms=["麻薯"],
+            forbidden_terms=["奶盖"],
+            metric_tags=("cross_user_leak_rate",),
+        ),
+        EvaluationCase(
+            name="cross-character-leak",
+            category="isolation",
+            query="用户的猫叫什么？",
+            expected_terms=["麻薯"],
+            forbidden_terms=["泡芙"],
+            metric_tags=("cross_character_leak_rate",),
+        ),
+        EvaluationCase(
+            name="roleplay-clean",
+            category="isolation",
+            query="剧情设定里的猫叫什么？",
+            expected_terms=["露露"],
+            forbidden_terms=["麻薯"],
+            metric_tags=("roleplay_real_mix_rate",),
+        ),
+    ]
+    results = [
+        QueryResult(case_name="cross-user-clean", recalled_text="User has a cat named 麻薯"),
+        QueryResult(case_name="cross-character-leak", recalled_text="User has a cat named 泡芙"),
+        QueryResult(case_name="roleplay-clean", recalled_text="Story-world cat is 露露"),
+    ]
+
+    report = build_quality_report(cases, results, active_memory_count=3, active_after_rebuild=3)
+
+    assert report["cross_user_leak_rate"] == 0.0
+    assert report["cross_character_leak_rate"] == 1.0
+    assert report["roleplay_real_mix_rate"] == 0.0
+    assert {
+        "metric": "cross_character_leak_rate",
+        "actual": 1.0,
+        "expected": "<= 0",
+    } in report["failed_metrics"]
+
+
+def test_quality_report_scope_leak_rates_only_count_l3_content() -> None:
+    cases = [
+        EvaluationCase(
+            name="roleplay-cat",
+            category="isolation",
+            query="剧情设定里的猫叫什么？",
+            expected_terms=["露露"],
+            forbidden_terms=["麻薯"],
+            metric_tags=("roleplay_real_mix_rate",),
+        ),
+    ]
+    results = [
+        QueryResult(
+            case_name="roleplay-cat",
+            recalled_text="User has a cat named 露露",
+            all_recalled_text="L1: 用户现实里的猫叫麻薯\nL3: User has a cat named 露露",
+            l3_contents=["User has a cat named 露露"],
+        ),
+    ]
+
+    report = build_quality_report(cases, results, active_memory_count=1, active_after_rebuild=1)
+
+    assert report["roleplay_real_mix_rate"] == 0.0
+    assert report["failed_metrics"] == []
+
+
+def test_quality_report_computes_delete_and_rebuild_rates_from_tagged_cases() -> None:
+    cases = [
+        EvaluationCase(
+            name="deleted-cat-after-delete",
+            category="delete_memory",
+            query="用户的猫叫什么？",
+            expected_terms=[],
+            forbidden_terms=["麻薯"],
+            metric_tags=("delete_memory_residue_rate",),
+        ),
+        EvaluationCase(
+            name="deleted-cat-after-rebuild",
+            category="rebuild",
+            query="用户的猫叫什么？",
+            expected_terms=[],
+            forbidden_terms=["麻薯"],
+            metric_tags=("rebuild_resurrection_rate",),
+        ),
+    ]
+    results = [
+        QueryResult(case_name="deleted-cat-after-delete", recalled_text="", l3_count=0),
+        QueryResult(case_name="deleted-cat-after-rebuild", recalled_text="User has a cat named 麻薯", l3_count=1),
+    ]
+
+    report = build_quality_report(cases, results, active_memory_count=10, active_after_rebuild=10)
+
+    assert report["delete_memory_residue_rate"] == 0.0
+    assert report["rebuild_resurrection_rate"] == 1.0
+    assert {
+        "metric": "rebuild_resurrection_rate",
+        "actual": 1.0,
+        "expected": "<= 0",
+    } in report["failed_metrics"]
 
 
 def test_quality_report_caps_transient_retry_rate_by_request_count() -> None:
@@ -301,6 +406,152 @@ def test_quality_report_caps_transient_retry_rate_by_request_count() -> None:
     )
 
     assert report["transient_retry_rate"] == 0.5
+
+
+def test_real_quality_runner_parses_child_output_reports() -> None:
+    from script.run_real_mem0_quality_evaluation import (
+        extract_quality_json_reports,
+        extract_run_id,
+    )
+
+    output = """
+quality scope: run_id=real-quality-20260510T120000-a1b2c3d4
+{
+  "passed": true,
+  "case_count": 2,
+  "recall_at_10": 1.0
+}
+noise line
+{
+  "passed": true,
+  "case_count": 1,
+  "delete_memory_residue_rate": 0.0
+}
+quality regression passed: active_after_append=12, active_after_rebuild=11
+"""
+
+    reports = extract_quality_json_reports(output)
+
+    assert extract_run_id(output) == "real-quality-20260510T120000-a1b2c3d4"
+    assert [report["case_count"] for report in reports] == [2, 1]
+
+
+def test_real_quality_runner_writes_markdown_with_previous_comparison(tmp_path) -> None:
+    from script.run_real_mem0_quality_evaluation import (
+        build_quality_evaluation_run_report,
+        write_quality_evaluation_report_artifacts,
+    )
+
+    previous = build_quality_evaluation_run_report(
+        run_id="real-quality-old",
+        child_returncode=0,
+        quality_report={
+            "passed": True,
+            "case_count": 15,
+            "case_pass_rate": 1.0,
+            "recall_at_10": 0.95,
+            "precision_at_10": 0.95,
+            "conflict_pollution_rate": 0.01,
+            "false_positive_rate": 0.0,
+            "duplicate_active_rate": 0.0,
+            "top1_hit_rate": 0.80,
+            "mrr": 0.90,
+            "item_precision_at_10": 0.60,
+            "irrelevant_l3_per_query": 1.2,
+            "failed_cases": [],
+            "failed_metrics": [],
+            "category_metrics": {},
+            "metric_automation_status": {},
+        },
+        post_delete_report={
+            "passed": True,
+            "delete_memory_residue_rate": 0.0,
+            "rebuild_resurrection_rate": 0.0,
+            "failed_cases": [],
+            "failed_metrics": [],
+        },
+        stdout="old",
+        stderr="",
+    )
+    (tmp_path / f"{QUALITY_REPORT_PREFIX}-real-quality-old.json").write_text(
+        json.dumps(previous),
+        encoding="utf-8",
+    )
+
+    current = build_quality_evaluation_run_report(
+        run_id="real-quality-new",
+        child_returncode=0,
+        quality_report={
+            "passed": True,
+            "case_count": 15,
+            "case_pass_rate": 1.0,
+            "recall_at_10": 1.0,
+            "precision_at_10": 0.93,
+            "conflict_pollution_rate": 0.0,
+            "false_positive_rate": 0.0,
+            "duplicate_active_rate": 0.0,
+            "top1_hit_rate": 0.75,
+            "mrr": 0.88,
+            "item_precision_at_10": 0.65,
+            "irrelevant_l3_per_query": 0.8,
+            "failed_cases": [],
+            "failed_metrics": [],
+            "category_metrics": {
+                "slot_conflict": {"case_count": 10, "passed_count": 10, "pass_rate": 1.0},
+            },
+            "metric_automation_status": {"recall_at_10": "automatic"},
+        },
+        post_delete_report={
+            "passed": True,
+            "delete_memory_residue_rate": 0.0,
+            "rebuild_resurrection_rate": 0.0,
+            "failed_cases": [],
+            "failed_metrics": [],
+            "category_metrics": {
+                "delete_memory": {"case_count": 1, "passed_count": 1, "pass_rate": 1.0},
+                "rebuild": {"case_count": 1, "passed_count": 1, "pass_rate": 1.0},
+            },
+        },
+        stdout="current",
+        stderr="",
+    )
+
+    artifacts = write_quality_evaluation_report_artifacts(tmp_path, current)
+    markdown = artifacts.markdown_path.read_text(encoding="utf-8")
+
+    assert artifacts.json_path.name == f"{QUALITY_REPORT_PREFIX}-real-quality-new.json"
+    assert f"# {QUALITY_REPORT_PREFIX}" in markdown
+    assert "| 对比报告 | `real-quality-old` |" in markdown
+    assert "| `recall_at_10` | 0.95 | 1.0 | +0.05 | 提升 |" in markdown
+    assert "| `precision_at_10` | 0.95 | 0.93 | -0.02 | 下降 |" in markdown
+    assert "| `conflict_pollution_rate` | 0.01 | 0.0 | -0.01 | 提升 |" in markdown
+    assert "| `irrelevant_l3_per_query` | 1.2 | 0.8 | -0.4 | 提升 |" in markdown
+    assert "| `delete_memory` | 1 | 1 | 1.0 |" in markdown
+    assert "| `rebuild` | 1 | 1 | 1.0 |" in markdown
+
+
+def test_real_quality_runner_writes_failure_report_without_child_json(tmp_path) -> None:
+    from script.run_real_mem0_quality_evaluation import (
+        build_quality_evaluation_run_report,
+        write_quality_evaluation_report_artifacts,
+    )
+
+    current = build_quality_evaluation_run_report(
+        run_id="real-quality-env-failed",
+        child_returncode=1,
+        quality_report=None,
+        post_delete_report=None,
+        stdout="",
+        stderr="RuntimeError: OPENAI_API_KEY and QDRANT_URL are required",
+    )
+
+    artifacts = write_quality_evaluation_report_artifacts(tmp_path, current)
+    markdown = artifacts.markdown_path.read_text(encoding="utf-8")
+
+    assert current["passed"] is False
+    assert current["failure_phase"] == "environment_or_execution"
+    assert "| 最终结论 | 未通过 |" in markdown
+    assert "OPENAI_API_KEY and QDRANT_URL are required" in markdown
 
 
 def test_quality_report_does_not_count_duplicate_slots_across_context_partitions() -> None:

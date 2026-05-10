@@ -83,7 +83,7 @@ PYTHONPATH=src .venv/bin/alembic upgrade head --sql
 | `user_id` / `character_id` / `session_id` | 作用域和会话来源。 |
 | `round_fingerprint` | 检测同一 `round_id` 下内容或作用域冲突。 |
 | `messages` | 规范化后的轮次消息。 |
-| `round_state` | `active` 或 `deleted_tombstone`，用于删除来源排除。 |
+| `round_state` | 当前工程使用 `active` 或 `deleted_tombstone`；`deleted_tombstone` 在首版用于删除、修复或硬跳过后的来源排除，不进入摘要和重建输入。 |
 
 ### tb_current_summary
 

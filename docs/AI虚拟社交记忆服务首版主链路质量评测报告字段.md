@@ -1,6 +1,12 @@
 # AI虚拟社交记忆服务首版主链路记忆质量评测报告字段规范
 
 本文档定义首版记忆质量评测报告的稳定字段。
+字段分为两层：
+
+1. 原始质量报告字段：`script/real_mem0_quality_regression.py` 输出的 JSON 对象。
+2. 评测运行包装字段：`script/run_real_mem0_quality_evaluation.py` 写入 `docs/` 的 JSON 报告外层对象。
+
+第 2 至第 5 节描述原始质量报告字段；这些字段在包装报告中位于 `quality` 或 `post_delete` 对象内。
 评测方案见 [首版记忆质量评测方案](AI虚拟社交记忆服务首版主链路质量评测方案.md)。
 报告模板见 [首版记忆质量评测报告模板](AI虚拟社交记忆服务首版主链路质量评测报告模板.md)。
 
@@ -15,9 +21,12 @@
 
 ## 2. 核心字段
 
+以下字段属于原始质量报告对象。
+评测运行包装报告会把主链路原始对象放在 `quality` 字段下，
+把删除与重建复查原始对象放在 `post_delete` 字段下。
+
 | 字段 | 类型 | 直白解释 | 备注 |
 | --- | --- | --- | --- |
-| `run_id` | string | 本次评测唯一标识。 | 每次执行必须唯一。 |
 | `case_count` | number | 本次评测用例数。 | 不含手工补充说明。 |
 | `case_pass_rate` | number | 用例通过比例。 | 核心样本按全部通过解释。 |
 | `recall_at_10` | number | 正确事实进入 top10 的比例。 | 首版硬门禁。 |
@@ -61,12 +70,13 @@
 
 ## 3. 执行与失败字段
 
+以下字段属于原始质量报告对象。
+
 | 字段 | 类型 | 直白解释 |
 | --- | --- | --- |
 | `passed` | boolean | 本轮是否通过首版质量门禁。 |
 | `failed_cases` | array | 失败 case 名称列表。 |
 | `failed_metrics` | array | 未达到门禁的指标列表。 |
-| `failed_sections` | array | 失败分段列表，适合汇总报告使用。 |
 | `case_results` | array | 每个 case 的命中、污染、状态和失败原因。 |
 | `category_metrics` | object | 每类场景的 case 数、通过数和通过率。 |
 | `request_metrics` | object | 请求数、瞬时失败数、非瞬时失败数。 |
@@ -84,8 +94,15 @@
 | `active_memory_count` | number | 删除和 rebuild 前的 active 记忆数。 |
 | `active_after_rebuild` | number | rebuild 后的 active 记忆数。 |
 | `transient_retry_rate` | number | 瞬时失败占请求数的比例。 |
+| `critical_slot_pass_rate` | number/null | 核心槽位通过率，当前保留为诊断字段。 |
 | `delete_session_residue_rate` | number/null | 会话级删除残留，首版可为 `null`。 |
 | `delete_all_residue_rate` | number/null | 全量删除残留，首版可为 `null`。 |
+| `dirty_summary_recall_rate` | number/null | 污染摘要被召回比例，当前保留为诊断字段。 |
+| `source_ref_loss_rate` | number/null | 来源引用丢失比例，当前保留为诊断字段。 |
+| `idempotency_failure_rate` | number/null | 幂等失败比例，当前保留为诊断字段。 |
+| `delete_residue_rate` | number/null | 历史删除残留兼容别名，新报告优先看 `delete_memory_residue_rate`。 |
+| `cross_scope_leak_rate` | number/null | 历史跨作用域泄漏兼容别名，新报告优先看分项隔离字段。 |
+| `failed_sections` | array | 历史或汇总报告可选字段，当前原始脚本不输出。 |
 | `latency_ms` | object | 执行过程延迟记录，只用于排障。 |
 
 `http_5xx_rate`、`timeout_rate` 等性能字段如在历史 JSON 中出现，
@@ -97,11 +114,36 @@
 | --- | --- |
 | `automatic` | 已由脚本独立计算并参与报告输出。 |
 | `case_gate` | 当前由明确 case 覆盖，还没有独立统计字段。 |
-| `case_gate_independent_field_pending` | case 已覆盖，但独立字段仍为 `null`。 |
+| `case_gate_independent_field_pending` | 历史状态值：case 已覆盖，但独立字段仍为 `null`。新报告优先使用 `case_gate`。 |
 | `pending` | 暂未覆盖，报告中必须写 `null`。 |
 | `manual_review` | 需要人工或 judge 复核。 |
 
-## 6. 稳定 JSON 示例
+## 6. 评测运行包装字段
+
+以下字段属于 `script/run_real_mem0_quality_evaluation.py` 写入 `docs/` 的 JSON 外层对象。
+包装对象用于留存一次完整执行、对比历史报告和渲染 Markdown。
+
+| 字段 | 类型 | 直白解释 |
+| --- | --- | --- |
+| `report_type` | string | 报告类型，当前为 `real_memory_quality_evaluation`。 |
+| `run_id` | string | 本次评测唯一标识。 |
+| `generated_at` | string | 包装报告生成时间，使用 ISO 8601 UTC 时间。 |
+| `passed` | boolean | 主链路、删除复查和子进程退出码是否整体通过。 |
+| `failure_phase` | string/null | 失败阶段；通过时为 `null`。 |
+| `quality` | object/null | 主链路原始质量报告对象。 |
+| `post_delete` | object/null | 删除与重建复查原始质量报告对象。 |
+| `stdout_tail` | string | 子进程标准输出尾部，用于排障。 |
+| `stderr_tail` | string | 子进程标准错误尾部，用于排障。 |
+
+`failure_phase` 当前常见取值：
+
+| 取值 | 含义 |
+| --- | --- |
+| `environment_or_execution` | 环境或脚本执行失败，或子脚本退出失败但没有更具体阶段。 |
+| `quality_gate` | 主链路原始报告未通过。 |
+| `delete_rebuild_gate` | 删除与重建复查原始报告未通过。 |
+
+## 7. 原始质量 JSON 示例
 
 ```json
 {
@@ -120,6 +162,7 @@
   "conflict_pollution_rate": 0.0,
   "false_positive_rate": 0.0,
   "duplicate_active_rate": 0.0,
+  "critical_slot_pass_rate": null,
   "delete_memory_residue_rate": 0.0,
   "delete_session_residue_rate": null,
   "delete_all_residue_rate": null,
@@ -127,7 +170,14 @@
   "cross_user_leak_rate": null,
   "cross_character_leak_rate": 0.0,
   "roleplay_real_mix_rate": 0.0,
+  "dirty_summary_recall_rate": null,
+  "source_ref_loss_rate": null,
   "known_drift_regression_pass_rate": null,
+  "http_5xx_rate": null,
+  "timeout_rate": null,
+  "idempotency_failure_rate": null,
+  "delete_residue_rate": 0.0,
+  "cross_scope_leak_rate": 0.0,
   "active_memory_count": 0,
   "active_after_rebuild": 0,
   "transient_retry_rate": 0.0,
@@ -147,7 +197,6 @@
   },
   "failed_cases": [],
   "failed_metrics": [],
-  "failed_sections": [],
   "metric_automation_status": {
     "case_pass_rate": "automatic",
     "recall_at_10": "automatic",
@@ -163,7 +212,7 @@
     "delete_session_residue_rate": "pending",
     "delete_all_residue_rate": "pending",
     "rebuild_resurrection_rate": "case_gate",
-    "cross_user_leak_rate": "case_gate_independent_field_pending",
+    "cross_user_leak_rate": "case_gate",
     "cross_character_leak_rate": "case_gate",
     "roleplay_real_mix_rate": "case_gate",
     "known_drift_regression_pass_rate": "manual_review"
@@ -171,7 +220,31 @@
 }
 ```
 
-## 7. 不属于本报告结论的字段
+## 8. 评测运行包装 JSON 示例
+
+```json
+{
+  "report_type": "real_memory_quality_evaluation",
+  "run_id": "real-quality-...",
+  "generated_at": "2026-05-10T03:09:37.805775+00:00",
+  "passed": false,
+  "failure_phase": "quality_gate",
+  "quality": {
+    "passed": false,
+    "case_count": 15,
+    "failed_cases": [],
+    "failed_metrics": []
+  },
+  "post_delete": null,
+  "stdout_tail": "...",
+  "stderr_tail": "..."
+}
+```
+
+包装 JSON 中的 `quality` 和 `post_delete` 不是另一套指标口径，
+而是第 2 至第 5 节定义的原始质量报告对象。
+
+## 9. 不属于本报告结论的字段
 
 | 字段类型 | 放置位置 |
 | --- | --- |

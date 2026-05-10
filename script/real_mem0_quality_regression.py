@@ -67,6 +67,7 @@ class EvaluationCase:
     intent: str = "memory_query"
     threshold: float = 0.5
     limit: int = 10
+    metric_tags: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -246,6 +247,31 @@ def build_quality_report(
     false_positive_rate = false_positive_cases / max(1, negative_cases)
     conflict_pollution_rate = conflict_polluted_cases / case_count
     duplicate_active_rate = _duplicate_active_rate(active_memory_snapshots or [])
+    delete_memory_residue_rate = _tagged_forbidden_hit_rate(
+        cases,
+        results_by_name,
+        "delete_memory_residue_rate",
+    )
+    rebuild_resurrection_rate = _tagged_forbidden_hit_rate(
+        cases,
+        results_by_name,
+        "rebuild_resurrection_rate",
+    )
+    cross_user_leak_rate = _tagged_forbidden_hit_rate(
+        cases,
+        results_by_name,
+        "cross_user_leak_rate",
+    )
+    cross_character_leak_rate = _tagged_forbidden_hit_rate(
+        cases,
+        results_by_name,
+        "cross_character_leak_rate",
+    )
+    roleplay_real_mix_rate = _tagged_forbidden_hit_rate(
+        cases,
+        results_by_name,
+        "roleplay_real_mix_rate",
+    )
     request_metrics_dict = (request_metrics or RequestMetrics()).as_dict()
     transient_retry_rate = request_metrics_dict["transient_failure_count"] / max(1, request_metrics_dict["request_count"])
     report = {
@@ -262,13 +288,13 @@ def build_quality_report(
         "false_positive_rate": false_positive_rate,
         "conflict_pollution_rate": conflict_pollution_rate,
         "critical_slot_pass_rate": None,
-        "delete_memory_residue_rate": 0.0,
+        "delete_memory_residue_rate": delete_memory_residue_rate,
         "delete_session_residue_rate": None,
         "delete_all_residue_rate": None,
-        "rebuild_resurrection_rate": 0.0,
-        "cross_user_leak_rate": None,
-        "cross_character_leak_rate": 0.0,
-        "roleplay_real_mix_rate": 0.0,
+        "rebuild_resurrection_rate": rebuild_resurrection_rate,
+        "cross_user_leak_rate": cross_user_leak_rate,
+        "cross_character_leak_rate": cross_character_leak_rate,
+        "roleplay_real_mix_rate": roleplay_real_mix_rate,
         "dirty_summary_recall_rate": None,
         "source_ref_loss_rate": None,
         "known_drift_regression_pass_rate": None,
@@ -311,7 +337,7 @@ def _metric_automation_status() -> dict[str, str]:
         "delete_session_residue_rate": "pending",
         "delete_all_residue_rate": "pending",
         "rebuild_resurrection_rate": "case_gate",
-        "cross_user_leak_rate": "case_gate_independent_field_pending",
+        "cross_user_leak_rate": "case_gate",
         "cross_character_leak_rate": "case_gate",
         "roleplay_real_mix_rate": "case_gate",
         "known_drift_regression_pass_rate": "manual_review",
@@ -361,17 +387,41 @@ def _failed_metric_gates(report: dict[str, Any]) -> list[dict[str, Any]]:
         ("false_positive_rate", "<=", 0.02),
         ("conflict_pollution_rate", "<=", 0.02),
         ("duplicate_active_rate", "==", 0.0),
+        ("delete_memory_residue_rate", "<=", 0.0),
+        ("rebuild_resurrection_rate", "<=", 0.0),
+        ("cross_user_leak_rate", "<=", 0.0),
+        ("cross_character_leak_rate", "<=", 0.0),
+        ("roleplay_real_mix_rate", "<=", 0.0),
     )
     failed: list[dict[str, Any]] = []
     for metric, operator, expected in gates:
+        if report.get(metric) is None:
+            continue
         actual = float(report[metric])
         if operator == ">=" and actual < expected:
-            failed.append({"metric": metric, "actual": actual, "expected": f">= {expected}"})
+            failed.append({"metric": metric, "actual": actual, "expected": f">= {expected:g}"})
         elif operator == "<=" and actual > expected:
-            failed.append({"metric": metric, "actual": actual, "expected": f"<= {expected}"})
+            failed.append({"metric": metric, "actual": actual, "expected": f"<= {expected:g}"})
         elif operator == "==" and actual != expected:
             failed.append({"metric": metric, "actual": actual, "expected": f"== {expected:g}"})
     return failed
+
+
+def _tagged_forbidden_hit_rate(
+    cases: list[EvaluationCase],
+    results_by_name: dict[str, QueryResult],
+    metric_tag: str,
+) -> float | None:
+    tagged_cases = [case for case in cases if metric_tag in case.metric_tags]
+    if not tagged_cases:
+        return None
+    leaked_count = 0
+    for case in tagged_cases:
+        result = results_by_name.get(case.name, QueryResult(case_name=case.name, recalled_text=""))
+        l3_text = "\n".join(result.l3_contents or [result.recalled_text]).lower()
+        if any(term.lower() in l3_text for term in case.forbidden_terms):
+            leaked_count += 1
+    return leaked_count / len(tagged_cases)
 
 
 def _memory_conflict_slot_for_report(memory_text: str) -> str | None:
@@ -874,6 +924,7 @@ def main() -> None:
             query="用户现实里的猫叫什么？",
             expected_terms=["麻薯"],
             forbidden_terms=["露露"],
+            metric_tags=("roleplay_real_mix_rate",),
         ),
         EvaluationCase(
             name="roleplay-cat",
@@ -881,6 +932,7 @@ def main() -> None:
             query="剧情设定里的猫叫什么？",
             expected_terms=["露露"],
             forbidden_terms=["麻薯", "团子"],
+            metric_tags=("roleplay_real_mix_rate",),
         ),
         EvaluationCase(
             name="negative-cross-user-cat",
@@ -888,6 +940,7 @@ def main() -> None:
             query="用户的猫叫什么？",
             expected_terms=["麻薯"],
             forbidden_terms=["奶盖"],
+            metric_tags=("cross_user_leak_rate",),
         ),
         EvaluationCase(
             name="negative-cross-character-cat",
@@ -895,6 +948,7 @@ def main() -> None:
             query="用户的猫叫什么？",
             expected_terms=["麻薯"],
             forbidden_terms=["泡芙"],
+            metric_tags=("cross_character_leak_rate",),
         ),
     ]
     results = [
@@ -955,6 +1009,21 @@ def main() -> None:
     if delete_response.get("affected_memories") != 1:
         raise RuntimeError(f"delete did not affect one memory: {delete_response}")
 
+    deleted_after_delete_cases = [
+        EvaluationCase(
+            name="deleted-cat-after-delete",
+            category="delete_memory",
+            query="用户的猫叫什么？",
+            expected_terms=[],
+            forbidden_terms=["麻薯", "团子", "露露", "泡芙", "猫", "cat"],
+            metric_tags=("delete_memory_residue_rate",),
+        ),
+    ]
+    deleted_after_delete_results = [
+        _query_result(base_url, scope, case, request_metrics=request_metrics, latency_metrics=latency_metrics)
+        for case in deleted_after_delete_cases
+    ]
+
     _post_json(
         base_url,
         "/memory/rebuild",
@@ -990,27 +1059,30 @@ def main() -> None:
         ],
     )
 
-    post_delete_cases = [
+    post_rebuild_cases = [
         EvaluationCase(
-            name="deleted-cat-not-recalled",
-            category="delete_rebuild",
+            name="deleted-cat-after-rebuild",
+            category="rebuild",
             query="用户的猫叫什么？",
             expected_terms=[],
             forbidden_terms=["麻薯", "团子", "露露", "泡芙", "猫", "cat"],
+            metric_tags=("rebuild_resurrection_rate",),
         ),
         EvaluationCase(
             name="nickname-after-rebuild",
-            category="delete_rebuild",
+            category="rebuild",
             query="现在应该怎么称呼用户？",
             intent="preference",
             expected_terms=["小鹏"],
             forbidden_terms=["阿鹏"],
         ),
     ]
-    post_delete_results = [
+    post_rebuild_results = [
         _query_result(base_url, scope, case, request_metrics=request_metrics, latency_metrics=latency_metrics)
-        for case in post_delete_cases
+        for case in post_rebuild_cases
     ]
+    post_delete_cases = deleted_after_delete_cases + post_rebuild_cases
+    post_delete_results = deleted_after_delete_results + post_rebuild_results
     deleted_residue = [
         result.case_name
         for result in post_delete_results

@@ -24,7 +24,9 @@
 | Mem0 模式 | `<library>` |
 | Qdrant | `<url-or-cluster>` |
 | PostgreSQL | `<db-or-cluster>` |
-| 原始 JSON | `<path-or-link>` |
+| 评测运行 JSON | `<docs/AI虚拟社交记忆服务首版主链路质量评测报告-real-quality-....json>` |
+| 原始质量 JSON | `<quality / post_delete objects>` |
+| 报告生成脚本 | `script/run_real_mem0_quality_evaluation.py` |
 | 评测脚本 | `script/real_mem0_quality_regression.py` |
 
 ## 2. 结论摘要
@@ -152,13 +154,46 @@
 | 建议处理 | `<action items>` |
 | 下次复测条件 | `<conditions>` |
 
-## 12. 稳定 JSON 摘要
+## 12. 评测运行包装 JSON 摘要
+
+`script/run_real_mem0_quality_evaluation.py` 写入 `docs/` 的 JSON 使用包装结构。
+主链路指标位于 `quality`，删除与重建复查指标位于 `post_delete`。
 
 ```json
 {
+  "report_type": "real_memory_quality_evaluation",
   "run_id": "<real-quality-...>",
-  "started_at": "<yyyy-mm-ddThh:mm:ss+08:00>",
-  "environment": "<local|staging|preprod>",
+  "generated_at": "<yyyy-mm-ddThh:mm:ss+00:00>",
+  "passed": "<true_or_false>",
+  "failure_phase": "<environment_or_execution|quality_gate|delete_rebuild_gate|null>",
+  "quality": {
+    "passed": "<true_or_false>",
+    "case_count": "<count>",
+    "case_pass_rate": "<value>",
+    "failed_cases": [],
+    "failed_metrics": [],
+    "metric_automation_status": {}
+  },
+  "post_delete": {
+    "passed": "<true_or_false>",
+    "case_count": "<count>",
+    "delete_memory_residue_rate": "<value_or_null>",
+    "rebuild_resurrection_rate": "<value_or_null>",
+    "failed_cases": [],
+    "failed_metrics": [],
+    "metric_automation_status": {}
+  },
+  "stdout_tail": "<text>",
+  "stderr_tail": "<text>"
+}
+```
+
+## 13. 原始质量 JSON 摘要
+
+以下结构对应 `quality` 或 `post_delete` 对象。
+
+```json
+{
   "passed": "<true_or_false>",
   "case_count": "<count>",
   "positive_case_count": "<count>",
@@ -173,14 +208,25 @@
   "conflict_pollution_rate": "<value>",
   "false_positive_rate": "<value>",
   "duplicate_active_rate": "<value>",
+  "critical_slot_pass_rate": "<value_or_null>",
   "delete_memory_residue_rate": "<value_or_null>",
+  "delete_session_residue_rate": "<value_or_null>",
+  "delete_all_residue_rate": "<value_or_null>",
   "rebuild_resurrection_rate": "<value_or_null>",
   "cross_user_leak_rate": "<value_or_null>",
   "cross_character_leak_rate": "<value_or_null>",
   "roleplay_real_mix_rate": "<value_or_null>",
+  "dirty_summary_recall_rate": "<value_or_null>",
+  "source_ref_loss_rate": "<value_or_null>",
   "known_drift_regression_pass_rate": "<value_or_null>",
+  "http_5xx_rate": "<value_or_null>",
+  "timeout_rate": "<value_or_null>",
+  "idempotency_failure_rate": "<value_or_null>",
+  "delete_residue_rate": "<value_or_null>",
+  "cross_scope_leak_rate": "<value_or_null>",
   "active_memory_count": "<count>",
   "active_after_rebuild": "<count>",
+  "transient_retry_rate": "<value>",
   "request_metrics": {
     "request_count": "<count>",
     "retry_count": "<count>",

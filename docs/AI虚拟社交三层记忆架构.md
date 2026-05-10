@@ -59,10 +59,10 @@
 
 - `add`：把一组对话交给 Mem0，让它判断是否形成长期记忆。
 - `search`：按查询语义和过滤条件找回相关长期记忆。
-- `update/delete/delete_all`：在业务明确要求修正或删除时，显式修改或清理记忆。
+- `update/delete`：在业务明确要求修正或删除时，显式修改或清理记忆；业务层的范围删除语义由 adapter 按业务索引逐条删除实现，不直接调用 Mem0 原生 `delete_all()`。
 - `filters / top_k / threshold / rerank`：优先用 Mem0 自带的检索控制能力，应用层只做最后的跨层融合和预算裁剪。
 
-还要注意一点：Mem0 的 SDK、Platform、过滤语义和实体作用域会随版本变化。本文里的 `mem0.add`、`mem0.search`、`delete_all` 都应该理解成业务 adapter 需要具备的能力口径，不能直接等同于某个固定版本的原生签名。
+还要注意一点：Mem0 的 SDK、Platform、过滤语义和实体作用域会随版本变化。本文里的 `mem0.add`、`mem0.search` 都应该理解成业务 adapter 需要具备的能力口径，不能直接等同于某个固定版本的原生签名。范围删除是 Thinkback 的业务操作，不等同于 Mem0 原生 `delete_all()`。
 
 ### 首版先画一条底线：记忆域安全
 
@@ -203,7 +203,7 @@ L2 是用户与角色之间的阶段摘要。它压缩近期互动主线、关�
 
 #### L3：长期原子记忆
 
-L3 是长期原子记忆，优先交给 Mem0 管理。写入侧优先复用 Mem0 的抽取、分类和去重能力；检索侧优先复用 Mem0 的语义检索、过滤、数量限制、阈值和重排（rerank）能力；显式更新和删除由业务命令调用 Mem0 update/delete/delete_all 完成。遇到“用户明确纠正旧事实”这类冲突时，不假设一次 `add` 一定能自动处理干净，而是通过 Mem0 能力加业务侧显式 update/delete/rebuild 收敛。
+L3 是长期原子记忆，优先交给 Mem0 管理。写入侧优先复用 Mem0 的抽取、分类和去重能力；检索侧优先复用 Mem0 的语义检索、过滤、数量限制、阈值和重排（rerank）能力；显式更新和删除由业务命令通过 adapter 调用 Mem0 update/delete 完成。范围删除按业务索引列出当前 `user_id × character_id` 下的 backend memory id 后逐条 delete，不能直接调用 Mem0 原生 `delete_all()`。遇到“用户明确纠正旧事实”这类冲突时，不假设一次 `add` 一定能自动处理干净，而是通过 Mem0 能力加业务侧显式 update/delete/rebuild 收敛。
 
 业务侧可以在元数据里补充 `memory_type`，但这只是展示、审计或产品枚举，不应把画像、偏好、事件、关系这类枚举做成替代 Mem0 分类能力的自研记忆引擎。
 
@@ -330,7 +330,7 @@ L3 不应该自研“抽取 -> 拼装 -> 向量落库”这套记忆引擎。读
 
 另一个边界是 `add` 的语义。Mem0 `add` 的返回事件和覆盖行为要按当前版本确认，不能写成“一定会原地更新或删除旧记忆”的承诺；显式删除和显式更新由业务命令调用 delete/update 完成。
 
-`delete_all` 也要按作用域能力确认。如果当前 Mem0 版本不能稳定保证 `user_id × character_id` 范围内删除，业务 adapter 应改成先按强隔离范围列出候选，再逐条 delete 或 delete_many，而不是直接调用一个作用域不清的全量删除。
+范围删除不能直接调用 Mem0 原生 `delete_all()`。当前工程已验证该调用会触发 vector store `reset()`，对共享 Qdrant collection 有高危副作用；业务 adapter 应先按强隔离范围列出候选，再逐条调用 Mem0 `delete()` 或使用经过验证的安全批量删除能力。
 
 `memory_type / importance / recall_priority` 等元数据只用于业务侧展示、审计、排序补充或衰减治理，不替代 Mem0 自带分类和检索能力。它们一旦进入表结构，就要固定枚举口径，不能只写“分类”“重要性”这类空泛字段。写入栅栏和删除后的语义抑制属于强治理阶段能力。
 
@@ -631,7 +631,7 @@ L3 写入可以再展开一层：
                 ▼
 ┌──────────────────────────────┐
 │ 处理 L3                       │
-│ delete / update / delete_all  │
+│ delete / update / indexed range │
 └───────────────┬──────────────┘
                 │
                 ▼
@@ -666,7 +666,7 @@ L3 写入可以再展开一层：
 | --- | --- | --- | --- |
 | 单条 memory | 调用 Mem0 delete，业务索引标记 `DELETED` | 可能包含该事实时标记 dirty | 通常不处理；若本轮已取到旧材料，则刷新召回 |
 | session 来源 | 按 `source_refs` 判断：单来源删除，多来源显式更新或重算 | 覆盖该会话历史时标记 dirty | 让该 session 的 L1 缓存失效 |
-| all | 调用 delete_all 或等价批量删除 | 清空或重建该 `user_id × character_id` 摘要 | 让相关会话缓存失效，并处理关系状态 |
+| all | 按业务索引逐条调用 Mem0 delete，禁止直接调用 Mem0 原生 `delete_all()` | 清空或重建该 `user_id × character_id` 摘要 | 让相关会话缓存失效，并处理关系状态 |
 
 审计记录只保存操作范围、任务状态、业务索引和处理结果，不保存被删除正文。首版可以先把脱敏结果放在任务结果里，例如 affected_memory_ids、summary_state、scope、session_id；后续再接独立审计表或 trace/audit 系统。
 
@@ -785,13 +785,13 @@ L3 写入可以再展开一层：
 
 `messages[]` 首版推荐保存完整 `user -> assistant` 配对，但不要把物理结构锁死成永远只能两条消息。系统事件、撤回、编辑、多模态和主动消息都需要后续扩展空间。建议统一成 `message_id / role / normalized_content / timestamp` 这类可扩展结构。
 
-强治理阶段再补齐 `write_fence_version / summary_cas_token / recall_priority / last_recalled_at / recall_count / deleted_at` 等字段。`data_classification / expires_at` 不建议完全后置，至少应在首版预留。`round_state` 首版可以先用于“是否参与摘要和重建”的来源过滤；强治理阶段再扩展成完整删除墓碑和语义级防复活能力。
+强治理阶段再补齐 `write_fence_version / summary_cas_token / recall_priority / last_recalled_at / recall_count / deleted_at` 等字段。`data_classification / expires_at` 不建议完全后置，至少应在首版预留。当前工程用 `round_state=active / deleted_tombstone` 控制轮次是否参与摘要和重建；`deleted_tombstone` 在首版先作为来源排除标记使用，强治理阶段再扩展成完整删除墓碑和语义级防复活能力。
 
 历史对话源由上游对话域负责，不属于 L1。记忆服务只通过只读 adapter 使用它；L1 仍然只是当前会话缓存。
 
 ### 4.2 五张记忆相关业务表
 
-数据库表只保存业务索引、审计、状态和治理字段。L3 写入侧的抽取、分类和去重优先交给 Mem0；检索侧的语义检索、过滤、阈值和重排也优先交给 Mem0；显式更新和删除由业务命令调用 Mem0 update/delete/delete_all。
+数据库表只保存业务索引、审计、状态和治理字段。L3 写入侧的抽取、分类和去重优先交给 Mem0；检索侧的语义检索、过滤、阈值和重排也优先交给 Mem0；显式更新和单条删除由业务命令调用 Mem0 update/delete，范围删除由业务索引逐条 delete 实现。
 
 这五张表放在同一节里讲，是为了把边界一次讲清楚。读的时候不要先盯字段数量，而要先看每张表负责哪类问题，避免把摘要、长期记忆、关系状态和任务状态混成一张大表。
 
@@ -847,7 +847,7 @@ L3 写入可以再展开一层：
 | `round_fingerprint` | 防重复和内容变更识别 |
 | `messages` | 规范化后的完整轮次消息数组 |
 | `source_timestamp` | 轮次发生时间 |
-| `round_state` | 首版至少区分 `active / excluded`，用于控制是否参与摘要和重建；强治理阶段再扩展 `deleted_tombstone`，口径见 4.3 |
+| `round_state` | 当前工程区分 `active / deleted_tombstone`，用于控制是否参与摘要和重建；`deleted_tombstone` 在首版表示来源已被排除，强治理阶段再扩展完整墓碑语义，口径见 4.3 |
 | `created_at / updated_at` | 排障和重建版本判断 |
 
 治理增强字段：
@@ -1080,8 +1080,7 @@ L3 写入可以再展开一层：
 | `summary_state` | `dirty` | 摘要可能包含已删除或已纠正事实，必须跳过 |
 | `summary_state` | `rebuilding` | 摘要正在修复，召回应按降级策略处理 |
 | `round_state` | `active` | 轮次仍可作为摘要和重建输入 |
-| `round_state` | `excluded` | 首版用于硬跳过、删除或修复后的来源过滤，不进入摘要正文 |
-| `round_state` | `deleted_tombstone` | 强治理阶段的删除墓碑，用于防复活和历史连续推进，不进入摘要正文 |
+| `round_state` | `deleted_tombstone` | 首版用于硬跳过、删除或修复后的来源过滤，不进入摘要正文；强治理阶段再扩展为完整删除墓碑，用于防复活和历史连续推进 |
 
 关系状态字段属于产品语义，建议单独放在 `tb_user_character_state`，不要混成 L3 原子记忆：
 

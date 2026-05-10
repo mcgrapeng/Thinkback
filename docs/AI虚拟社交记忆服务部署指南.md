@@ -35,6 +35,7 @@ QDRANT_URL=https://qdrant.example.internal
 QDRANT_API_KEY=
 
 OPENAI_API_KEY=
+MEMORY_OPENAI_BASE_URL=
 MEMORY_QDRANT_COLLECTION=memories_qwen_1024
 MEMORY_EMBEDDING_DIMS=1024
 MEMORY_LLM_MODEL=qwen3.5-flash
@@ -47,6 +48,9 @@ Mem0 不再作为独立 REST Server 部署。
 Thinkback 通过 `mem0ai` Library 直接调用 Mem0 能力，Mem0 Library 再访问 OpenAI 和 Qdrant。
 生产不要把 `QDRANT_URL` 写死为 `localhost`。
 应使用内网域名、服务发现地址或受控 HTTPS 地址，例如 `https://qdrant.example.internal`。
+
+`MEMORY_OPENAI_BASE_URL` 用于 OpenAI-compatible endpoint。
+如果直接使用 OpenAI 官方 endpoint，可以留空；如果使用兼容 OpenAI 协议的模型服务，应显式配置该地址，并确保 `MEMORY_LLM_MODEL`、`MEMORY_EMBEDDING_MODEL` 和 `MEMORY_EMBEDDING_DIMS` 与服务端实际模型一致。
 
 Qdrant 按独立基础设施配置，未来可以与 Thinkback 部署在不同主机上。
 Mem0 Library 负责 L3 向量写入和语义检索。
@@ -90,11 +94,14 @@ PYTHONPATH=src .venv/bin/alembic upgrade head
 PYTHONPATH=src .venv/bin/uvicorn api.app:app --app-dir src --host 0.0.0.0 --port 8000
 ```
 
-启动 worker：
+启动 Celery worker：
 
 ```bash
 PYTHONPATH=src .venv/bin/celery -A infra.tasks.celery_app.celery_app worker -l info
 ```
+
+当前 L3 `MEMORY_L3_WRITE_MODE=async` 使用 API 进程内线程池执行后台抽取，不依赖 Celery worker 消费。
+Celery worker 当前用于诊断任务和后续异步任务扩展；只有部署环境明确启用 Celery 任务时才是必需组件。
 
 ## 4. 图形化 API 文档
 

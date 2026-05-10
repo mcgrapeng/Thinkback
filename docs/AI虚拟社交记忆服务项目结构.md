@@ -114,11 +114,34 @@ tb_memory_task
 
 ```text
 script/
-└── real_mem0_pressure.py
+├── db_migrate.py
+├── real_mem0_pressure.py
+├── real_mem0_quality_regression.py
+├── real_mem0_stability_preprod.py
+├── real_mem0_p0_short_pressure.py
+├── real_mem0_p0_preprod_pressure.py
+├── real_mem0_p0_fault_injection.py
+├── real_mem0_p0_representative_replay.py
+├── run_real_mem0_quality_evaluation.py
+└── build_p0_pressure_final_report.py
 ```
 
-真实主链路质量验证脚本，使用真实 Mem0 Library、OpenAI、Qdrant 和 PostgreSQL。
-脚本不支持 fake 模式，缺少 OpenAI/Qdrant 配置或依赖不可达时直接失败。
+脚本按用途分为四类：
+
+| 脚本 | 用途 |
+| --- | --- |
+| `db_migrate.py` | 数据库迁移辅助入口。 |
+| `real_mem0_pressure.py` | 真实 5 轮主链路验证，使用真实 Mem0 Library、OpenAI-compatible endpoint、Qdrant 和 PostgreSQL。 |
+| `real_mem0_quality_regression.py` | 首版主链路记忆质量回归评测。 |
+| `real_mem0_stability_preprod.py` | 性能与稳定性生产前阶段汇总兼容入口。 |
+| `real_mem0_p0_short_pressure.py` | P0 短压测套件。 |
+| `real_mem0_p0_preprod_pressure.py` | P0 生产前 baseline、stress、spike、soak 阶段报告生成。 |
+| `real_mem0_p0_fault_injection.py` | P0 依赖故障注入报告。 |
+| `real_mem0_p0_representative_replay.py` | P0 代表性样本回放报告。 |
+| `run_real_mem0_quality_evaluation.py` | 质量评测报告汇总和对比入口。 |
+| `build_p0_pressure_final_report.py` | P0 压测最终报告生成。 |
+
+真实链路类脚本不支持 fake 模式，缺少 OpenAI/Qdrant 配置或依赖不可达时直接失败。
 
 首版记忆质量评测、报告字段、报告模板和失败处理规则见
 `docs/AI虚拟社交记忆服务首版主链路质量评测方案.md`、
@@ -130,12 +153,18 @@ script/
 
 ```text
 test/unit/
+├── test_api.py
+├── test_api_docs.py
+├── test_config.py
 ├── test_memory_api.py
 ├── test_memory_backends.py
 ├── test_memory_contracts.py
 ├── test_memory_end_to_end.py
 ├── test_memory_service.py
-└── test_runtime_boundaries.py
+├── test_readiness.py
+├── test_real_quality_evaluation.py
+├── test_runtime_boundaries.py
+└── test_scaffold_files.py
 ```
 
 重点测试覆盖：
@@ -147,4 +176,9 @@ test/unit/
 | `test_memory_service.py` | 写入幂等、失败任务、删除、重建、防复活。 |
 | `test_memory_api.py` | API 主流程和业务错误状态码。 |
 | `test_memory_end_to_end.py` | 5 轮假后端全链路。 |
+| `test_api.py` / `test_api_docs.py` | 健康检查、OpenAPI 和文档入口。 |
+| `test_config.py` | 运行配置默认值和环境变量解析。 |
+| `test_readiness.py` | readiness 聚合检查和依赖状态。 |
+| `test_real_quality_evaluation.py` | 真实质量评测报告、指标、P0 压测报告生成逻辑。 |
 | `test_runtime_boundaries.py` | 默认仓库、线程池调用、真实验证脚本边界。 |
+| `test_scaffold_files.py` | Docker、Kubernetes、项目脚手架文件存在性和关键配置。 |

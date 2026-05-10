@@ -40,7 +40,7 @@
 
 | 步骤 | 做什么 | 产出 |
 | --- | --- | --- |
-| 1. 准备环境 | 使用真实 Thinkback API、Mem0 Library、OpenAI、Qdrant、PostgreSQL。 | 可执行的真实评测环境。 |
+| 1. 准备环境 | 使用真实 Thinkback API、Mem0 Library、OpenAI 或 OpenAI-compatible endpoint、Qdrant、PostgreSQL。 | 可执行的真实评测环境。 |
 | 2. 写入事实 | 写入昵称、宠物、地点、生日、偏好等核心事实。 | 初始长期记忆。 |
 | 3. 修正事实 | 对部分事实进行纠错，例如猫名、地点、饮品、生日。 | 新旧事实冲突样本。 |
 | 4. 执行召回 | 对当前事实、未知事实、隔离事实分别发起 recall。 | 每个 case 的召回结果。 |
@@ -185,6 +185,16 @@ https://blog.getzep.com/zep-a-temporal-knowledge-graph-architecture-for-agent-me
 ## 8. 执行方法
 
 首版质量评测应使用真实依赖执行，不使用 fake 模式替代。
+默认使用包装脚本执行评测并写入独立 JSON / Markdown 报告。
+
+```bash
+env OPENAI_API_KEY=${OPENAI_API_KEY:?set OPENAI_API_KEY} \
+QDRANT_URL=${QDRANT_URL:?set QDRANT_URL} \
+THINKBACK_API_URL=${THINKBACK_API_URL:?set THINKBACK_API_URL} \
+PYTHONPATH=src .venv/bin/python script/run_real_mem0_quality_evaluation.py --docs-dir docs
+```
+
+如果只需要在控制台查看原始 `quality` 和 `post_delete` JSON，可直接运行：
 
 ```bash
 env OPENAI_API_KEY=${OPENAI_API_KEY:?set OPENAI_API_KEY} \
@@ -197,10 +207,10 @@ PYTHONPATH=src .venv/bin/python script/real_mem0_quality_regression.py
 
 | 要求 | 说明 |
 | --- | --- |
-| 环境真实 | API、Mem0 Library、OpenAI、Qdrant、PostgreSQL 必须可用。 |
+| 环境真实 | API、Mem0 Library、OpenAI 或 OpenAI-compatible endpoint、Qdrant、PostgreSQL 必须可用。 |
 | 数据隔离 | 每次执行使用唯一 `run_id`、user、character、session。 |
-| 结果留痕 | 保存原始 JSON、失败 case、召回文本和 active memory 列表。 |
-| 报告分离 | 本文不写入任何本轮数据，结果写入独立评测报告。 |
+| 结果留痕 | 保存评测运行 JSON、原始 `quality` / `post_delete` 对象、失败 case、召回文本和 active memory 列表。 |
+| 报告分离 | 本文不写入任何本轮数据，包装脚本把结果写入独立评测报告。 |
 
 ## 9. 报告要求
 

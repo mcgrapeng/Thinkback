@@ -11,17 +11,17 @@
 | 数据迁移 | Alembic | 管理 `tb_` 业务表结构。当前首版迁移为 `20260504_0001_memory_p0_tables.py`。 |
 | 长期记忆引擎 | Mem0 Library | 以 Python Library 方式嵌入 Thinkback，负责 L3 的抽取、去重、分类、语义检索、显式更新和删除。 |
 | 向量数据库 | 独立 Qdrant 服务 | Mem0 Library 通过 Thinkback 配置的 Qdrant endpoint 写入和检索 L3 向量；Thinkback readiness 也会探测同一个 Qdrant。 |
-| LLM / Embedding | OpenAI | Thinkback 把 `OPENAI_API_KEY`、LLM 模型和 Embedding 模型传给 Mem0 Library。 |
+| LLM / Embedding | OpenAI / OpenAI-compatible endpoint | Thinkback 把 `OPENAI_API_KEY`、可选 `MEMORY_OPENAI_BASE_URL`、LLM 模型和 Embedding 模型传给 Mem0 Library。 |
 | 缓存和异步基础设施 | Redis + Celery | Redis 用于运行时基础设施；Celery 已有 worker bootstrap，复杂异步沉淀可继续扩展。 |
 | 测试 | pytest + ruff + mypy | 覆盖契约、后端适配、服务工作流、API 和端到端假后端流程。 |
 
 ## 2. Mem0 和向量数据库的关系
 
-Mem0 内部依赖向量数据库。当前工程采用 Mem0 Library，不再部署独立的 Mem0 REST Server。生产部署模型按两个运行服务和一个外部模型服务处理：Thinkback、Qdrant 可以分别部署在不同主机上，OpenAI 作为外部模型服务访问。Mem0 Library 运行在 Thinkback 进程内，通过 `QDRANT_URL / QDRANT_API_KEY` 写入和检索 L3 向量。
+Mem0 内部依赖向量数据库。当前工程采用 Mem0 Library，不再部署独立的 Mem0 REST Server。生产部署模型按两个运行服务和一个外部模型服务处理：Thinkback、Qdrant 可以分别部署在不同主机上，OpenAI 或 OpenAI-compatible endpoint 作为外部模型服务访问。Mem0 Library 运行在 Thinkback 进程内，通过 `QDRANT_URL / QDRANT_API_KEY` 写入和检索 L3 向量。
 
 业务服务不要直接写 Qdrant 或任何向量库。原因很简单：L3 的抽取、去重、更新、删除和语义检索都属于 Mem0 的职责；业务服务绕过 Mem0 写向量库，会破坏 Mem0 的一致性和返回语义。
 
-Thinkback 当前只保留 Mem0 Library 业务适配器。核心配置项是 `OPENAI_API_KEY`、`QDRANT_URL / QDRANT_API_KEY`、`MEMORY_QDRANT_COLLECTION`、`MEMORY_LLM_MODEL`、`MEMORY_EMBEDDING_MODEL` 和 `MEM0_HISTORY_DB_PATH`。工程不再需要 `MEM0_API_URL / MEM0_API_KEY / MEM0_HTTP_TIMEOUT_SECONDS`。
+Thinkback 当前只保留 Mem0 Library 业务适配器。核心配置项是 `OPENAI_API_KEY`、`MEMORY_OPENAI_BASE_URL`、`QDRANT_URL / QDRANT_API_KEY`、`MEMORY_QDRANT_COLLECTION`、`MEMORY_LLM_MODEL`、`MEMORY_EMBEDDING_MODEL` 和 `MEM0_HISTORY_DB_PATH`。`MEMORY_OPENAI_BASE_URL` 可为空；只有使用 OpenAI-compatible endpoint 时才需要配置。工程不再需要 `MEM0_API_URL / MEM0_API_KEY / MEM0_HTTP_TIMEOUT_SECONDS`。
 
 当前 `mem0ai` Library 对 Qdrant 有一个实现约束：使用 `url` 方式连接远程 Qdrant 时，需要同时提供 `api_key`；本地或内网无鉴权 Qdrant 可使用 `http://host:6333`，Thinkback 适配器会转换成 Mem0 支持的 `host/port` 形式。生产环境如果使用 `https://qdrant.example.internal` 这类受控地址，应显式配置 `QDRANT_API_KEY`，避免把远程 HTTPS 地址误降级成本机默认端口。
 
