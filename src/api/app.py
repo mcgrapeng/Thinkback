@@ -11,6 +11,30 @@ from api.memory import router as memory_router
 from infra.config import settings
 from infra.logging import clear_trace_id, set_trace_id
 
+OPENAPI_DESCRIPTION = """
+Thinkback 首版主链路记忆服务 API。
+
+图形化 API 文档：
+
+- Swagger UI: `/docs`
+- ReDoc: `/redoc`
+- OpenAPI JSON: `/openapi.json`
+
+本 API 覆盖记忆写入、召回、删除、重建、后台任务查询和健康检查。
+质量评测方案、性能与稳定性测试方案、评测报告模板分别维护在 `docs/` 目录。
+"""
+
+OPENAPI_TAGS = [
+    {
+        "name": "health",
+        "description": "服务健康、存活和依赖就绪检查。",
+    },
+    {
+        "name": "memory",
+        "description": "记忆写入、召回、删除、重建和后台任务查询。",
+    },
+]
+
 
 def _register_request_middleware(app: FastAPI) -> None:
     @app.middleware("http")
@@ -39,9 +63,13 @@ def _register_request_middleware(app: FastAPI) -> None:
 
 def create_app() -> FastAPI:
     app = FastAPI(
-        title=settings.app_name,
+        title=f"{settings.app_name} Memory Service API",
         version=settings.app_version,
-        description="Thinkback memory service",
+        description=OPENAPI_DESCRIPTION,
+        openapi_tags=OPENAPI_TAGS,
+        docs_url="/docs",
+        redoc_url="/redoc",
+        openapi_url="/openapi.json",
         debug=settings.debug,
     )
     _register_request_middleware(app)

@@ -57,7 +57,8 @@ Thinkback 的 readiness 也会访问 Qdrant `/collections` 做连通性诊断。
 本地无鉴权验证可以使用 `QDRANT_URL=http://localhost:6333` 且不填 `QDRANT_API_KEY`。
 Thinkback 会按 Mem0 支持的 `host/port` 方式连接。
 
-`MEM0_HISTORY_DB_PATH` 是 Mem0 Library 的本地历史数据库路径。容器部署时建议挂载可写目录，避免应用进程没有写权限。
+`MEM0_HISTORY_DB_PATH` 是 Mem0 Library 的本地历史数据库路径。
+容器部署时建议挂载可写目录，避免应用进程没有写权限。
 
 `MEMORY_L3_WRITE_MODE=async` 是首版推荐配置。
 append 请求同步完成可靠轮次存储、L1/L2 更新和首版槽位索引。
@@ -95,7 +96,20 @@ PYTHONPATH=src .venv/bin/uvicorn api.app:app --app-dir src --host 0.0.0.0 --port
 PYTHONPATH=src .venv/bin/celery -A infra.tasks.celery_app.celery_app worker -l info
 ```
 
-## 4. 健康检查
+## 4. 图形化 API 文档
+
+启动 API 后，可以通过 FastAPI 自动生成的 OpenAPI 文档查看和调试接口。
+
+| 入口 | 地址 | 用途 |
+| --- | --- | --- |
+| Swagger UI | `http://localhost:8000/docs` | 图形化查看接口、请求体、响应体，并可直接发起调试请求。 |
+| ReDoc | `http://localhost:8000/redoc` | 以文档阅读方式查看 API 分组、模型和字段。 |
+| OpenAPI JSON | `http://localhost:8000/openapi.json` | 给自动化工具、SDK 生成器或接口校验工具使用。 |
+
+图形化 API 文档只描述 HTTP 接口契约。
+记忆质量评测、性能与稳定性测试和具体评测报告仍分别维护在对应文档中。
+
+## 5. 健康检查
 
 ```bash
 curl http://localhost:8000/health
@@ -109,9 +123,10 @@ curl http://localhost:8000/health/ready
 password authentication failed for user "postgres"
 ```
 
-说明应用连到了一个可达但密码不匹配的 PostgreSQL。常见原因是本机已有服务占用 `5432`，而不是 compose 内的 `thinkback-postgres`。
+说明应用连到了一个可达但密码不匹配的 PostgreSQL。
+常见原因是本机已有服务占用 `5432`，而不是 compose 内的 `thinkback-postgres`。
 
-## 5. 真实主链路验证
+## 6. 真实主链路验证
 
 首版记忆质量评测见 `docs/AI虚拟社交记忆服务首版主链路质量评测方案.md`。
 评测报告模板见 `docs/AI虚拟社交记忆服务首版主链路质量评测报告模板.md`。
@@ -144,7 +159,7 @@ RuntimeError: real validation requires: OPENAI_API_KEY
 
 这不是测试通过，也不是代码失败，而是环境未满足真实验证条件。
 
-## 6. 生产注意事项
+## 7. 生产注意事项
 
 1. API 默认使用 PostgreSQL 业务仓库，不允许生产路径退回内存仓库。
 2. Mem0 以 Library 方式嵌入 Thinkback；Qdrant 独立部署，不能假设和 Thinkback 同主机。
@@ -152,6 +167,8 @@ RuntimeError: real validation requires: OPENAI_API_KEY
 4. 范围删除不得调用 Mem0 `delete_all()`；服务按业务索引逐条调用 Mem0 `delete()`。
 5. 删除、重建和写入失败时，`tb_memory_task` 必须记录 `failed` 和 `last_error`。
 6. 所有 `/memory/*` 路由会把同步 Mem0/数据库工作放入线程池，避免阻塞 FastAPI 事件循环。
-7. 当前 SQLAlchemy async engine 使用 `NullPool`，避免同步服务边界在线程池里复用 asyncpg 连接导致跨事件循环问题。
+7. 当前 SQLAlchemy async engine 使用 `NullPool`。
+   这样可以避免同步服务边界在线程池里复用 asyncpg 连接导致跨事件循环问题。
    生产如要启用连接池，需要把仓库改为全异步边界后再调整。
-8. 强治理阶段的语义抑制、写入栅栏和衰减任务尚未启用，不能在隐私强合规场景中把首版当成最终治理方案。
+8. 强治理阶段的语义抑制、写入栅栏和衰减任务尚未启用。
+   不能在隐私强合规场景中把首版当成最终治理方案。

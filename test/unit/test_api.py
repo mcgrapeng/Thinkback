@@ -7,7 +7,7 @@ def test_create_app_returns_fastapi_app() -> None:
     app = create_app()
 
     assert isinstance(app, FastAPI)
-    assert app.title == "Thinkback"
+    assert app.title == "Thinkback Memory Service API"
 
 
 def test_root_endpoint(client) -> None:
