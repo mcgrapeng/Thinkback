@@ -4,7 +4,7 @@
 字段分为两层：
 
 1. 原始质量报告字段：`script/real_mem0_quality_regression.py` 输出的 JSON 对象。
-2. 评测运行包装字段：`script/run_real_mem0_quality_evaluation.py` 写入 `docs/` 的 JSON 报告外层对象。
+2. 评测运行包装字段：`script/run_real_mem0_quality_evaluation.py` 默认写入 `docs/` 的 JSON 报告外层对象；执行时可用 `--docs-dir` 改到 `docs/reports` 等目录。
 
 第 2 至第 5 节描述原始质量报告字段；这些字段在包装报告中位于 `quality` 或 `post_delete` 对象内。
 评测方案见 [首版记忆质量评测方案](AI虚拟社交记忆服务首版主链路质量评测方案.md)。
@@ -108,6 +108,11 @@
 `http_5xx_rate`、`timeout_rate` 等性能字段如在历史 JSON 中出现，
 只作为兼容字段保留，不参与首版质量门禁。
 
+注：当前原始脚本的 `case_results` 保存 case 名称、场景、命中状态、失败原因和 L3 数量，
+不保存每个 case 的 query、期望事实、禁用事实或完整召回文本。
+自动生成 Markdown 因此只能列失败 case 和失败指标。
+需要完整失败证据时，应结合子进程输出中的召回摘要、原始脚本定义的 case 配置，或按报告模板人工补充。
+
 ## 5. 自动化状态取值
 
 | 状态值 | 含义 |
@@ -120,7 +125,8 @@
 
 ## 6. 评测运行包装字段
 
-以下字段属于 `script/run_real_mem0_quality_evaluation.py` 写入 `docs/` 的 JSON 外层对象。
+以下字段属于 `script/run_real_mem0_quality_evaluation.py` 写入报告目录的 JSON 外层对象。
+默认报告目录是 `docs/`；如果执行时指定 `--docs-dir docs/reports`，字段结构不变，只是文件位置变化。
 包装对象用于留存一次完整执行、对比历史报告和渲染 Markdown。
 
 | 字段 | 类型 | 直白解释 |
@@ -143,21 +149,23 @@
 | `quality_gate` | 主链路原始报告未通过。 |
 | `delete_rebuild_gate` | 删除与重建复查原始报告未通过。 |
 
-## 7. 原始质量 JSON 示例
+## 7. 原始质量 JSON 字段形状示例
+
+下面示例只展示字段形状，数值使用一组自洽的通过样例。
+真实报告以脚本输出为准；如果 `passed=false`，通常会同时出现 `failed_cases` 或 `failed_metrics`。
 
 ```json
 {
-  "run_id": "real-quality-...",
-  "passed": false,
-  "case_count": 0,
-  "positive_case_count": 0,
-  "negative_case_count": 0,
-  "case_pass_rate": 0.0,
-  "recall_at_10": 0.0,
-  "precision_at_10": 0.0,
-  "item_precision_at_10": 0.0,
-  "top1_hit_rate": 0.0,
-  "mrr": 0.0,
+  "passed": true,
+  "case_count": 15,
+  "positive_case_count": 14,
+  "negative_case_count": 1,
+  "case_pass_rate": 1.0,
+  "recall_at_10": 1.0,
+  "precision_at_10": 1.0,
+  "item_precision_at_10": 1.0,
+  "top1_hit_rate": 0.9,
+  "mrr": 0.95,
   "irrelevant_l3_per_query": 0.0,
   "conflict_pollution_rate": 0.0,
   "false_positive_rate": 0.0,
@@ -178,17 +186,30 @@
   "idempotency_failure_rate": null,
   "delete_residue_rate": 0.0,
   "cross_scope_leak_rate": 0.0,
-  "active_memory_count": 0,
-  "active_after_rebuild": 0,
+  "active_memory_count": 12,
+  "active_after_rebuild": 12,
   "transient_retry_rate": 0.0,
   "request_metrics": {
-    "request_count": 0,
+    "request_count": 30,
     "retry_count": 0,
     "transient_failure_count": 0,
     "non_transient_failure_count": 0
   },
-  "case_results": [],
-  "category_metrics": {},
+  "case_results": [
+    {
+      "name": "cat-current",
+      "category": "slot_conflict",
+      "expected_hit": true,
+      "forbidden_hit": false,
+      "negative": false,
+      "failure_reason": null,
+      "l3_count": 1,
+      "status": "passed"
+    }
+  ],
+  "category_metrics": {
+    "slot_conflict": {"case_count": 10, "passed_count": 10, "pass_rate": 1.0}
+  },
   "latency_ms": {
     "append": {"p50": 0, "p95": 0, "p99": 0},
     "recall": {"p50": 0, "p95": 0, "p99": 0},
@@ -232,8 +253,10 @@
   "quality": {
     "passed": false,
     "case_count": 15,
-    "failed_cases": [],
-    "failed_metrics": []
+    "failed_cases": ["cat-current"],
+    "failed_metrics": [
+      {"metric": "case_pass_rate", "actual": 0.9333333333333333, "expected": "== 1"}
+    ]
   },
   "post_delete": null,
   "stdout_tail": "...",

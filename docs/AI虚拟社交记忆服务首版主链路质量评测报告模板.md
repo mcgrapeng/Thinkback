@@ -11,20 +11,23 @@
 | 一次执行一份报告 | 不把多轮结果混写到同一份报告。 |
 | 数据只写在报告里 | 方案文档不记录本轮评测数据。 |
 | 未输出字段写 `null` | 不能用 `0.0` 伪装成已经自动化。 |
-| 失败必须留证据 | 至少记录 query、召回文本、期望事实、禁用事实。 |
+| 失败必须留证据 | 人工定稿报告至少记录 query、召回文本、期望事实、禁用事实。当前自动生成 Markdown 只列失败 case 和失败指标；JSON 只提供指标、`case_results` 和子进程输出尾部，逐 case 的 query / 期望事实 / 禁用事实需要从脚本 case 定义或人工复核补齐。 |
+
+注：模板里的 `<...>` 是人工填写提示，不是实际 JSON 类型。
+正式 JSON 报告应保留脚本输出的原始类型，例如布尔值写 `true / false`，数字写 `1.0` 或 `15`，暂未输出写 `null`，不要把它们改成字符串。
 
 ## 1. 运行信息
 
 | 字段 | 值 |
 | --- | --- |
-| `run_id` | `<real-quality-yyyymmdd-hhmmss>` |
+| `run_id` | `<real-quality-yyyymmddThhmmss-xxxxxxxx>` |
 | 执行时间 | `<yyyy-mm-dd hh:mm:ss>` |
 | 执行环境 | `<local / staging / preprod>` |
 | Thinkback API | `<url>` |
 | Mem0 模式 | `<library>` |
 | Qdrant | `<url-or-cluster>` |
 | PostgreSQL | `<db-or-cluster>` |
-| 评测运行 JSON | `<docs/AI虚拟社交记忆服务首版主链路质量评测报告-real-quality-....json>` |
+| 评测运行 JSON | `<docs/AI虚拟社交记忆服务首版主链路质量评测报告-real-quality-....json>`；若执行时使用 `--docs-dir docs/reports`，则为 `<docs/reports/AI虚拟社交记忆服务首版主链路质量评测报告-real-quality-....json>` |
 | 原始质量 JSON | `<quality / post_delete objects>` |
 | 报告生成脚本 | `script/run_real_mem0_quality_evaluation.py` |
 | 评测脚本 | `script/real_mem0_quality_regression.py` |
@@ -156,8 +159,10 @@
 
 ## 12. 评测运行包装 JSON 摘要
 
-`script/run_real_mem0_quality_evaluation.py` 写入 `docs/` 的 JSON 使用包装结构。
+`script/run_real_mem0_quality_evaluation.py` 写入报告目录的 JSON 使用包装结构。
+默认目录是 `docs/`；如果执行时使用 `--docs-dir docs/reports`，结构不变，文件位置变为 `docs/reports/`。
 主链路指标位于 `quality`，删除与重建复查指标位于 `post_delete`。
+下面片段只展示字段位置，`<...>` 仍表示人工填写提示。
 
 ```json
 {
@@ -191,6 +196,7 @@
 ## 13. 原始质量 JSON 摘要
 
 以下结构对应 `quality` 或 `post_delete` 对象。
+下面片段只展示字段位置，正式报告应以脚本输出的数字、布尔值和 `null` 为准。
 
 ```json
 {

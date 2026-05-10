@@ -69,7 +69,15 @@ PYTHONPATH=src .venv/bin/alembic current -v
 PYTHONPATH=src .venv/bin/alembic upgrade head --sql
 ```
 
-本次已验证静态 SQL 生成通过，说明迁移脚本可编译。当前机器真实连库被本地 PostgreSQL 认证挡住，错误为 `password authentication failed for user "postgres"`，需要先修正 `.env` 或本地数据库密码。
+注：静态 SQL 生成只验证迁移脚本可编译，不代表当前数据库已经能连上。
+真实连库状态应以 `PYTHONPATH=src .venv/bin/alembic current -v` 的即时输出为准。
+
+常见错误可以按下面区分：
+
+| 错误 | 直白解释 | 处理方式 |
+| --- | --- | --- |
+| `password authentication failed for user "postgres"` | 已经连到 PostgreSQL，但用户名或密码不匹配。 | 修正 `.env` 里的账号密码，或调整本地数据库密码。 |
+| `Connect call failed` / `Connection refused` | 指定的 `POSTGRES_HOST / POSTGRES_PORT` 没有可用实例。 | 检查 `docker compose up -d postgres` 是否成功，以及 `.env` 端口是否和 `docker-compose.yml` 一致。 |
 
 ## 4. 表结构要点
 

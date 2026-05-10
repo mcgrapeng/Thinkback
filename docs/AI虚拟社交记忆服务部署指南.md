@@ -42,6 +42,11 @@ MEMORY_LLM_MODEL=qwen3.5-flash
 MEMORY_EMBEDDING_MODEL=text-embedding-v4
 MEM0_HISTORY_DB_PATH=.mem0/history.db
 MEMORY_L3_WRITE_MODE=async
+MEMORY_API_WORKER_LIMIT=8
+MEMORY_L3_EXECUTOR_WORKERS=16
+MEMORY_L3_MAX_PENDING_TASKS=256
+MEMORY_L3_QUEUE_WAIT_SECONDS=5
+READINESS_TIMEOUT_SECONDS=30
 ```
 
 Mem0 不再作为独立 REST Server 部署。
@@ -67,6 +72,16 @@ Thinkback 会按 Mem0 支持的 `host/port` 方式连接。
 `MEMORY_L3_WRITE_MODE=async` 是首版推荐配置。
 append 请求同步完成可靠轮次存储、L1/L2 更新和首版槽位索引。
 Mem0 L3 抽取在后台任务中沉淀，避免外部 LLM/Embedding 抖动把写入接口拖到超时。
+
+注：下面几个并发参数不是线上容量承诺，只是当前 P0 压测基线。
+
+| 变量 | 直白解释 |
+| --- | --- |
+| `MEMORY_API_WORKER_LIMIT` | `/memory/*` 路由进入线程池的并发上限。调大可以让更多同步工作同时跑，但也会增加数据库、Mem0 和模型服务压力。 |
+| `MEMORY_L3_EXECUTOR_WORKERS` | L3 后台抽取线程数。它影响 Mem0 写入并发，不影响 append 已经完成可靠轮次存储这件事。 |
+| `MEMORY_L3_MAX_PENDING_TASKS` | L3 后台写入队列容量。队列满时 append 会触发背压，避免无限堆积。 |
+| `MEMORY_L3_QUEUE_WAIT_SECONDS` | 队列接近满时最多等待多久。超过后仍无容量，会返回明确错误而不是静默丢任务。 |
+| `READINESS_TIMEOUT_SECONDS` | `/health/ready` 检查数据库、Redis、Qdrant、Mem0 Library 时的单项依赖超时时间。 |
 
 ## 3. 本地启动
 
@@ -124,7 +139,7 @@ curl http://localhost:8000/health/live
 curl http://localhost:8000/health/ready
 ```
 
-就绪检查会检查数据库、Redis、共享 Qdrant 和 Mem0 Library。当前本机如果出现：
+就绪检查会检查数据库、Redis、共享 Qdrant 和 Mem0 Library。如果出现：
 
 ```text
 password authentication failed for user "postgres"
@@ -132,6 +147,9 @@ password authentication failed for user "postgres"
 
 说明应用连到了一个可达但密码不匹配的 PostgreSQL。
 常见原因是本机已有服务占用 `5432`，而不是 compose 内的 `thinkback-postgres`。
+
+如果看到 `Connection refused` 或 `Connect call failed`，含义不同：应用没有连到可用 PostgreSQL。
+这时优先检查 `POSTGRES_HOST / POSTGRES_PORT`、`docker compose ps postgres`，以及 compose 暴露端口是否和 `.env` 一致。
 
 ## 6. 真实主链路验证
 

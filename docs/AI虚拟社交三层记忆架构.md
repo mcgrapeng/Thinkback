@@ -324,6 +324,12 @@ L3 不应该自研“抽取 -> 拼装 -> 向量落库”这套记忆引擎。读
 
 冲突收敛也按这个原则处理：能由 Mem0 处理的交给 Mem0；不能稳定表达的部分，业务侧再用显式 update/delete/rebuild 兜底。
 
+注：当前工程还有一个 P0 补偿边界。为了让首版质量门禁能稳定覆盖昵称、宠物名、地点、生日、饮品、食物等核心槽位，业务服务会从用户轮次中生成一份受控的本地槽位索引，`backend_memory_id` 以 `local-p0:` 开头。
+这份索引只解决“首版必须稳定答对的少数槽位”：确定性纠错、重复 active 控制和召回补偿。
+它不写入 Qdrant，也不替代 Mem0 的长期记忆抽取、分类、向量化和语义检索。
+当 Mem0 返回真实 backend memory 后，adapter 会把同来源的本地补偿索引更新为真实 backend id。
+因此，“不要自研第二套记忆引擎”的边界仍然成立；P0 槽位补偿只能被理解为有限、可删除、可审计的业务索引，不是新的长期记忆后端。
+
 这里有一个容易踩坑的点：Mem0 不同 SDK / Platform 版本里的实体、过滤、命名空间和返回语义可能不同。文章里写 `mem0.add`、`mem0.search`，表达的是“业务 adapter 应该具备这类能力”，不是要求照抄某个 SDK 的固定签名。真正需要稳定的是业务侧隔离结果，而不是某个参数名字。
 
 尤其要避免把 `user_id + agent_id=character_id` 直接写死成严格交集隔离。若当前版本不能稳定表达 `user_id × character_id`，就改用组合命名空间、租户键或组合用户键。不要退化为只依赖 `filters={character_id}`，也不要把 Mem0 的实体作用域当成唯一安全边界。
@@ -954,6 +960,9 @@ L3 写入可以再展开一层：
 | `last_error` | 最近一次错误摘要，不保存敏感正文 |
 | `result` | 任务脱敏结果，例如影响的业务索引、summary_state、是否跳过，不保存被删正文 |
 | `created_at / updated_at` | 排障和状态更新时间 |
+
+注：`op_type=delete_all` 是 Thinkback 的业务任务类型，含义是“清理某个 `user_id × character_id` 作用域下全部记忆”。
+它不是 Mem0 SDK 的原生 `delete_all()` 调用；实际执行仍应先按业务索引列出 backend memory id，再逐条调用 Mem0 `delete()`。
 
 治理增强字段：
 

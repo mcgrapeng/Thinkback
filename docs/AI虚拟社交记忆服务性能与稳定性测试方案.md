@@ -58,16 +58,93 @@
 
 ### 4.1 生产前阶段汇总
 
+先用 `script/real_mem0_stability_preprod.py` 生成各阶段 JSON，再把这些 JSON 汇总成生产前报告。
+注：`real_mem0_stability_preprod.py` 是兼容入口，实际调用的是 P0 生产前压测编排逻辑。
+注：下面命令只把 `THINKBACK_API_URL` 显式写在命令行里。
+底层短压测脚本仍会从环境变量或 `.env` 读取 `OPENAI_API_KEY`、`QDRANT_URL`、PostgreSQL 和 Redis 配置；缺少这些真实依赖时会直接失败，不应解读为压测通过。
+
+快速短探针示例：
+
+```bash
+env THINKBACK_API_URL=${THINKBACK_API_URL:?set THINKBACK_API_URL} \
+PYTHONPATH=src .venv/bin/python script/real_mem0_stability_preprod.py \
+  --phase baseline \
+  --phase stress \
+  --phase spike \
+  --report-dir docs/reports \
+  --output-dir docs/reports
+```
+
+注：`--phase baseline / stress / spike` 会先生成 `p0-short-*.json` 子报告，再生成一个生产前汇总报告。
+它适合做快速探针，不等同于完整生产前证据。
+完整生产前证据中，`baseline`、`stress`、`soak` 需要持续时间门禁，`spike` 需要恢复曲线门禁。
+
+正式 `baseline` 阶段示例：
+
+```bash
+env THINKBACK_API_URL=${THINKBACK_API_URL:?set THINKBACK_API_URL} \
+PYTHONPATH=src .venv/bin/python script/real_mem0_stability_preprod.py \
+  --duration-phase baseline \
+  --target-duration-seconds 600 \
+  --report-dir docs/reports \
+  --output-dir docs/reports
+```
+
+正式 `stress` 阶段示例：
+
+```bash
+env THINKBACK_API_URL=${THINKBACK_API_URL:?set THINKBACK_API_URL} \
+PYTHONPATH=src .venv/bin/python script/real_mem0_stability_preprod.py \
+  --duration-phase stress \
+  --target-duration-seconds 900 \
+  --report-dir docs/reports \
+  --output-dir docs/reports
+```
+
+正式 `spike` 阶段示例：
+
+```bash
+env THINKBACK_API_URL=${THINKBACK_API_URL:?set THINKBACK_API_URL} \
+PYTHONPATH=src .venv/bin/python script/real_mem0_stability_preprod.py \
+  --full-spike \
+  --report-dir docs/reports \
+  --output-dir docs/reports
+```
+
+`soak` 按 4.2 的持续时间命令单独生成。
+`fault_injection` 和 `representative_replay` 分别由故障注入脚本和代表性样本回放脚本生成。
+
+故障注入报告示例：
+
+```bash
+PYTHONPATH=src .venv/bin/python script/real_mem0_p0_fault_injection.py \
+  --output-dir docs/reports
+```
+
+代表性样本回放报告示例：
+
+```bash
+PYTHONPATH=src .venv/bin/python script/real_mem0_p0_representative_replay.py \
+  --output-dir docs/reports \
+  <p0-short-1.json> <p0-short-2.json>
+```
+
+注：代表性样本回放脚本不重新压测，它读取已有 `p0-short-*.json`，检查样本类别覆盖和子报告结论。
+
+汇总命令示例：
+
 ```bash
 PYTHONPATH=src .venv/bin/python script/real_mem0_stability_preprod.py \
   --output-dir docs/reports \
-  --phase-report baseline=<baseline.json> \
-  --phase-report stress=<stress.json> \
-  --phase-report spike=<spike.json> \
-  --phase-report soak=<soak.json> \
+  --phase-report baseline=<p0-duration-baseline-....json> \
+  --phase-report stress=<p0-duration-stress-....json> \
+  --phase-report spike=<p0-spike-full-....json> \
+  --phase-report soak=<p0-duration-soak-....json> \
   --phase-report fault_injection=<fault_injection.json> \
   --phase-report representative_replay=<representative_replay.json>
 ```
+
+注：如果把短探针 `p0-short-*.json` 当作 `baseline / stress / soak` 输入，汇总仍可生成，但 `production_precheck_passed` 不会代表完整生产前通过。
 
 ### 4.2 10 分钟 soak
 

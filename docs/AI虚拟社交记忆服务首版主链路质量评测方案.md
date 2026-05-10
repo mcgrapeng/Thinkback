@@ -186,6 +186,9 @@ https://blog.getzep.com/zep-a-temporal-knowledge-graph-architecture-for-agent-me
 
 首版质量评测应使用真实依赖执行，不使用 fake 模式替代。
 默认使用包装脚本执行评测并写入独立 JSON / Markdown 报告。
+注：下面命令按当前默认写入 `docs/` 根目录。
+如果希望和性能报告统一归档，可以把 `--docs-dir docs` 改成 `--docs-dir docs/reports`。
+自动生成的 Markdown 适合快速看结论和失败指标；它不是人工定稿报告，逐 case 证据仍需要按报告模板补齐。
 
 ```bash
 env OPENAI_API_KEY=${OPENAI_API_KEY:?set OPENAI_API_KEY} \
@@ -209,7 +212,7 @@ PYTHONPATH=src .venv/bin/python script/real_mem0_quality_regression.py
 | --- | --- |
 | 环境真实 | API、Mem0 Library、OpenAI 或 OpenAI-compatible endpoint、Qdrant、PostgreSQL 必须可用。 |
 | 数据隔离 | 每次执行使用唯一 `run_id`、user、character、session。 |
-| 结果留痕 | 保存评测运行 JSON、原始 `quality` / `post_delete` 对象、失败 case、召回文本和 active memory 列表。 |
+| 结果留痕 | 保存评测运行 JSON、原始 `quality` / `post_delete` 对象和失败 case。当前自动生成的 Markdown 只汇总失败 case 和失败指标；JSON 可提供 run_id、指标、`case_results` 和子进程输出尾部。逐 case 的 query、期望事实、禁用事实要从脚本 case 定义或人工报告补齐；召回摘要和 active memory 证据可从 stdout/stderr tail、数据库快照或人工复核补充。 |
 | 报告分离 | 本文不写入任何本轮数据，包装脚本把结果写入独立评测报告。 |
 
 ## 9. 报告要求

@@ -2,7 +2,7 @@
 
 > 本文承接《AI虚拟社交三层记忆架构》的工程实现细节，面向实现、联调和排障。架构主文讲清楚问题、三层分工、四条闭环和数据落点；本文只展开服务入口、任务编排、幂等、降级、治理和可观测性。
 >
-> 工程实现仍遵守一个边界：L3 不自研记忆引擎。写入侧优先复用 Mem0 的抽取、分类和去重能力；检索侧优先复用 Mem0 的语义检索、过滤、阈值、数量限制和重排能力；显式更新/删除由业务命令调用 Mem0 update/delete/delete_all。冲突收敛按当前 Mem0 版本实测，能交给 Mem0 的交给 Mem0，不能稳定表达的部分才由业务侧显式 update/delete/rebuild 兜底。应用层只做业务隔离、任务编排、审计、L1/L2 和最终召回融合。
+> 工程实现仍遵守一个边界：L3 不自研记忆引擎。写入侧优先复用 Mem0 的抽取、分类和去重能力；检索侧优先复用 Mem0 的语义检索、过滤、阈值、数量限制和重排能力；显式更新/删除由业务命令调用 Mem0 update/delete。范围删除必须先按业务索引找出当前 `user_id × character_id` 下的 backend memory id，再逐条调用 Mem0 delete；不能把业务范围删除直接映射成 Mem0 原生 `delete_all()`。冲突收敛按当前 Mem0 版本实测，能交给 Mem0 的交给 Mem0，不能稳定表达的部分才由业务侧显式 update/delete/rebuild 兜底。应用层只做业务隔离、任务编排、审计、L1/L2 和最终召回融合。
 
 ---
 ## 1. 工程参考流程
@@ -104,7 +104,7 @@ delete 首版流程：
                v
 +------------------------------+
 | 删除目标 L3                   |
-| Mem0 delete / delete_all      |
+| Mem0 delete / 逐条 delete     |
 +--------------+---------------+
                |
                v
@@ -865,7 +865,7 @@ P0 主路径可以简化理解为：
                v
 +------------------------------+
 | 删除目标 L3                   |
-| Mem0 delete / delete_all      |
+| Mem0 delete / 逐条 delete     |
 +--------------+---------------+
                |
                v
@@ -884,6 +884,10 @@ P0 主路径可以简化理解为：
 同步返回统一格式：`code(int) + message + data(request_id, delete_scope, task_id)`。
 
 说明：P0 按架构主文 §3.3 的删除流程落地即可，但任务身份不能只使用静态 scope_key；至少需要 `scope_key + p0_scope_version` 或显式 `operation_id`。`snapshot / suppression / fence / tombstone / carry-forward` 属于 P2 强治理能力。
+
+注：这里的“范围删除”是 Thinkback 的业务语义，不是 Mem0 原生 `delete_all()`。
+当前安全做法是：先从 `tb_memory` 这类业务索引中列出本作用域可见的 backend memory id，再对这些 id 逐条调用 Mem0 `delete()`。
+这样可以避免共享 Qdrant collection 被底层 `reset()` 误清空。
 
 ```text
 [delete command
@@ -1084,9 +1088,10 @@ P0 主路径可以简化理解为：
      |    -> 将 summary_round_journal 中 session_id 匹配、尚未摘要覆盖且 write_fence_version<=cutoff_write_fence_version 的 active 轮次
      |       标记为推进后 fence 可见的 deleted_tombstone
      |       说明：不直接物理删除，避免 L2 后续连续前缀判断被 round_index 缺口卡死
-     |    -> mem0_adapter.delete_all(scope=user_character_scope, filters={character_id, session_id,
-     |       write_fence_version__lte=cutoff_write_fence_version})
-     |       cutoff_write_fence_version 保护操作开始后的新 append 不被误删
+     |    -> 按业务索引列出候选 backend_memory_id
+     |       filters={character_id, session_id, write_fence_version__lte=cutoff_write_fence_version}
+     |    -> 对候选 id 逐条调用 mem0_adapter.delete(memory_id)
+     |       注：这不是调用 Mem0 原生 delete_all；cutoff_write_fence_version 保护操作开始后的新 append 不被误删
      |    -> 若删除范围可能影响当前 current_summary
      |       则触发 L2 rebuild：基于删除后的剩余完整轮次历史重建或清空 current_summary
      |    -> 若删除范围不影响当前 current_summary 正文
@@ -1104,8 +1109,10 @@ P0 主路径可以简化理解为：
      |    -> INCR user×character fence_version，记录 cutoff_write_fence_version = 推进前的值
      |    -> 清理该 user×character 下全部 session 中 write_fence_version<=cutoff_write_fence_version 的 L1 短期记忆
      |    -> 清理该 user×character 下 write_fence_version<=cutoff_write_fence_version 的 summary_round_journal
-     |    -> mem0_adapter.delete_all(scope=user_character_scope, filters={character_id,
-     |       write_fence_version__lte=cutoff_write_fence_version})
+     |    -> 按业务索引列出候选 backend_memory_id
+     |       filters={character_id, write_fence_version__lte=cutoff_write_fence_version}
+     |    -> 对候选 id 逐条调用 mem0_adapter.delete(memory_id)
+     |       注：同上，不能直接调用 Mem0 原生 delete_all
      |    -> 清空 current_summary，并将 summary_cursor_round=0
      |    -> append_cursor_round_index 不回退；后续 append 仍必须使用更大的连续 round_index
      |
@@ -1368,15 +1375,16 @@ P0 主路径可以简化理解为：
      v
 [重建 L3]
 - rebuild_scope=session
-    mem0_adapter.delete_all(scope=user_character_scope, filters={character_id, session_id, write_fence_version__lte=cutoff_write_fence_version})
+    按业务索引列出 session 范围候选 backend_memory_id，再逐条调用 mem0_adapter.delete(memory_id)
  - rebuild_scope=all
-    mem0_adapter.delete_all(scope=user_character_scope, filters={character_id, write_fence_version__lte=cutoff_write_fence_version})
+    按业务索引列出 user×character 范围候选 backend_memory_id，再逐条调用 mem0_adapter.delete(memory_id)
+    注：如果实现里保留 `delete_all` 这个方法名，它也只能是安全业务封装，内部仍应先查业务索引再逐条 Mem0 delete，不能直连 Mem0 原生 `delete_all()`。
  - 若重建范围内无历史对话 -> rebuilt_l3_count=0
  - 若重建范围内有历史对话
      按 source_timestamp / round_id 稳定排序
      mem0_adapter.add(messages, scope=user_character_scope, metadata) 重新写入
      P2 写入前后必须应用仍有效的 suppression；命中已删除 memory 的同义事实时跳过本次写入，若 Mem0 已形成结果，则通过显式 delete 命令清理该结果
-     Mem0 写入侧已提供的抽取、分类和去重能力优先复用；冲突通过 Mem0 能力加显式 update/delete/rebuild 收敛；删除仍由 rebuild 前的 delete_all 显式完成
+     Mem0 写入侧已提供的抽取、分类和去重能力优先复用；冲突通过 Mem0 能力加显式 update/delete/rebuild 收敛；删除仍由 rebuild 前的按索引逐条 delete 显式完成
      adapter 补齐业务 metadata：character_id / session_id / source_ref_id / backend_categories? / memory_type? / importance? / 推进后的 write_fence_version / recall_priority?
      |
      v
@@ -1794,7 +1802,7 @@ HTTP 状态表达传输层和服务可达性，响应体中的 `code / message /
 - adapter 必须按当前 Mem0 OSS/Platform 的实体、namespace、run、tenant、metadata filter 和返回字段实测映射该 scope。
 - 不允许把 `user_id + agent_id=character_id` 写死成严格交集隔离。若当前 Mem0 模式不能稳定表达交集，使用组合用户键、组合 namespace、租户键或其他单一强隔离键。
 - `filters={character_id, ...}` 只做二次校验、治理、审计和误写防护，不承担主要隔离职责。
-- 写入侧优先复用 Mem0 的抽取、去重和分类；检索侧优先复用 Mem0 的 filters、top_k、threshold、rerank；显式更新/删除由业务命令调用 Mem0 update/delete/delete_all。冲突收敛按当前版本实测，能交给 Mem0 的交给 Mem0，不能稳定表达的部分才由业务侧显式 update/delete/rebuild 兜底。若某项参数或返回字段在当前 SDK/Platform 不可用，adapter 必须降级为等价可验证映射，不能在应用层重做记忆引擎。
+- 写入侧优先复用 Mem0 的抽取、去重和分类；检索侧优先复用 Mem0 的 filters、top_k、threshold、rerank；显式更新/删除由业务命令调用 Mem0 update/delete。范围删除由 adapter 按业务索引逐条 delete，不直接调用 Mem0 原生 `delete_all()`。冲突收敛按当前版本实测，能交给 Mem0 的交给 Mem0，不能稳定表达的部分才由业务侧显式 update/delete/rebuild 兜底。若某项参数或返回字段在当前 SDK/Platform 不可用，adapter 必须降级为等价可验证映射，不能在应用层重做记忆引擎。
 
 公共规则：
 
