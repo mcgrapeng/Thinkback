@@ -250,8 +250,10 @@ def _start_api_process(
     env_overrides: dict[str, str],
     log_path: Path,
 ) -> subprocess.Popen[str]:
-    env = os.environ.copy()
-    env.update({key: str(value) for key, value in dotenv_values(".env").items() if value is not None})
+    # 环境优先级：.env 只提供默认值；本轮命令显式传入的数据库、Redis 等配置必须保留；
+    # 故障注入场景的 env_overrides 最后覆盖，用来制造指定依赖不可用。
+    env = {key: str(value) for key, value in dotenv_values(".env").items() if value is not None}
+    env.update(os.environ.copy())
     env.update(env_overrides)
     env["PYTHONPATH"] = "src"
     command = [

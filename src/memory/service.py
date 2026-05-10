@@ -863,7 +863,24 @@ class MemoryService:
             return "pet_name:rabbit"
         if any(
             marker in normalized
-            for marker in ("称呼", "nickname", "called", "preferred name", "叫用户", "叫我")
+            # 这里的 address 指“如何称呼”，不是地址；避免用裸 address 误伤住址查询。
+            for marker in (
+                "称呼",
+                "nickname",
+                "called",
+                "preferred name",
+                "叫用户",
+                "叫我",
+                "address the user",
+                "address me",
+                "how should i address",
+                "how do i address",
+                "what should i call",
+                "call the user",
+                "call me",
+                "refer to the user",
+                "refer to me",
+            )
         ):
             return "preferred_nickname"
         if any(marker in normalized for marker in ("住哪", "住在", "城市", "location", "live")):
@@ -1093,6 +1110,13 @@ class MemoryService:
                 memory_type=str(l3_metadata["memory_type"]),
                 backend_categories=backend_categories,
                 metadata=index_metadata,
+            )
+            self._supersede_conflicting_memories(
+                user_id=user_id,
+                character_id=character_id,
+                backend_memory_id=backend_id,
+                memory_text=memory_text,
+                l3_metadata=l3_metadata,
             )
             if memory_text != original_memory_text:
                 self.backend.update(backend_id, memory_text)
@@ -1392,6 +1416,12 @@ class MemoryService:
             )
         ):
             return "sleep_reminder_preference"
+        if any(marker in normalized for marker in ("meeting time preference", "会议时间", "开会时间")):
+            return "meeting_time_preference"
+        if any(marker in normalized for marker in ("exercise preference", "运动偏好", "喜欢什么运动")):
+            return "exercise_preference"
+        if any(marker in normalized for marker in ("story-world base location", "剧情设定里的据点", "据点")):
+            return "story_world_base_location"
         return None
 
     @classmethod
@@ -1492,6 +1522,21 @@ class MemoryService:
             )
         if slot == "favorite:food":
             return cls._source_has_any(source_text, ("食物", "吃", "food"))
+        if slot == "meeting_time_preference":
+            return cls._source_has_any(
+                source_text,
+                ("会议", "开会", "时间", "上午", "下午", "meeting", "morning", "afternoon"),
+            )
+        if slot == "exercise_preference":
+            return cls._source_has_any(
+                source_text,
+                ("运动", "游泳", "跑步", "exercise", "swimming", "running"),
+            )
+        if slot == "story_world_base_location":
+            return cls._source_has_any(
+                source_text,
+                ("剧情", "设定", "据点", "灯塔", "story", "base", "lighthouse"),
+            )
         if slot == "sleep_reminder_preference":
             return cls._source_has_any(source_text, ("睡", "提醒", "sleep", "reminder"))
         return True
@@ -1527,6 +1572,15 @@ class MemoryService:
         if favorite:
             kind, value = favorite
             canonical.append(f"User favorite {kind}: {value}")
+        meeting_time_preference = cls._extract_meeting_time_preference(source_text)
+        if meeting_time_preference:
+            canonical.append(f"User meeting time preference: {meeting_time_preference}")
+        exercise_preference = cls._extract_exercise_preference(source_text)
+        if exercise_preference:
+            canonical.append(f"User exercise preference: {exercise_preference}")
+        story_world_place = cls._extract_story_world_base_location(source_text)
+        if story_world_place:
+            canonical.append(f"Story-world base location: {story_world_place}")
         sleep_reminder_preference = cls._extract_sleep_reminder_preference(source_text)
         if sleep_reminder_preference:
             canonical.append(f"User sleep reminder preference: {sleep_reminder_preference}")
@@ -1557,6 +1611,15 @@ class MemoryService:
         if favorite:
             kind, value = favorite
             return f"User favorite {kind}: {value}"
+        meeting_time_preference = cls._extract_meeting_time_preference(memory_text)
+        if meeting_time_preference:
+            return f"User meeting time preference: {meeting_time_preference}"
+        exercise_preference = cls._extract_exercise_preference(memory_text)
+        if exercise_preference:
+            return f"User exercise preference: {exercise_preference}"
+        story_world_place = cls._extract_story_world_base_location(memory_text)
+        if story_world_place:
+            return f"Story-world base location: {story_world_place}"
         sleep_reminder_preference = cls._extract_sleep_reminder_preference(memory_text)
         if sleep_reminder_preference:
             return f"User sleep reminder preference: {sleep_reminder_preference}"
@@ -1927,6 +1990,46 @@ class MemoryService:
                     flags=re.IGNORECASE,
                 )[0].strip("。,.， ")
                 return kind, value
+        return None
+
+    @staticmethod
+    def _extract_meeting_time_preference(memory_text: str) -> str | None:
+        normalized = memory_text.strip()
+        lowered = normalized.lower()
+        if not any(marker in lowered for marker in ("meeting", "会议", "开会")):
+            return None
+        if "下午" in normalized or "afternoon" in lowered:
+            return "下午"
+        if "上午" in normalized or "morning" in lowered:
+            return "上午"
+        return None
+
+    @staticmethod
+    def _extract_exercise_preference(memory_text: str) -> str | None:
+        normalized = memory_text.strip()
+        lowered = normalized.lower()
+        if not any(marker in lowered for marker in ("exercise", "sport", "运动", "游泳", "跑步")):
+            return None
+        if "游泳" in normalized or "swimming" in lowered:
+            return "游泳"
+        if "跑步" in normalized or "running" in lowered:
+            return "跑步"
+        return None
+
+    @staticmethod
+    def _extract_story_world_base_location(memory_text: str) -> str | None:
+        normalized = memory_text.strip()
+        lowered = normalized.lower()
+        if not any(marker in lowered for marker in ("story", "roleplay", "fiction", "剧情", "设定", "据点")):
+            return None
+        patterns = (
+            r"(?:据点|基地)(?:在|位于)\s*([^。,.，]+)",
+            r"\b(?:story-world|story|roleplay|fictional)\s+(?:base|base location)\s*(?:is|:|at)\s*(.+?)(?:[.;。]|$)",
+        )
+        for pattern in patterns:
+            matches = re.findall(pattern, normalized, flags=re.IGNORECASE)
+            if matches:
+                return str(matches[-1]).strip("。,.， ")
         return None
 
     @staticmethod

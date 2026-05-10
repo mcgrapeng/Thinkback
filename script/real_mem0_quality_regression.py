@@ -8,6 +8,7 @@ import re
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from hashlib import sha1
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
@@ -17,6 +18,24 @@ from dotenv import load_dotenv
 
 from infra.config import Settings
 from memory.repositories import MemoryIndexEntry, SqlAlchemyMemoryRepository
+
+
+def _compact_identifier(*parts: object, max_length: int = 128) -> str:
+    raw = re.sub(
+        r"-+",
+        "-",
+        "-".join(
+            re.sub(r"[^a-zA-Z0-9_-]", "-", str(part)).strip("-")
+            for part in parts
+            if str(part).strip()
+        ),
+    ).strip("-")
+    if len(raw) <= max_length:
+        return raw
+    digest = sha1(raw.encode("utf-8")).hexdigest()[:8]
+    suffix_budget = min(48, max_length - len(digest) - 2)
+    prefix_budget = max_length - suffix_budget - len(digest) - 2
+    return f"{raw[:prefix_budget]}-{digest}-{raw[-suffix_budget:]}"
 
 
 @dataclass(frozen=True)
@@ -32,13 +51,14 @@ class QualityScope:
         return re.sub(r"[^a-zA-Z0-9_-]", "-", raw)[-48:]
 
     def round_id(self, index: int) -> str:
-        return f"{self.run_id}-{self.scope_suffix}-round-{index}"
+        return _compact_identifier(self.run_id, self.scope_suffix, f"round-{index}", max_length=113)
 
     def request_id(self, label: str) -> str:
-        return f"{self.run_id}-{self.scope_suffix}-{label}"
+        return _compact_identifier(self.run_id, self.scope_suffix, label, max_length=128)
 
     def operation_id(self, label: str) -> str:
-        return f"{self.run_id}-{self.scope_suffix}-{label}-op"
+        # 中文注释：服务端任务 ID 会加 memory-delete/rebuild 前缀，operation_id 必须预留前缀空间。
+        return _compact_identifier(self.run_id, self.scope_suffix, label, "op", max_length=113)
 
     def for_character(self, character_id: str, session_id: str) -> QualityScope:
         return QualityScope(
@@ -141,6 +161,333 @@ class RequestMetrics:
         }
 
 
+def build_production_quality_cases() -> list[EvaluationCase]:
+    # 中文注释：这组 case 是质量-only 的生产级扩展样本，不包含稳定性、并发或容量测试。
+    # 重点覆盖真实用户容易出问题的几类语义风险：纠错后旧值污染、未知事实误召回、
+    # 中英混写/转述表达漂移，以及跨用户/角色/现实剧情隔离。
+    return [
+        EvaluationCase(
+            name="nickname-current",
+            category="slot_conflict",
+            query="现在应该怎么称呼用户？",
+            intent="preference",
+            expected_terms=["小鹏"],
+            forbidden_terms=["阿鹏"],
+        ),
+        EvaluationCase(
+            name="cat-current",
+            category="slot_conflict",
+            query="用户的猫叫什么？",
+            expected_terms=["麻薯"],
+            forbidden_terms=["团子", "露露", "泡芙"],
+        ),
+        EvaluationCase(
+            name="location-current",
+            category="slot_conflict",
+            query="用户现在住在哪？",
+            expected_terms=[["上海", "Shanghai"]],
+            forbidden_terms=["杭州", "Hangzhou"],
+        ),
+        EvaluationCase(
+            name="work-status-current",
+            category="slot_conflict",
+            query="用户现在的工作状态是什么？",
+            expected_terms=["Moonshot"],
+            forbidden_terms=["评估其它机会", "evaluating"],
+        ),
+        EvaluationCase(
+            name="communication-current",
+            category="slot_conflict",
+            query="用户希望你怎么给建议？",
+            intent="preference",
+            expected_terms=[["简洁直接", "concise", "direct"]],
+            forbidden_terms=["先安慰", "reassurance"],
+        ),
+        EvaluationCase(
+            name="birthday-current",
+            category="slot_conflict",
+            query="用户生日是哪天？",
+            expected_terms=[["6月1日", "June 1"]],
+            forbidden_terms=["5月20日", "May 20"],
+        ),
+        EvaluationCase(
+            name="drink-current",
+            category="slot_conflict",
+            query="用户现在喜欢喝什么？",
+            intent="preference",
+            expected_terms=[["茶", "tea"]],
+            forbidden_terms=["咖啡", "coffee"],
+        ),
+        EvaluationCase(
+            name="food-current",
+            category="slot_conflict",
+            query="用户现在喜欢吃什么？",
+            intent="preference",
+            expected_terms=[["寿司", "sushi"]],
+            forbidden_terms=["汉堡", "hamburger", "burger"],
+        ),
+        EvaluationCase(
+            name="dog-current",
+            category="slot_conflict",
+            query="用户的狗叫什么？",
+            expected_terms=["豆包"],
+            forbidden_terms=["麻薯", "团子", "露露", "泡芙"],
+        ),
+        EvaluationCase(
+            name="sleep-reminder-current",
+            category="slot_conflict",
+            query="用户现在还讨厌被提醒睡觉吗？",
+            intent="preference",
+            expected_terms=[["温和", "gentle", "接受", "okay"]],
+            forbidden_terms=["讨厌", "dislikes"],
+        ),
+        EvaluationCase(
+            name="calendar-current",
+            category="slot_conflict",
+            query="用户偏好的会议时间是什么？",
+            intent="preference",
+            expected_terms=[["下午", "afternoon"]],
+            forbidden_terms=["上午", "morning"],
+        ),
+        EvaluationCase(
+            name="exercise-current",
+            category="slot_conflict",
+            query="用户现在喜欢什么运动？",
+            intent="preference",
+            expected_terms=[["游泳", "swimming"]],
+            forbidden_terms=["跑步", "running"],
+        ),
+        EvaluationCase(
+            name="negative-bird",
+            category="negative_control",
+            query="用户的鸟叫什么？",
+            expected_terms=[],
+            forbidden_terms=["麻薯", "团子", "豆包", "猫", "狗", "cat", "dog"],
+        ),
+        EvaluationCase(
+            name="negative-rabbit",
+            category="negative_control",
+            query="用户的兔子叫什么？",
+            expected_terms=[],
+            forbidden_terms=["麻薯", "豆包", "猫", "狗", "cat", "dog"],
+        ),
+        EvaluationCase(
+            name="negative-phone",
+            category="negative_control",
+            query="用户现在用什么手机？",
+            expected_terms=[],
+            forbidden_terms=["iPhone", "Android", "手机", "phone"],
+        ),
+        EvaluationCase(
+            name="negative-never-shared-phone",
+            category="negative_control",
+            query="用户从未说过的手机号是多少？",
+            expected_terms=[],
+            forbidden_terms=["手机号", "phone number", "138", "139"],
+        ),
+        EvaluationCase(
+            name="negative-family",
+            category="negative_control",
+            query="用户的姐姐叫什么？",
+            expected_terms=[],
+            forbidden_terms=["姐姐", "sister", "家人", "family"],
+        ),
+        EvaluationCase(
+            name="negative-company-location",
+            category="negative_control",
+            query="用户公司的办公室在哪一层？",
+            expected_terms=[],
+            forbidden_terms=["楼", "floor", "office"],
+        ),
+        EvaluationCase(
+            name="negative-roleplay-cat",
+            category="isolation",
+            query="用户现实里的猫叫什么？",
+            expected_terms=["麻薯"],
+            forbidden_terms=["露露"],
+            metric_tags=("roleplay_real_mix_rate",),
+        ),
+        EvaluationCase(
+            name="roleplay-cat",
+            category="isolation",
+            query="剧情设定里的猫叫什么？",
+            expected_terms=["露露"],
+            forbidden_terms=["麻薯", "团子"],
+            metric_tags=("roleplay_real_mix_rate",),
+        ),
+        EvaluationCase(
+            name="roleplay-place",
+            category="isolation",
+            query="剧情设定里的据点在哪？",
+            expected_terms=[["海边灯塔", "lighthouse"]],
+            forbidden_terms=["上海", "杭州"],
+            metric_tags=("roleplay_real_mix_rate",),
+        ),
+        EvaluationCase(
+            name="negative-cross-user-cat",
+            category="isolation",
+            query="用户的猫叫什么？",
+            expected_terms=["麻薯"],
+            forbidden_terms=["奶盖"],
+            metric_tags=("cross_user_leak_rate",),
+        ),
+        EvaluationCase(
+            name="negative-cross-user-drink",
+            category="isolation",
+            query="用户喜欢喝什么？",
+            expected_terms=[["茶", "tea"]],
+            forbidden_terms=["可乐", "cola"],
+            metric_tags=("cross_user_leak_rate",),
+        ),
+        EvaluationCase(
+            name="negative-cross-character-cat",
+            category="isolation",
+            query="用户的猫叫什么？",
+            expected_terms=["麻薯"],
+            forbidden_terms=["泡芙"],
+            metric_tags=("cross_character_leak_rate",),
+        ),
+        EvaluationCase(
+            name="negative-cross-character-food",
+            category="isolation",
+            query="用户喜欢吃什么？",
+            expected_terms=[["寿司", "sushi"]],
+            forbidden_terms=["披萨", "pizza"],
+            metric_tags=("cross_character_leak_rate",),
+        ),
+        EvaluationCase(
+            name="cat-current-english-paraphrase",
+            category="expression_drift",
+            query="What is the user's cat called now?",
+            expected_terms=["麻薯"],
+            forbidden_terms=["团子", "露露", "泡芙"],
+            metric_tags=("known_drift_regression_pass_rate",),
+        ),
+        EvaluationCase(
+            name="nickname-current-paraphrase",
+            category="expression_drift",
+            query="How should I address the user?",
+            intent="preference",
+            expected_terms=["小鹏"],
+            forbidden_terms=["阿鹏"],
+            metric_tags=("known_drift_regression_pass_rate",),
+        ),
+        EvaluationCase(
+            name="location-current-english-paraphrase",
+            category="expression_drift",
+            query="Where does the user live now?",
+            expected_terms=[["上海", "Shanghai"]],
+            forbidden_terms=["杭州", "Hangzhou"],
+            metric_tags=("known_drift_regression_pass_rate",),
+        ),
+        EvaluationCase(
+            name="drink-current-english-paraphrase",
+            category="expression_drift",
+            query="What drink does the user currently prefer?",
+            intent="preference",
+            expected_terms=[["茶", "tea"]],
+            forbidden_terms=["咖啡", "coffee"],
+            metric_tags=("known_drift_regression_pass_rate",),
+        ),
+        EvaluationCase(
+            name="communication-current-paraphrase",
+            category="expression_drift",
+            query="用户现在希望建议是直接一点还是先安慰？",
+            intent="preference",
+            expected_terms=[["简洁直接", "concise", "direct"]],
+            forbidden_terms=["先安慰", "reassurance"],
+            metric_tags=("known_drift_regression_pass_rate",),
+        ),
+        EvaluationCase(
+            name="birthday-current-english-paraphrase",
+            category="expression_drift",
+            query="What date is the user's birthday?",
+            expected_terms=[["6月1日", "June 1"]],
+            forbidden_terms=["5月20日", "May 20"],
+            metric_tags=("known_drift_regression_pass_rate",),
+        ),
+    ]
+
+
+def build_post_delete_quality_cases() -> list[EvaluationCase]:
+    # 中文注释：生命周期样本单独放在这里，便于报告区分单条删除、session 删除、
+    # all 删除和 rebuild 后复活四类风险。
+    return [
+        EvaluationCase(
+            name="deleted-cat-after-delete",
+            category="delete_memory",
+            query="用户的猫叫什么？",
+            expected_terms=[],
+            forbidden_terms=["麻薯", "团子", "露露", "泡芙", "猫", "cat"],
+            metric_tags=("delete_memory_residue_rate",),
+        ),
+        EvaluationCase(
+            name="deleted-cat-after-rebuild",
+            category="rebuild",
+            query="用户的猫叫什么？",
+            expected_terms=[],
+            forbidden_terms=["麻薯", "团子", "露露", "泡芙", "猫", "cat"],
+            metric_tags=("rebuild_resurrection_rate",),
+        ),
+        EvaluationCase(
+            name="nickname-after-rebuild",
+            category="rebuild",
+            query="现在应该怎么称呼用户？",
+            intent="preference",
+            expected_terms=["小鹏"],
+            forbidden_terms=["阿鹏"],
+        ),
+        EvaluationCase(
+            name="deleted-session-drink-after-delete",
+            category="delete_session",
+            query="用户喜欢喝什么？",
+            expected_terms=[],
+            forbidden_terms=["乌龙茶", "oolong", "茶"],
+            metric_tags=("delete_session_residue_rate",),
+        ),
+        EvaluationCase(
+            name="deleted-session-food-after-delete",
+            category="delete_session",
+            query="用户喜欢吃什么夜宵？",
+            expected_terms=[],
+            forbidden_terms=["拉面", "ramen", "夜宵"],
+            metric_tags=("delete_session_residue_rate",),
+        ),
+        EvaluationCase(
+            name="deleted-session-drink-after-rebuild",
+            category="rebuild",
+            query="用户喜欢喝什么？",
+            expected_terms=[],
+            forbidden_terms=["乌龙茶", "oolong", "茶"],
+            metric_tags=("rebuild_resurrection_rate",),
+        ),
+        EvaluationCase(
+            name="deleted-all-nickname-after-delete",
+            category="delete_all",
+            query="现在应该怎么称呼用户？",
+            expected_terms=[],
+            forbidden_terms=["小鹏", "阿鹏"],
+            metric_tags=("delete_all_residue_rate",),
+        ),
+        EvaluationCase(
+            name="deleted-all-dog-after-delete",
+            category="delete_all",
+            query="用户的狗叫什么？",
+            expected_terms=[],
+            forbidden_terms=["豆包", "狗", "dog"],
+            metric_tags=("delete_all_residue_rate",),
+        ),
+        EvaluationCase(
+            name="deleted-all-nickname-after-rebuild",
+            category="rebuild",
+            query="现在应该怎么称呼用户？",
+            expected_terms=[],
+            forbidden_terms=["小鹏", "阿鹏"],
+            metric_tags=("rebuild_resurrection_rate",),
+        ),
+    ]
+
+
 def build_quality_report(
     cases: list[EvaluationCase],
     results: list[QueryResult],
@@ -164,6 +511,7 @@ def build_quality_report(
     total_l3_item_count = 0
     top1_hits = 0
     reciprocal_rank_sum = 0.0
+    case_passed_by_name: dict[str, bool] = {}
 
     for case in cases:
         result = results_by_name.get(case.name, QueryResult(case_name=case.name, recalled_text=""))
@@ -193,7 +541,7 @@ def build_quality_report(
         failure_reason: str | None = None
         if is_negative:
             negative_cases += 1
-            if forbidden_hit or result.l3_count > 0:
+            if forbidden_hit:
                 false_positive_cases += 1
                 failure_reason = "false_positive"
                 failed_cases.append(case.name)
@@ -213,6 +561,7 @@ def build_quality_report(
                 failed_cases.append(case.name)
         if case_passed:
             category_totals[category]["passed_count"] += 1
+        case_passed_by_name[case.name] = case_passed
         case_results.append(
             {
                 "name": case.name,
@@ -252,6 +601,16 @@ def build_quality_report(
         results_by_name,
         "delete_memory_residue_rate",
     )
+    delete_session_residue_rate = _tagged_forbidden_hit_rate(
+        cases,
+        results_by_name,
+        "delete_session_residue_rate",
+    )
+    delete_all_residue_rate = _tagged_forbidden_hit_rate(
+        cases,
+        results_by_name,
+        "delete_all_residue_rate",
+    )
     rebuild_resurrection_rate = _tagged_forbidden_hit_rate(
         cases,
         results_by_name,
@@ -272,6 +631,11 @@ def build_quality_report(
         results_by_name,
         "roleplay_real_mix_rate",
     )
+    known_drift_regression_pass_rate = _tagged_case_pass_rate(
+        cases,
+        case_passed_by_name,
+        "known_drift_regression_pass_rate",
+    )
     request_metrics_dict = (request_metrics or RequestMetrics()).as_dict()
     transient_retry_rate = request_metrics_dict["transient_failure_count"] / max(1, request_metrics_dict["request_count"])
     report = {
@@ -289,15 +653,15 @@ def build_quality_report(
         "conflict_pollution_rate": conflict_pollution_rate,
         "critical_slot_pass_rate": None,
         "delete_memory_residue_rate": delete_memory_residue_rate,
-        "delete_session_residue_rate": None,
-        "delete_all_residue_rate": None,
+        "delete_session_residue_rate": delete_session_residue_rate,
+        "delete_all_residue_rate": delete_all_residue_rate,
         "rebuild_resurrection_rate": rebuild_resurrection_rate,
         "cross_user_leak_rate": cross_user_leak_rate,
         "cross_character_leak_rate": cross_character_leak_rate,
         "roleplay_real_mix_rate": roleplay_real_mix_rate,
         "dirty_summary_recall_rate": None,
         "source_ref_loss_rate": None,
-        "known_drift_regression_pass_rate": None,
+        "known_drift_regression_pass_rate": known_drift_regression_pass_rate,
         "http_5xx_rate": None,
         "timeout_rate": None,
         "idempotency_failure_rate": None,
@@ -334,13 +698,13 @@ def _metric_automation_status() -> dict[str, str]:
         "false_positive_rate": "automatic",
         "duplicate_active_rate": "automatic",
         "delete_memory_residue_rate": "case_gate",
-        "delete_session_residue_rate": "pending",
-        "delete_all_residue_rate": "pending",
+        "delete_session_residue_rate": "case_gate",
+        "delete_all_residue_rate": "case_gate",
         "rebuild_resurrection_rate": "case_gate",
         "cross_user_leak_rate": "case_gate",
         "cross_character_leak_rate": "case_gate",
         "roleplay_real_mix_rate": "case_gate",
-        "known_drift_regression_pass_rate": "manual_review",
+        "known_drift_regression_pass_rate": "automatic",
     }
 
 
@@ -388,10 +752,13 @@ def _failed_metric_gates(report: dict[str, Any]) -> list[dict[str, Any]]:
         ("conflict_pollution_rate", "<=", 0.02),
         ("duplicate_active_rate", "==", 0.0),
         ("delete_memory_residue_rate", "<=", 0.0),
+        ("delete_session_residue_rate", "<=", 0.0),
+        ("delete_all_residue_rate", "<=", 0.0),
         ("rebuild_resurrection_rate", "<=", 0.0),
         ("cross_user_leak_rate", "<=", 0.0),
         ("cross_character_leak_rate", "<=", 0.0),
         ("roleplay_real_mix_rate", "<=", 0.0),
+        ("known_drift_regression_pass_rate", ">=", 0.95),
     )
     failed: list[dict[str, Any]] = []
     for metric, operator, expected in gates:
@@ -424,6 +791,18 @@ def _tagged_forbidden_hit_rate(
     return leaked_count / len(tagged_cases)
 
 
+def _tagged_case_pass_rate(
+    cases: list[EvaluationCase],
+    case_passed_by_name: dict[str, bool],
+    metric_tag: str,
+) -> float | None:
+    tagged_cases = [case for case in cases if metric_tag in case.metric_tags]
+    if not tagged_cases:
+        return None
+    passed_count = sum(1 for case in tagged_cases if case_passed_by_name.get(case.name, False))
+    return passed_count / len(tagged_cases)
+
+
 def _memory_conflict_slot_for_report(memory_text: str) -> str | None:
     lowered = memory_text.lower()
     if any(marker in lowered for marker in ("cat named", "猫")):
@@ -448,6 +827,12 @@ def _memory_conflict_slot_for_report(memory_text: str) -> str | None:
         return "favorite:drink"
     if any(marker in lowered for marker in ("favorite food", "food preference", "食物")):
         return "favorite:food"
+    if any(marker in lowered for marker in ("meeting time preference", "会议时间", "开会时间")):
+        return "meeting_time_preference"
+    if any(marker in lowered for marker in ("exercise preference", "运动偏好", "喜欢什么运动")):
+        return "exercise_preference"
+    if any(marker in lowered for marker in ("story-world base location", "剧情设定里的据点", "据点")):
+        return "story_world_base_location"
     if any(marker in lowered for marker in ("sleep reminder", "提醒睡觉", "睡眠提醒")):
         return "sleep_reminder_preference"
     return None
@@ -683,6 +1068,25 @@ def _active_memories(
     return memories
 
 
+def _find_active_memory(
+    active_memories: list[MemoryIndexEntry],
+    *,
+    required_terms: tuple[str, ...],
+    context_type: str = "real_user",
+    fact_subject: str = "user",
+) -> MemoryIndexEntry:
+    for memory in active_memories:
+        lowered = memory.memory_text.lower()
+        if (
+            memory.context_type == context_type
+            and memory.fact_subject == fact_subject
+            and any(term.lower() in lowered for term in required_terms)
+        ):
+            return memory
+    active_text = "\n".join(memory.memory_text for memory in active_memories)
+    raise RuntimeError(f"active memory not found for terms {required_terms}:\n{active_text}")
+
+
 def _memory_snapshots(active_memories: list[MemoryIndexEntry]) -> list[MemorySnapshot]:
     return [
         MemorySnapshot(
@@ -748,6 +1152,13 @@ def _assert_deleted_rebuild_does_not_inflate(
         )
 
 
+def _assert_active_scope_empty(repository: SqlAlchemyMemoryRepository, scope: QualityScope) -> None:
+    active = _active_memories(repository, scope)
+    if active:
+        active_text = "\n".join(memory.memory_text for memory in active)
+        raise RuntimeError(f"active memories should be empty after delete_all:\n{active_text}")
+
+
 def main() -> None:
     load_dotenv()
     settings = Settings()
@@ -768,6 +1179,14 @@ def main() -> None:
         f"{scope.run_id}-other-character",
         f"{scope.run_id}-other-session",
     )
+    lifecycle_scope = scope.for_character(
+        f"{scope.run_id}-lifecycle-character",
+        f"{scope.run_id}-lifecycle-session-main",
+    )
+    lifecycle_session_delete_scope = lifecycle_scope.for_character(
+        lifecycle_scope.character_id,
+        f"{scope.run_id}-lifecycle-session-delete",
+    )
     _append_round(base_url, scope, 1, "请记住，我喜欢别人叫我阿鹏。", request_metrics=request_metrics, latency_metrics=latency_metrics)
     _append_round(base_url, scope, 2, "纠正一下：以后不要叫我阿鹏，请叫我小鹏。", request_metrics=request_metrics, latency_metrics=latency_metrics)
     _append_round(base_url, scope, 3, "我养了一只猫，名字叫团子。", request_metrics=request_metrics, latency_metrics=latency_metrics)
@@ -782,6 +1201,8 @@ def main() -> None:
     _append_round(base_url, scope, 12, "我现在可以接受温和的提醒睡觉。", request_metrics=request_metrics, latency_metrics=latency_metrics)
     _append_round(base_url, scope, 13, "我养了一只狗，名字叫豆包。", request_metrics=request_metrics, latency_metrics=latency_metrics)
     _append_round(base_url, scope, 14, "食物偏好改成寿司，不再吃汉堡。", request_metrics=request_metrics, latency_metrics=latency_metrics)
+    _append_round(base_url, scope, 16, "会议时间偏好改一下：不要上午，尽量安排在下午。", request_metrics=request_metrics, latency_metrics=latency_metrics)
+    _append_round(base_url, scope, 17, "运动偏好更新：现在喜欢游泳，不再坚持跑步。", request_metrics=request_metrics, latency_metrics=latency_metrics)
     _append_round(
         base_url,
         scope,
@@ -806,12 +1227,49 @@ def main() -> None:
     )
     _append_round(
         base_url,
+        other_user_scope,
+        2,
+        "我只告诉另一个用户：我喜欢喝可乐。",
+        request_metrics=request_metrics,
+        latency_metrics=latency_metrics,
+    )
+    _append_round(
+        base_url,
         other_character_scope,
         1,
         "我只告诉这个角色：我的猫叫泡芙。",
         request_metrics=request_metrics,
         latency_metrics=latency_metrics,
     )
+    _append_round(
+        base_url,
+        other_character_scope,
+        2,
+        "我只告诉这个角色：我喜欢吃披萨。",
+        request_metrics=request_metrics,
+        latency_metrics=latency_metrics,
+    )
+    _append_round(
+        base_url,
+        scope,
+        18,
+        "剧情设定里的据点在海边灯塔。",
+        metadata={
+            "context_type": "roleplay",
+            "roleplay_mode": "on",
+            "fact_subject": "story_world",
+            "backend_categories": ["story_world"],
+        },
+        request_metrics=request_metrics,
+        latency_metrics=latency_metrics,
+    )
+    _append_round(base_url, lifecycle_scope, 1, "请记住，我喜欢别人叫我阿鹏。", request_metrics=request_metrics, latency_metrics=latency_metrics)
+    _append_round(base_url, lifecycle_scope, 2, "纠正一下：以后不要叫我阿鹏，请叫我小鹏。", request_metrics=request_metrics, latency_metrics=latency_metrics)
+    _append_round(base_url, lifecycle_scope, 3, "我养了一只猫，名字叫团子。", request_metrics=request_metrics, latency_metrics=latency_metrics)
+    _append_round(base_url, lifecycle_scope, 4, "更正一下，我的猫不叫团子，叫麻薯。", request_metrics=request_metrics, latency_metrics=latency_metrics)
+    _append_round(base_url, lifecycle_scope, 5, "我养了一只狗，名字叫豆包。", request_metrics=request_metrics, latency_metrics=latency_metrics)
+    _append_round(base_url, lifecycle_session_delete_scope, 1, "这个会话里请记住，我喜欢喝乌龙茶。", request_metrics=request_metrics, latency_metrics=latency_metrics)
+    _append_round(base_url, lifecycle_session_delete_scope, 2, "这个会话里请记住，我喜欢吃拉面当夜宵。", request_metrics=request_metrics, latency_metrics=latency_metrics)
 
     active_after_append = _active_memories(repository, scope)
     _assert_no_duplicate_backend_ids(active_after_append)
@@ -832,125 +1290,14 @@ def main() -> None:
             "coffee",
             "汉堡",
             "hamburger",
+            "上午",
+            "morning",
+            "跑步",
+            "running",
         ],
     )
 
-    cases = [
-        EvaluationCase(
-            name="nickname-current",
-            category="slot_conflict",
-            query="现在应该怎么称呼用户？",
-            intent="preference",
-            expected_terms=["小鹏"],
-            forbidden_terms=["阿鹏"],
-        ),
-        EvaluationCase(
-            name="cat-current",
-            category="slot_conflict",
-            query="用户的猫叫什么？",
-            expected_terms=["麻薯"],
-            forbidden_terms=["团子", "露露", "泡芙"],
-        ),
-        EvaluationCase(
-            name="location-current",
-            category="slot_conflict",
-            query="用户现在住在哪？",
-            expected_terms=[["上海", "Shanghai"]],
-            forbidden_terms=["杭州", "Hangzhou"],
-        ),
-        EvaluationCase(
-            name="work-status-current",
-            category="slot_conflict",
-            query="用户现在的工作状态是什么？",
-            expected_terms=["Moonshot"],
-            forbidden_terms=["评估其它机会", "evaluating"],
-        ),
-        EvaluationCase(
-            name="communication-current",
-            category="slot_conflict",
-            query="用户希望你怎么给建议？",
-            intent="preference",
-            expected_terms=[["简洁直接", "concise", "direct"]],
-            forbidden_terms=["先安慰", "reassurance"],
-        ),
-        EvaluationCase(
-            name="birthday-current",
-            category="slot_conflict",
-            query="用户生日是哪天？",
-            expected_terms=[["6月1日", "June 1"]],
-            forbidden_terms=["5月20日", "May 20"],
-        ),
-        EvaluationCase(
-            name="drink-current",
-            category="slot_conflict",
-            query="用户现在喜欢喝什么？",
-            intent="preference",
-            expected_terms=[["茶", "tea"]],
-            forbidden_terms=["咖啡", "coffee"],
-        ),
-        EvaluationCase(
-            name="food-current",
-            category="slot_conflict",
-            query="用户现在喜欢吃什么？",
-            intent="preference",
-            expected_terms=[["寿司", "sushi"]],
-            forbidden_terms=["汉堡", "hamburger", "burger"],
-        ),
-        EvaluationCase(
-            name="dog-current",
-            category="slot_conflict",
-            query="用户的狗叫什么？",
-            expected_terms=["豆包"],
-            forbidden_terms=["麻薯", "团子", "露露", "泡芙"],
-        ),
-        EvaluationCase(
-            name="sleep-reminder-current",
-            category="slot_conflict",
-            query="用户现在还讨厌被提醒睡觉吗？",
-            intent="preference",
-            expected_terms=[["温和", "gentle", "接受", "okay"]],
-            forbidden_terms=["讨厌", "dislikes"],
-        ),
-        EvaluationCase(
-            name="negative-bird",
-            category="negative_control",
-            query="用户的鸟叫什么？",
-            expected_terms=[],
-            forbidden_terms=["麻薯", "团子", "豆包", "猫", "狗", "cat", "dog"],
-        ),
-        EvaluationCase(
-            name="negative-roleplay-cat",
-            category="isolation",
-            query="用户现实里的猫叫什么？",
-            expected_terms=["麻薯"],
-            forbidden_terms=["露露"],
-            metric_tags=("roleplay_real_mix_rate",),
-        ),
-        EvaluationCase(
-            name="roleplay-cat",
-            category="isolation",
-            query="剧情设定里的猫叫什么？",
-            expected_terms=["露露"],
-            forbidden_terms=["麻薯", "团子"],
-            metric_tags=("roleplay_real_mix_rate",),
-        ),
-        EvaluationCase(
-            name="negative-cross-user-cat",
-            category="isolation",
-            query="用户的猫叫什么？",
-            expected_terms=["麻薯"],
-            forbidden_terms=["奶盖"],
-            metric_tags=("cross_user_leak_rate",),
-        ),
-        EvaluationCase(
-            name="negative-cross-character-cat",
-            category="isolation",
-            query="用户的猫叫什么？",
-            expected_terms=["麻薯"],
-            forbidden_terms=["泡芙"],
-            metric_tags=("cross_character_leak_rate",),
-        ),
-    ]
+    cases = build_production_quality_cases()
     results = [
         _query_result(base_url, scope, case, request_metrics=request_metrics, latency_metrics=latency_metrics)
         for case in cases
@@ -984,22 +1331,20 @@ def main() -> None:
     )
     _assert_negative_query_is_clean(dog_recall)
 
-    delete_target = next(
-        memory
-        for memory in active_after_append
-        if ("麻薯" in memory.memory_text or "Mashu" in memory.memory_text)
-        and memory.context_type == "real_user"
-        and memory.fact_subject == "user"
+    lifecycle_after_append = _active_memories(repository, lifecycle_scope)
+    delete_target = _find_active_memory(
+        lifecycle_after_append,
+        required_terms=("麻薯", "Mashu"),
     )
     delete_response = _post_json(
         base_url,
         "/memory/delete",
         {
             "request_id": scope.request_id("delete-cat"),
-            "user_id": scope.user_id,
-            "character_id": scope.character_id,
+            "user_id": lifecycle_scope.user_id,
+            "character_id": lifecycle_scope.character_id,
             "scope": "memory",
-            "operation_id": scope.operation_id("delete-cat"),
+            "operation_id": lifecycle_scope.operation_id("delete-cat"),
             "memory_id": delete_target.memory_id,
         },
         request_metrics=request_metrics,
@@ -1009,40 +1354,59 @@ def main() -> None:
     if delete_response.get("affected_memories") != 1:
         raise RuntimeError(f"delete did not affect one memory: {delete_response}")
 
+    post_delete_cases = build_post_delete_quality_cases()
     deleted_after_delete_cases = [
-        EvaluationCase(
-            name="deleted-cat-after-delete",
-            category="delete_memory",
-            query="用户的猫叫什么？",
-            expected_terms=[],
-            forbidden_terms=["麻薯", "团子", "露露", "泡芙", "猫", "cat"],
-            metric_tags=("delete_memory_residue_rate",),
-        ),
+        case for case in post_delete_cases if case.name == "deleted-cat-after-delete"
     ]
     deleted_after_delete_results = [
-        _query_result(base_url, scope, case, request_metrics=request_metrics, latency_metrics=latency_metrics)
+        _query_result(base_url, lifecycle_scope, case, request_metrics=request_metrics, latency_metrics=latency_metrics)
         for case in deleted_after_delete_cases
+    ]
+
+    delete_session_response = _post_json(
+        base_url,
+        "/memory/delete",
+        {
+            "request_id": lifecycle_scope.request_id("delete-session"),
+            "user_id": lifecycle_scope.user_id,
+            "character_id": lifecycle_scope.character_id,
+            "scope": "session",
+            "operation_id": lifecycle_scope.operation_id("delete-session"),
+            "session_id": lifecycle_session_delete_scope.session_id,
+        },
+        request_metrics=request_metrics,
+        latency_metrics=latency_metrics,
+        operation="delete",
+    )
+    if delete_session_response.get("affected_memories", 0) < 1:
+        raise RuntimeError(f"delete session did not affect memories: {delete_session_response}")
+    deleted_session_cases = [
+        case for case in post_delete_cases if case.category == "delete_session"
+    ]
+    deleted_session_results = [
+        _query_result(base_url, lifecycle_session_delete_scope, case, request_metrics=request_metrics, latency_metrics=latency_metrics)
+        for case in deleted_session_cases
     ]
 
     _post_json(
         base_url,
         "/memory/rebuild",
         {
-            "request_id": scope.request_id("rebuild"),
-            "user_id": scope.user_id,
-            "character_id": scope.character_id,
-            "operation_id": scope.operation_id("rebuild"),
+            "request_id": lifecycle_scope.request_id("rebuild-after-memory-session-delete"),
+            "user_id": lifecycle_scope.user_id,
+            "character_id": lifecycle_scope.character_id,
+            "operation_id": lifecycle_scope.operation_id("rebuild-after-memory-session-delete"),
         },
         request_metrics=request_metrics,
         latency_metrics=latency_metrics,
         operation="rebuild",
     )
-    after_rebuild = _active_memories(repository, scope)
-    _assert_deleted_rebuild_does_not_inflate(len(active_after_append), after_rebuild)
-    _assert_nickname_converged(repository, scope)
+    after_memory_session_rebuild = _active_memories(repository, lifecycle_scope)
+    _assert_deleted_rebuild_does_not_inflate(len(lifecycle_after_append), after_memory_session_rebuild)
+    _assert_nickname_converged(repository, lifecycle_scope)
     _assert_active_memories_do_not_contain_forbidden(
         repository,
-        scope,
+        lifecycle_scope,
         [
             "阿鹏",
             "团子",
@@ -1056,33 +1420,82 @@ def main() -> None:
             "coffee",
             "汉堡",
             "hamburger",
+            "乌龙茶",
+            "oolong",
+            "拉面",
+            "ramen",
         ],
     )
 
-    post_rebuild_cases = [
-        EvaluationCase(
-            name="deleted-cat-after-rebuild",
-            category="rebuild",
-            query="用户的猫叫什么？",
-            expected_terms=[],
-            forbidden_terms=["麻薯", "团子", "露露", "泡芙", "猫", "cat"],
-            metric_tags=("rebuild_resurrection_rate",),
-        ),
-        EvaluationCase(
-            name="nickname-after-rebuild",
-            category="rebuild",
-            query="现在应该怎么称呼用户？",
-            intent="preference",
-            expected_terms=["小鹏"],
-            forbidden_terms=["阿鹏"],
-        ),
+    memory_session_rebuild_cases = [
+        case
+        for case in post_delete_cases
+        if case.name
+        in {
+            "deleted-cat-after-rebuild",
+            "nickname-after-rebuild",
+            "deleted-session-drink-after-rebuild",
+        }
     ]
-    post_rebuild_results = [
-        _query_result(base_url, scope, case, request_metrics=request_metrics, latency_metrics=latency_metrics)
-        for case in post_rebuild_cases
+    memory_session_rebuild_results = [
+        _query_result(base_url, lifecycle_scope, case, request_metrics=request_metrics, latency_metrics=latency_metrics)
+        for case in memory_session_rebuild_cases
     ]
-    post_delete_cases = deleted_after_delete_cases + post_rebuild_cases
-    post_delete_results = deleted_after_delete_results + post_rebuild_results
+
+    delete_all_response = _post_json(
+        base_url,
+        "/memory/delete",
+        {
+            "request_id": lifecycle_scope.request_id("delete-all"),
+            "user_id": lifecycle_scope.user_id,
+            "character_id": lifecycle_scope.character_id,
+            "scope": "all",
+            "operation_id": lifecycle_scope.operation_id("delete-all"),
+        },
+        request_metrics=request_metrics,
+        latency_metrics=latency_metrics,
+        operation="delete",
+    )
+    if delete_all_response.get("affected_memories", 0) < 1:
+        raise RuntimeError(f"delete all did not affect memories: {delete_all_response}")
+    _assert_active_scope_empty(repository, lifecycle_scope)
+    delete_all_cases = [
+        case for case in post_delete_cases if case.category == "delete_all"
+    ]
+    delete_all_results = [
+        _query_result(base_url, lifecycle_scope, case, request_metrics=request_metrics, latency_metrics=latency_metrics)
+        for case in delete_all_cases
+    ]
+
+    _post_json(
+        base_url,
+        "/memory/rebuild",
+        {
+            "request_id": lifecycle_scope.request_id("rebuild-after-delete-all"),
+            "user_id": lifecycle_scope.user_id,
+            "character_id": lifecycle_scope.character_id,
+            "operation_id": lifecycle_scope.operation_id("rebuild-after-delete-all"),
+        },
+        request_metrics=request_metrics,
+        latency_metrics=latency_metrics,
+        operation="rebuild",
+    )
+    after_delete_all_rebuild = _active_memories(repository, lifecycle_scope)
+    _assert_active_scope_empty(repository, lifecycle_scope)
+    delete_all_rebuild_cases = [
+        case for case in post_delete_cases if case.name == "deleted-all-nickname-after-rebuild"
+    ]
+    delete_all_rebuild_results = [
+        _query_result(base_url, lifecycle_scope, case, request_metrics=request_metrics, latency_metrics=latency_metrics)
+        for case in delete_all_rebuild_cases
+    ]
+    post_delete_results = (
+        deleted_after_delete_results
+        + deleted_session_results
+        + memory_session_rebuild_results
+        + delete_all_results
+        + delete_all_rebuild_results
+    )
     deleted_residue = [
         result.case_name
         for result in post_delete_results
@@ -1100,11 +1513,11 @@ def main() -> None:
     post_delete_report = build_quality_report(
         post_delete_cases,
         post_delete_results,
-        active_memory_count=len(active_after_append),
-        active_after_rebuild=len(after_rebuild),
+        active_memory_count=len(lifecycle_after_append),
+        active_after_rebuild=len(after_delete_all_rebuild),
         request_metrics=request_metrics,
         latency_metrics=latency_metrics,
-        active_memory_snapshots=_memory_snapshots(after_rebuild),
+        active_memory_snapshots=_memory_snapshots(after_delete_all_rebuild),
     )
     print(json.dumps(post_delete_report, ensure_ascii=False, indent=2, sort_keys=True))
     if not post_delete_report["passed"]:
@@ -1120,7 +1533,9 @@ def main() -> None:
 
     print(
         "quality regression passed: "
-        f"active_after_append={len(active_after_append)}, active_after_rebuild={len(after_rebuild)}"
+        f"active_after_append={len(active_after_append)}, "
+        f"lifecycle_active_after_append={len(lifecycle_after_append)}, "
+        f"active_after_rebuild={len(after_delete_all_rebuild)}"
     )
 
 

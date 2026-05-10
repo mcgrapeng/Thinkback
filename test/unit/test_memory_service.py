@@ -874,6 +874,57 @@ def test_add_l3_event_with_existing_backend_id_updates_index_without_duplicate_a
     assert active[0].source_refs == [{"session_id": "session-1", "round_id": "round-2"}]
 
 
+def test_existing_backend_update_supersedes_conflicting_active_memory() -> None:
+    repository = InMemoryMemoryRepository()
+    backend = FakeMemoryBackend()
+    service = MemoryService(repository=repository, backend=backend)
+    old_cat = repository.add_memory_index(
+        backend_memory_id="old-cat",
+        user_id="user-1",
+        character_id="char-1",
+        source_refs=[{"session_id": "session-1", "round_id": "round-1"}],
+        memory_text="User has a cat named 团子",
+    )
+    repository.add_memory_index(
+        backend_memory_id="updated-cat",
+        user_id="user-1",
+        character_id="char-1",
+        source_refs=[{"session_id": "session-1", "round_id": "round-1"}],
+        memory_text="User has a cat named 团子",
+    )
+    backend.memories["old-cat"] = {
+        "id": "old-cat",
+        "memory": "User has a cat named 团子",
+        "user_id": "user-1",
+        "agent_id": "char-1",
+        "metadata": {},
+        "score": 0.9,
+    }
+    backend.memories["updated-cat"] = {
+        "id": "updated-cat",
+        "memory": "User has a cat named 团子",
+        "user_id": "user-1",
+        "agent_id": "char-1",
+        "metadata": {},
+        "score": 0.9,
+    }
+
+    service._index_l3_event(
+        {"id": "updated-cat", "memory": "User has a cat named 麻薯", "event": "UPDATE"},
+        user_id="user-1",
+        character_id="char-1",
+        source_refs=[{"session_id": "session-1", "round_id": "round-2"}],
+        l3_metadata=service._l3_metadata(
+            [{"session_id": "session-1", "round_id": "round-2"}],
+            {"source_text": "更正一下，我的猫不叫团子，叫麻薯。"},
+        ),
+    )
+
+    active = repository.active_memories("user-1", "char-1")
+    assert [memory.memory_text for memory in active] == ["User has a cat named 麻薯"]
+    assert repository.memories[old_cat.memory_id].memory_status.name == "SUPERSEDED"
+
+
 def test_new_nickname_preference_supersedes_old_nickname_memory() -> None:
     repository = InMemoryMemoryRepository()
     backend = FakeMemoryBackend()
@@ -1873,6 +1924,49 @@ def test_recall_filters_noisy_backend_items_by_birthday_query_slot() -> None:
     assert l3_contents == ["User birthday: June 1"]
 
 
+def test_recall_treats_english_address_question_as_nickname_slot() -> None:
+    repository = InMemoryMemoryRepository()
+    backend = NoisySearchBackend()
+    service = MemoryService(repository=repository, backend=backend)
+
+    # 真实评测会用英文转述问称呼；这里保护 address the user 也归入“昵称/称呼”槽位。
+    seeded_memories = [
+        ("nickname", "User prefers to be called 小鹏"),
+        ("communication", "User communication preference: 简洁直接的建议"),
+        ("sleep", "User sleep reminder preference: okay with gentle sleep reminders"),
+    ]
+    for backend_id, memory_text in seeded_memories:
+        memory = repository.add_memory_index(
+            backend_memory_id=backend_id,
+            user_id="user-1",
+            character_id="char-1",
+            source_refs=[{"session_id": "session-1", "round_id": backend_id}],
+            memory_text=memory_text,
+        )
+        backend.memories[memory.backend_memory_id] = {
+            "id": memory.backend_memory_id,
+            "memory": memory.memory_text,
+            "event": "ADD",
+            "user_id": "user-1",
+            "agent_id": "char-1",
+            "metadata": {},
+            "score": 0.9,
+        }
+
+    response = service.recall(
+        RecallMemoryRequest(
+            user_id="user-1",
+            character_id="char-1",
+            session_id="session-1",
+            query="How should I address the user?",
+            intent=RecallIntent.MEMORY_QUERY,
+        )
+    )
+
+    l3_contents = [item.content for item in response.items if item.layer == "L3"]
+    assert l3_contents == ["User prefers to be called 小鹏"]
+
+
 def test_recall_backfills_sleep_reminder_slot_when_backend_misses() -> None:
     repository = InMemoryMemoryRepository()
     backend = FakeMemoryBackend()
@@ -2174,6 +2268,28 @@ def test_mem0_favorite_food_tail_removes_no_longer_eating_old_value() -> None:
         assert canonical == "User favorite food: sushi"
         assert "hamburger" not in canonical
         assert service._memory_conflict_slot(canonical) == "favorite:food"
+
+
+def test_canonicalizes_meeting_time_and_exercise_preferences_from_source() -> None:
+    service = MemoryService(repository=InMemoryMemoryRepository(), backend=FakeMemoryBackend())
+
+    canonical = service._p0_canonical_memories_from_source(
+        "会议时间偏好改一下：不要上午，尽量安排在下午。"
+    )
+    assert "User meeting time preference: 下午" in canonical
+
+    canonical = service._p0_canonical_memories_from_source(
+        "运动偏好更新：现在喜欢游泳，不再坚持跑步。"
+    )
+    assert "User exercise preference: 游泳" in canonical
+
+
+def test_canonicalizes_roleplay_place_from_story_source() -> None:
+    service = MemoryService(repository=InMemoryMemoryRepository(), backend=FakeMemoryBackend())
+
+    canonical = service._p0_canonical_memories_from_source("剧情设定里的据点在海边灯塔。")
+
+    assert "Story-world base location: 海边灯塔" in canonical
 
 
 def test_mem0_work_status_stopped_evaluating_wording_is_canonicalized() -> None:
