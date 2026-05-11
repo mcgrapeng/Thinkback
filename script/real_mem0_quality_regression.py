@@ -865,7 +865,10 @@ def _is_transient_http_failure(exc: HTTPError) -> bool:
     if exc.code not in {502, 503, 504}:
         return False
     detail = exc.read().decode("utf-8", errors="replace")
-    lowered = detail.lower()
+    reason = getattr(exc, "reason", "") or getattr(exc, "msg", "")
+    # 中文注释：有些 FastAPI/网关 502 只把 Bad Gateway 放在 HTTP reason，
+    # 响应体未必包含 timeout/provider 等字样；质量 runner 应把这类上游瞬时失败纳入重试。
+    lowered = f"{detail}\n{reason}".lower()
     transient_markers = (
         "timed out",
         "timeout",

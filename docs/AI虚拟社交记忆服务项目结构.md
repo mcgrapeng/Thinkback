@@ -45,8 +45,7 @@ src/memory/
 ├── backends.py
 ├── repositories.py
 ├── schemas.py
-├── service.py
-└── tasks.py
+└── service.py
 ```
 
 | 文件 | 职责 |
@@ -55,7 +54,6 @@ src/memory/
 | `service.py` | 记忆业务工作流：写入、召回、删除、重建、任务查询。 |
 | `repositories.py` | 内存仓库和 SQLAlchemy 仓库；保存 L1 派生缓存、L2、可靠轮次、L3 业务索引和任务状态。 |
 | `backends.py` | 长期记忆后端协议、Fake 后端、Mem0 Library 后端。 |
-| `tasks.py` | Celery 任务扩展位置。 |
 
 关键边界：
 
@@ -72,7 +70,6 @@ src/infra/
 ├── database/base.py
 ├── database/engine.py
 ├── database/models.py
-├── tasks/celery_app.py
 ├── config.py
 ├── logging.py
 └── readiness.py
@@ -86,7 +83,6 @@ src/infra/
 | `database/base.py` | Declarative Base，并导入 models 给 Alembic metadata 使用。 |
 | `cache/redis_client.py` | Redis readiness 和客户端边界。 |
 | `readiness.py` | 聚合依赖检查，包括数据库、Redis、共享 Qdrant 和 Mem0 Library。 |
-| `tasks/celery_app.py` | Celery app bootstrap。 |
 
 Thinkback 不保留 `infra/vectorstore` 业务模块。L3 写入和检索只通过 Mem0 Library 进行；业务代码不得绕过 Mem0 直接写 Qdrant。
 
@@ -117,7 +113,6 @@ script/
 ├── db_migrate.py
 ├── real_mem0_pressure.py
 ├── real_mem0_quality_regression.py
-├── real_mem0_stability_preprod.py
 ├── real_mem0_p0_short_pressure.py
 ├── real_mem0_p0_preprod_pressure.py
 ├── real_mem0_p0_fault_injection.py
@@ -133,7 +128,6 @@ script/
 | `db_migrate.py` | 数据库迁移辅助入口。 |
 | `real_mem0_pressure.py` | 真实 5 轮主链路验证，使用真实 Mem0 Library、OpenAI-compatible endpoint、Qdrant 和 PostgreSQL。 |
 | `real_mem0_quality_regression.py` | 首版主链路记忆质量回归评测。 |
-| `real_mem0_stability_preprod.py` | 性能与稳定性生产前阶段汇总兼容入口。 |
 | `real_mem0_p0_short_pressure.py` | P0 短压测套件。 |
 | `real_mem0_p0_preprod_pressure.py` | P0 生产前 baseline、stress、spike、soak 阶段报告生成。 |
 | `real_mem0_p0_fault_injection.py` | P0 依赖故障注入报告。 |
@@ -147,7 +141,7 @@ script/
 `docs/AI虚拟社交记忆服务首版主链路质量评测方案.md`、
 `docs/AI虚拟社交记忆服务首版主链路质量评测报告字段.md` 和
 `docs/AI虚拟社交记忆服务首版主链路质量评测报告模板.md`。
-性能与稳定性测试见 `docs/AI虚拟社交记忆服务性能与稳定性测试方案.md`。
+性能与稳定性测试见 `docs/AI虚拟社交记忆服务性能与稳定性测试方案.md`，但当前仓库不再保留旧的稳定性兼容入口脚本。
 
 ## 7. test
 

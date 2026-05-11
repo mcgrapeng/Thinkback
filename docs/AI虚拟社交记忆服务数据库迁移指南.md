@@ -29,7 +29,7 @@ POSTGRES_HOST=localhost
 POSTGRES_PORT=5432
 POSTGRES_USER=postgres
 POSTGRES_PASSWORD=postgres
-POSTGRES_DATABASE=thinkback
+POSTGRES_DATABASE=liaoriver_memory
 ```
 
 本地如果已有其他 PostgreSQL 占用 `5432`，`docker compose up -d postgres` 会失败，或者应用会连到错误实例。处理方式二选一：

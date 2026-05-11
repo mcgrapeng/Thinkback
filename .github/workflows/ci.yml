@@ -16,11 +16,12 @@ jobs:
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: thinkback_test
+          # 中文注释：CI 也使用当前工程统一库名，避免历史测试库名配置回流。
+          POSTGRES_DB: liaoriver_memory
         ports:
           - 5432:5432
         options: >-
-          --health-cmd "pg_isready -U postgres -d thinkback_test"
+          --health-cmd "pg_isready -U postgres -d liaoriver_memory"
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5

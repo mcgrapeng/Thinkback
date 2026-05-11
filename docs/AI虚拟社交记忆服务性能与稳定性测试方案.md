@@ -58,8 +58,8 @@
 
 ### 4.1 生产前阶段汇总
 
-先用 `script/real_mem0_stability_preprod.py` 生成各阶段 JSON，再把这些 JSON 汇总成生产前报告。
-注：`real_mem0_stability_preprod.py` 是兼容入口，实际调用的是 P0 生产前压测编排逻辑。
+先用 `script/real_mem0_p0_preprod_pressure.py` 生成各阶段 JSON，再把这些 JSON 汇总成生产前报告。
+注：`real_mem0_p0_preprod_pressure.py` 实际调用 P0 生产前压测编排逻辑。
 注：下面命令只把 `THINKBACK_API_URL` 显式写在命令行里。
 底层短压测脚本仍会从环境变量或 `.env` 读取 `OPENAI_API_KEY`、`QDRANT_URL`、PostgreSQL 和 Redis 配置；缺少这些真实依赖时会直接失败，不应解读为压测通过。
 
@@ -67,7 +67,7 @@
 
 ```bash
 env THINKBACK_API_URL=${THINKBACK_API_URL:?set THINKBACK_API_URL} \
-PYTHONPATH=src .venv/bin/python script/real_mem0_stability_preprod.py \
+PYTHONPATH=src .venv/bin/python script/real_mem0_p0_preprod_pressure.py \
   --phase baseline \
   --phase stress \
   --phase spike \
@@ -83,7 +83,7 @@ PYTHONPATH=src .venv/bin/python script/real_mem0_stability_preprod.py \
 
 ```bash
 env THINKBACK_API_URL=${THINKBACK_API_URL:?set THINKBACK_API_URL} \
-PYTHONPATH=src .venv/bin/python script/real_mem0_stability_preprod.py \
+PYTHONPATH=src .venv/bin/python script/real_mem0_p0_preprod_pressure.py \
   --duration-phase baseline \
   --target-duration-seconds 600 \
   --report-dir docs/reports \
@@ -94,7 +94,7 @@ PYTHONPATH=src .venv/bin/python script/real_mem0_stability_preprod.py \
 
 ```bash
 env THINKBACK_API_URL=${THINKBACK_API_URL:?set THINKBACK_API_URL} \
-PYTHONPATH=src .venv/bin/python script/real_mem0_stability_preprod.py \
+PYTHONPATH=src .venv/bin/python script/real_mem0_p0_preprod_pressure.py \
   --duration-phase stress \
   --target-duration-seconds 900 \
   --report-dir docs/reports \
@@ -105,7 +105,7 @@ PYTHONPATH=src .venv/bin/python script/real_mem0_stability_preprod.py \
 
 ```bash
 env THINKBACK_API_URL=${THINKBACK_API_URL:?set THINKBACK_API_URL} \
-PYTHONPATH=src .venv/bin/python script/real_mem0_stability_preprod.py \
+PYTHONPATH=src .venv/bin/python script/real_mem0_p0_preprod_pressure.py \
   --full-spike \
   --report-dir docs/reports \
   --output-dir docs/reports
@@ -134,7 +134,7 @@ PYTHONPATH=src .venv/bin/python script/real_mem0_p0_representative_replay.py \
 汇总命令示例：
 
 ```bash
-PYTHONPATH=src .venv/bin/python script/real_mem0_stability_preprod.py \
+PYTHONPATH=src .venv/bin/python script/real_mem0_p0_preprod_pressure.py \
   --output-dir docs/reports \
   --phase-report baseline=<p0-duration-baseline-....json> \
   --phase-report stress=<p0-duration-stress-....json> \
@@ -150,7 +150,7 @@ PYTHONPATH=src .venv/bin/python script/real_mem0_stability_preprod.py \
 
 ```bash
 env THINKBACK_API_URL=${THINKBACK_API_URL:?set THINKBACK_API_URL} \
-PYTHONPATH=src .venv/bin/python script/real_mem0_stability_preprod.py \
+PYTHONPATH=src .venv/bin/python script/real_mem0_p0_preprod_pressure.py \
   --duration-phase soak \
   --target-duration-seconds 600 \
   --iteration-interval-seconds 300 \

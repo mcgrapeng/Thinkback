@@ -10,7 +10,7 @@
 | --- | --- |
 | FastAPI app | 对外提供 `/memory/*` 和健康检查。 |
 | PostgreSQL | 保存 L2、可靠轮次、L3 业务索引和任务状态。 |
-| Redis | Celery broker/result backend 和运行时基础设施。 |
+| Redis | 运行时缓存和 readiness 依赖。 |
 | Mem0 Library | 嵌入 Thinkback 进程内的 L3 长期记忆引擎。 |
 | Qdrant | 独立向量数据库。Mem0 Library 用它承载 L3 向量，Thinkback 也会做就绪探测。 |
 | OpenAI | Mem0 Library 使用 OpenAI 做记忆抽取和向量化。 |
@@ -28,8 +28,6 @@ POSTGRES_DATABASE=
 
 REDIS_HOST=
 REDIS_PORT=
-CELERY_BROKER_URL=
-CELERY_RESULT_BACKEND=
 
 QDRANT_URL=https://qdrant.example.internal
 QDRANT_API_KEY=
@@ -109,14 +107,7 @@ PYTHONPATH=src .venv/bin/alembic upgrade head
 PYTHONPATH=src .venv/bin/uvicorn api.app:app --app-dir src --host 0.0.0.0 --port 8000
 ```
 
-启动 Celery worker：
-
-```bash
-PYTHONPATH=src .venv/bin/celery -A infra.tasks.celery_app.celery_app worker -l info
-```
-
-当前 L3 `MEMORY_L3_WRITE_MODE=async` 使用 API 进程内线程池执行后台抽取，不依赖 Celery worker 消费。
-Celery worker 当前用于诊断任务和后续异步任务扩展；只有部署环境明确启用 Celery 任务时才是必需组件。
+当前 L3 `MEMORY_L3_WRITE_MODE=async` 使用 API 进程内线程池执行后台抽取，不依赖独立 worker 消费。
 
 ## 4. 图形化 API 文档
 

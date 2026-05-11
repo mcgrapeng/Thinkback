@@ -6,6 +6,7 @@ metadata:
     app: thinkback
     component: migrate
 spec:
+  # 中文注释：迁移失败最多重试 2 次；持续失败应人工排查迁移和数据库状态。
   backoffLimit: 2
   template:
     metadata:
@@ -22,10 +23,12 @@ spec:
           image: thinkback:0.1.0
           imagePullPolicy: IfNotPresent
           command:
+            # 中文注释：生产发布先跑 Alembic 到 head，再滚动 API Deployment。
             - alembic
             - upgrade
             - head
           env:
+            # 中文注释：保持迁移 Job 与 API 使用同一套源码路径和运行时配置。
             - name: PYTHONPATH
               value: /app/src
           envFrom:

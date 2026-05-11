@@ -86,8 +86,24 @@ def test_env_example_declares_runtime_settings() -> None:
     assert "MEM0_API_KEY=" not in env_example
     assert "MEM0_HTTP_TIMEOUT_SECONDS=" not in env_example
     assert "MEMORY_LLM_API_KEY=" not in env_example
-    assert "celery" not in Path("pyproject.toml").read_text(encoding="utf-8").lower()
     assert "QDRANT_URL=https://qdrant.example.internal" in env_example
+
+
+def test_runtime_config_files_include_chinese_operator_comments() -> None:
+    config_files = [
+        Path(".env.example"),
+        Path(".env.local.example"),
+        Path("docker-compose.yml"),
+        Path("k8s/configmap.yaml"),
+        Path("k8s/secret.example.yaml"),
+        Path("k8s/deployment-api.yaml"),
+        Path("k8s/job-migrate.yaml"),
+        Path(".github/workflows/ci.yml"),
+    ]
+
+    for path in config_files:
+        content = path.read_text(encoding="utf-8")
+        assert "# 中文注释：" in content, path
 
 
 def test_local_debug_env_example_uses_liaoriver_memory_and_local_middleware() -> None:
@@ -118,6 +134,8 @@ def test_github_actions_ci_runs_quality_gates() -> None:
         "poetry run mypy src",
         "poetry run pytest",
         "docker build -t thinkback:ci -f Dockerfile .",
+        "POSTGRES_DB: liaoriver_memory",
+        'pg_isready -U postgres -d liaoriver_memory',
     ]:
         assert expected in workflow
     assert "postgres:" in workflow
@@ -230,6 +248,34 @@ def test_script_directory_documents_operational_entrypoints() -> None:
         assert expected in readme
     assert "稳定性" in readme
     assert "质量评测" in readme
+
+
+def test_docs_do_not_reference_removed_worker_or_stability_entrypoint() -> None:
+    docs_text = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in [
+            Path("README.md"),
+            Path("docs/AI虚拟社交记忆服务技术栈选型.md"),
+            Path("docs/AI虚拟社交记忆服务部署指南.md"),
+            Path("docs/AI虚拟社交记忆服务项目结构.md"),
+            Path("docs/AI虚拟社交记忆服务性能与稳定性测试方案.md"),
+        ]
+    )
+
+    assert "Redis + Celery" not in docs_text
+    assert "Celery 已有" not in docs_text
+    assert "real_mem0_stability_preprod.py" not in docs_text
+    assert "tasks/celery_app.py" not in docs_text
+    assert "CELERY_BROKER_URL" not in docs_text
+    assert "CELERY_RESULT_BACKEND" not in docs_text
+
+
+def test_removed_celery_runtime_is_not_a_dependency() -> None:
+    pyproject = Path("pyproject.toml").read_text(encoding="utf-8").lower()
+    lockfile = Path("poetry.lock").read_text(encoding="utf-8").lower()
+
+    assert "celery" not in pyproject
+    assert "name = \"celery\"" not in lockfile
 
 
 def test_readme_documents_local_debug_and_production_scaffold() -> None:

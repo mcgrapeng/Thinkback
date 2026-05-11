@@ -3,24 +3,35 @@ kind: ConfigMap
 metadata:
   name: thinkback-config
 data:
+  # 中文注释：运行身份和日志级别；生产环境默认不打开 DEBUG。
   APP_NAME: Thinkback
   APP_VERSION: "0.1.0"
   ENVIRONMENT: production
   LOG_LEVEL: INFO
+
+  # 中文注释：业务数据库名统一为 liaoriver_memory；密码放在 Secret，不写入 ConfigMap。
   POSTGRES_HOST: postgres
   POSTGRES_PORT: "5432"
   POSTGRES_USER: postgres
   POSTGRES_DATABASE: liaoriver_memory
+
+  # 中文注释：Redis 作为 readiness 和运行时缓存依赖，不再配置 Celery broker/result backend。
   REDIS_HOST: redis
   REDIS_PORT: "6379"
   REDIS_DB: "0"
+
+  # 中文注释：Qdrant 是平台提供的独立向量库；API key 由 Secret 注入。
   QDRANT_URL: https://qdrant.example.internal
+
+  # 中文注释：Mem0 Library 在 API Pod 内运行，模型和向量集合通过这些变量控制。
   MEMORY_OPENAI_BASE_URL: ""
   MEMORY_QDRANT_COLLECTION: memories_qwen_1024
   MEMORY_EMBEDDING_DIMS: "1024"
   MEMORY_LLM_MODEL: qwen3.5-flash
   MEMORY_EMBEDDING_MODEL: text-embedding-v4
   MEM0_HISTORY_DB_PATH: .mem0/history.db
+
+  # 中文注释：生产默认异步写 L3；容量值是基线，不代表线上压测承诺。
   MEMORY_L3_WRITE_MODE: async
   MEMORY_API_WORKER_LIMIT: "8"
   MEMORY_L3_EXECUTOR_WORKERS: "16"

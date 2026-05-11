@@ -933,6 +933,18 @@ def test_http_502_timeout_is_transient_for_quality_runner() -> None:
     assert _is_transient_http_failure(exc) is True
 
 
+def test_http_502_bad_gateway_reason_is_transient_for_quality_runner() -> None:
+    exc = HTTPError(
+        url="http://127.0.0.1:18082/memory/recall",
+        code=502,
+        msg="Bad Gateway",
+        hdrs={},
+        fp=BytesIO(b'{"detail":"mem0 library search failed"}'),
+    )
+
+    assert _is_transient_http_failure(exc) is True
+
+
 def test_post_json_retries_transient_http_failure(monkeypatch) -> None:
     attempts = 0
 

@@ -12,7 +12,7 @@
 | 长期记忆引擎 | Mem0 Library | 以 Python Library 方式嵌入 Thinkback，负责 L3 的抽取、去重、分类、语义检索、显式更新和删除。 |
 | 向量数据库 | 独立 Qdrant 服务 | Mem0 Library 通过 Thinkback 配置的 Qdrant endpoint 写入和检索 L3 向量；Thinkback readiness 也会探测同一个 Qdrant。 |
 | LLM / Embedding | OpenAI / OpenAI-compatible endpoint | Thinkback 把 `OPENAI_API_KEY`、可选 `MEMORY_OPENAI_BASE_URL`、LLM 模型和 Embedding 模型传给 Mem0 Library。 |
-| 缓存和异步基础设施 | Redis + Celery | Redis 用于运行时基础设施；Celery 已有 worker bootstrap，复杂异步沉淀可继续扩展。 |
+| 运行时缓存 | Redis | Redis 用于 readiness 和运行时缓存；当前仓库不保留独立 worker 运行面。 |
 | 测试 | pytest + ruff + mypy | 覆盖契约、后端适配、服务工作流、API 和端到端假后端流程。 |
 
 ## 2. Mem0 和向量数据库的关系

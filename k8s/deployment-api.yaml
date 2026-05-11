@@ -6,6 +6,7 @@ metadata:
     app: thinkback
     component: api
 spec:
+  # 中文注释：API 至少保留 2 个副本，配合 PDB 降低滚动发布中断风险。
   replicas: 2
   strategy:
     type: RollingUpdate
@@ -38,6 +39,7 @@ spec:
               drop:
                 - ALL
           env:
+            # 中文注释：镜像内源码位于 /app/src，显式设置便于 uvicorn 和 Alembic 共用。
             - name: PYTHONPATH
               value: /app/src
           envFrom:
@@ -46,6 +48,7 @@ spec:
             - secretRef:
                 name: thinkback-secret
           volumeMounts:
+            # 中文注释：Mem0 本地 history 只是进程辅助文件，核心业务状态在 PostgreSQL 和 Qdrant。
             - name: mem0-history
               mountPath: /app/.mem0
           readinessProbe:

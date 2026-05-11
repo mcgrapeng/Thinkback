@@ -32,8 +32,6 @@ def test_settings_defaults_are_thinkback_baseline() -> None:
     assert not hasattr(settings, "mem0_backend_mode")
     assert not hasattr(settings, "memory_llm_api_key")
     assert not hasattr(settings, "memory_embedding_api_key")
-    assert not hasattr(settings, "celery_broker_url")
-    assert not hasattr(settings, "celery_result_backend")
 
 
 def test_settings_derived_urls() -> None:

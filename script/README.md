@@ -24,7 +24,6 @@
 | `real_mem0_p0_preprod_pressure.py` | P0 生产前 baseline、stress、spike、soak 阶段报告汇总。 |
 | `real_mem0_p0_fault_injection.py` | 依赖故障注入报告。 |
 | `real_mem0_p0_representative_replay.py` | 代表性样本回放报告。 |
-| `real_mem0_stability_preprod.py` | 稳定性生产前汇总兼容入口。 |
 | `build_p0_pressure_final_report.py` | P0 压测最终报告生成。 |
 
 ## 本地调试建议
@@ -34,4 +33,4 @@
 3. 使用 `make debug-ready` 确认 readiness。
 4. 使用 `make quality-real` 生成真实质量评测报告。
 
-稳定性脚本和质量评测脚本分开使用；如果只验证质量门禁，不要混入稳定性结论。
+稳定性与质量评测是两条不同的验证路径；如果只验证质量门禁，不要混入稳定性结论。
