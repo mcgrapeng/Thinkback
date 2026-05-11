@@ -1,0 +1,22 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: thinkback-default
+  labels:
+    app: thinkback
+spec:
+  podSelector:
+    matchLabels:
+      app: thinkback
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - namespaceSelector: {}
+      ports:
+        - protocol: TCP
+          port: 8000
+  egress:
+    # 中文注释：真实外部依赖由平台网络策略进一步收紧；这里保留可运行的默认出口。
+    - {}

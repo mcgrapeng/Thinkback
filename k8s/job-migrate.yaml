@@ -1,0 +1,54 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: thinkback-migrate
+  labels:
+    app: thinkback
+    component: migrate
+spec:
+  backoffLimit: 2
+  template:
+    metadata:
+      labels:
+        app: thinkback
+        component: migrate
+    spec:
+      restartPolicy: Never
+      serviceAccountName: thinkback
+      securityContext:
+        runAsNonRoot: true
+      containers:
+        - name: alembic-upgrade
+          image: thinkback:0.1.0
+          imagePullPolicy: IfNotPresent
+          command:
+            - alembic
+            - upgrade
+            - head
+          env:
+            - name: PYTHONPATH
+              value: /app/src
+          envFrom:
+            - configMapRef:
+                name: thinkback-config
+            - secretRef:
+                name: thinkback-secret
+          volumeMounts:
+            - name: mem0-history
+              mountPath: /app/.mem0
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+      volumes:
+        - name: mem0-history
+          emptyDir: {}
