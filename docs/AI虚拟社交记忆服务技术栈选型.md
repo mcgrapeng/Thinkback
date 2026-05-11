@@ -7,7 +7,7 @@
 | 能力 | 当前选型 | 工程边界 |
 | --- | --- | --- |
 | HTTP 服务 | FastAPI | 承载 `/memory/*`、健康检查和就绪检查。 |
-| 业务数据 | PostgreSQL + SQLAlchemy async | 保存 L2 摘要、可靠轮次、L3 业务索引、任务状态和用户角色状态。 |
+| 业务数据 | PostgreSQL + SQLAlchemy async | 保存 L2 摘要、可靠轮次、L3 业务索引、任务状态；用户角色状态表已建表预留。 |
 | 数据迁移 | Alembic | 管理 `tb_` 业务表结构。当前首版迁移为 `20260504_0001_memory_p0_tables.py`。 |
 | 长期记忆引擎 | Mem0 Library | 以 Python Library 方式嵌入 Thinkback，负责 L3 的抽取、去重、分类、语义检索、显式更新和删除。 |
 | 向量数据库 | 独立 Qdrant 服务 | Mem0 Library 通过 Thinkback 配置的 Qdrant endpoint 写入和检索 L3 向量；Thinkback readiness 也会探测同一个 Qdrant。 |
@@ -17,13 +17,22 @@
 
 ## 2. Mem0 和向量数据库的关系
 
-Mem0 内部依赖向量数据库。当前工程采用 Mem0 Library，不再部署独立的 Mem0 REST Server。生产部署模型按两个运行服务和一个外部模型服务处理：Thinkback、Qdrant 可以分别部署在不同主机上，OpenAI 或 OpenAI-compatible endpoint 作为外部模型服务访问。Mem0 Library 运行在 Thinkback 进程内，通过 `QDRANT_URL / QDRANT_API_KEY` 写入和检索 L3 向量。
+Mem0 内部依赖向量数据库。当前工程采用 Mem0 Library，不再部署独立的 Mem0 REST Server。
+生产部署模型按两个运行服务和一个外部模型服务处理：
+Thinkback、Qdrant 可以分别部署在不同主机上，OpenAI 或 OpenAI-compatible endpoint 作为外部模型服务访问。
+Mem0 Library 运行在 Thinkback 进程内，通过 `QDRANT_URL / QDRANT_API_KEY` 写入和检索 L3 向量。
 
 业务服务不要直接写 Qdrant 或任何向量库。原因很简单：L3 的抽取、去重、更新、删除和语义检索都属于 Mem0 的职责；业务服务绕过 Mem0 写向量库，会破坏 Mem0 的一致性和返回语义。
 
-Thinkback 当前只保留 Mem0 Library 业务适配器。核心配置项是 `OPENAI_API_KEY`、`MEMORY_OPENAI_BASE_URL`、`QDRANT_URL / QDRANT_API_KEY`、`MEMORY_QDRANT_COLLECTION`、`MEMORY_LLM_MODEL`、`MEMORY_EMBEDDING_MODEL` 和 `MEM0_HISTORY_DB_PATH`。`MEMORY_OPENAI_BASE_URL` 可为空；只有使用 OpenAI-compatible endpoint 时才需要配置。工程不再需要 `MEM0_API_URL / MEM0_API_KEY / MEM0_HTTP_TIMEOUT_SECONDS`。
+Thinkback 当前只保留 Mem0 Library 业务适配器。
+核心配置项是 `OPENAI_API_KEY`、`MEMORY_OPENAI_BASE_URL`、`QDRANT_URL / QDRANT_API_KEY`、`MEMORY_QDRANT_COLLECTION`、`MEMORY_LLM_MODEL`、`MEMORY_EMBEDDING_MODEL` 和 `MEM0_HISTORY_DB_PATH`。
+`MEMORY_OPENAI_BASE_URL` 可为空；只有使用 OpenAI-compatible endpoint 时才需要配置。
+工程不再需要 `MEM0_API_URL / MEM0_API_KEY / MEM0_HTTP_TIMEOUT_SECONDS`。
 
-当前 `mem0ai` Library 对 Qdrant 有一个实现约束：使用 `url` 方式连接远程 Qdrant 时，需要同时提供 `api_key`；本地或内网无鉴权 Qdrant 可使用 `http://host:6333`，Thinkback 适配器会转换成 Mem0 支持的 `host/port` 形式。生产环境如果使用 `https://qdrant.example.internal` 这类受控地址，应显式配置 `QDRANT_API_KEY`，避免把远程 HTTPS 地址误降级成本机默认端口。
+当前 `mem0ai` Library 对 Qdrant 有一个实现约束：
+使用 `url` 方式连接远程 Qdrant 时，需要同时提供 `api_key`。
+本地或内网无鉴权 Qdrant 可使用 `http://host:6333`，Thinkback 适配器会转换成 Mem0 支持的 `host/port` 形式。
+生产环境如果使用 `https://qdrant.example.internal` 这类受控地址，应显式配置 `QDRANT_API_KEY`，避免把远程 HTTPS 地址误降级成本机默认端口。
 
 ## 3. 为什么还需要 PostgreSQL
 
@@ -35,7 +44,7 @@ Mem0 解决的是长期记忆内容和语义检索，不解决产品侧所有治
 | `tb_current_summary` | 当前 L2 阶段摘要和摘要游标。 |
 | `tb_memory` | Mem0 长期记忆的业务索引，记录作用域、来源、状态和治理字段。 |
 | `tb_memory_task` | 写入、删除、重建任务状态和错误原因。 |
-| `tb_user_character_state` | 用户和角色关系状态。 |
+| `tb_user_character_state` | 用户和角色关系状态预留表；当前主链路暂未把关系状态作为独立召回材料。 |
 
 API 默认使用 `SqlAlchemyMemoryRepository`，不再使用内存仓库作为运行时存储。内存仓库只用于单元测试和确定性假后端验证。
 

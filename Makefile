@@ -1,6 +1,6 @@
 .PHONY: help install dev test lint format run debug-api debug-ready quality-real verify-local docker-build docker-up docker-down db-upgrade db-downgrade db-status db-history db-revision clean
 
--include .env.local
+-include .env
 export
 
 help:
@@ -39,14 +39,15 @@ format:
 run:
 	poetry run uvicorn --app-dir src api.app:app --reload --host 0.0.0.0 --port 8000
 
+# 中文注释：debug-api/quality-real 只在命令前临时覆盖本地调试变量；变量含义见 .env.example 和部署指南。
 debug-api:
-	POSTGRES_HOST=localhost POSTGRES_PORT=5432 POSTGRES_USER=postgres POSTGRES_PASSWORD=zpeng512 POSTGRES_DATABASE=liaoriver_memory REDIS_HOST=localhost REDIS_PORT=6379 REDIS_DB=0 REDIS_PASSWORD=zpeng512 QDRANT_URL=http://localhost:6333 QDRANT_API_KEY= MEMORY_QDRANT_COLLECTION=memories_qwen_1024 MEMORY_EMBEDDING_DIMS=1024 MEMORY_L3_WRITE_MODE=sync PYTHONPATH=src poetry run uvicorn --app-dir src api.app:app --reload --host 127.0.0.1 --port 18082
+	POSTGRES_HOST=localhost POSTGRES_PORT=5432 POSTGRES_USER=postgres POSTGRES_PASSWORD=$${POSTGRES_PASSWORD:-postgres} POSTGRES_DATABASE=liaoriver_memory REDIS_HOST=localhost REDIS_PORT=6379 REDIS_DB=0 REDIS_PASSWORD=$${REDIS_PASSWORD:-} QDRANT_URL=http://localhost:6333 QDRANT_API_KEY= MEMORY_QDRANT_COLLECTION=memories_qwen_1024 MEMORY_EMBEDDING_DIMS=1024 MEMORY_L3_WRITE_MODE=sync PYTHONPATH=src poetry run uvicorn --app-dir src api.app:app --reload --host 127.0.0.1 --port 18082
 
 debug-ready:
 	curl -sS http://127.0.0.1:18082/health/ready
 
 quality-real:
-	POSTGRES_HOST=localhost POSTGRES_PORT=5432 POSTGRES_USER=postgres POSTGRES_PASSWORD=zpeng512 POSTGRES_DATABASE=liaoriver_memory REDIS_HOST=localhost REDIS_PORT=6379 REDIS_DB=0 REDIS_PASSWORD=zpeng512 QDRANT_URL=http://localhost:6333 QDRANT_API_KEY= MEMORY_QDRANT_COLLECTION=memories_qwen_1024 MEMORY_EMBEDDING_DIMS=1024 MEMORY_L3_WRITE_MODE=sync THINKBACK_API_URL=http://127.0.0.1:18082 PYTHONPATH=src poetry run python script/run_real_mem0_quality_evaluation.py --docs-dir docs/report
+	POSTGRES_HOST=localhost POSTGRES_PORT=5432 POSTGRES_USER=postgres POSTGRES_PASSWORD=$${POSTGRES_PASSWORD:-postgres} POSTGRES_DATABASE=liaoriver_memory REDIS_HOST=localhost REDIS_PORT=6379 REDIS_DB=0 REDIS_PASSWORD=$${REDIS_PASSWORD:-} QDRANT_URL=http://localhost:6333 QDRANT_API_KEY= MEMORY_QDRANT_COLLECTION=memories_qwen_1024 MEMORY_EMBEDDING_DIMS=1024 MEMORY_L3_WRITE_MODE=sync THINKBACK_API_URL=http://127.0.0.1:18082 PYTHONPATH=src poetry run python script/run_real_mem0_quality_evaluation.py --docs-dir docs/report
 
 verify-local:
 	poetry run ruff check src test script

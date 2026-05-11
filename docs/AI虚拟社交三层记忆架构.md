@@ -43,6 +43,13 @@
 
 先记住一个读法：`user_id × character_id` 是业务隔离口径，不是某个 Mem0 版本的固定 API 签名。具体怎么落到 Mem0，由 adapter 负责。
 
+当前 Thinkback 工程落地口径：
+
+- HTTP 路由使用 `/memory/*`，健康检查使用 `/health`、`/health/live`、`/health/ready`。
+- 首版没有独立 worker，L3 `async` 模式由 API 进程内线程池执行后台写入。
+- 任务查询当前只提供 `GET /memory/tasks/{task_id}`；按 `request_id / op_type / status` 条件查询属于后续管理面能力。
+- 生产部署目标是 Kubernetes；当前仓库提供 API Deployment、迁移 Job、Service、PDB、NetworkPolicy 等基础清单。
+
 下面先补三个阅读前置：Mem0 在架构里的位置、首版必须守住的安全底线，以及首版主路径总览。后面的正文再展开三层分工和四条主链路。
 
 ### 先补一个概念：Mem0 是什么
@@ -203,7 +210,12 @@ L2 是用户与角色之间的阶段摘要。它压缩近期互动主线、关�
 
 #### L3：长期原子记忆
 
-L3 是长期原子记忆，优先交给 Mem0 管理。写入侧优先复用 Mem0 的抽取、分类和去重能力；检索侧优先复用 Mem0 的语义检索、过滤、数量限制、阈值和重排（rerank）能力；显式更新和删除由业务命令通过 adapter 调用 Mem0 update/delete 完成。范围删除按业务索引列出当前 `user_id × character_id` 下的 backend memory id 后逐条 delete，不能直接调用 Mem0 原生 `delete_all()`。遇到“用户明确纠正旧事实”这类冲突时，不假设一次 `add` 一定能自动处理干净，而是通过 Mem0 能力加业务侧显式 update/delete/rebuild 收敛。
+L3 是长期原子记忆，优先交给 Mem0 管理。
+写入侧优先复用 Mem0 的抽取、分类和去重能力；检索侧优先复用 Mem0 的语义检索、过滤、数量限制、阈值和重排（rerank）能力。
+显式更新和删除由业务命令通过 adapter 调用 Mem0 update/delete 完成。
+
+范围删除按业务索引列出当前 `user_id × character_id` 下的 backend memory id 后逐条 delete，不能直接调用 Mem0 原生 `delete_all()`。
+遇到“用户明确纠正旧事实”这类冲突时，不假设一次 `add` 一定能自动处理干净，而是通过 Mem0 能力加业务侧显式 update/delete/rebuild 收敛。
 
 业务侧可以在元数据里补充 `memory_type`，但这只是展示、审计或产品枚举，不应把画像、偏好、事件、关系这类枚举做成替代 Mem0 分类能力的自研记忆引擎。
 
@@ -751,8 +763,8 @@ L3 写入可以再展开一层：
 
 | 阶段 | 首版要做到 | 后续再补 |
 | --- | --- | --- |
-| 可追踪 | `pending / running / completed / failed`，可按 `task_id / request_id / op_type / status` 查询，状态口径见 4.3 | 更细的锁、心跳、worker 诊断 |
-| 可重试 | 派发失败和短暂下游错误可重试，确定性契约错误直接失败 | 指数退避、重试窗口、失败类型分层 |
+| 可追踪 | `pending / running / completed / failed`，至少可按 `task_id` 查询，状态口径见 4.3 | 按 `request_id / op_type / status` 条件查询，更细的锁、心跳、worker 诊断 |
+| 可重试 | 短暂下游错误可重试，确定性契约错误直接失败 | 指数退避、重试窗口、失败类型分层 |
 | 可治理 | `failed` 不通过重复提交入口隐式恢复 | `dead_letter`、人工跳过、人工关闭 |
 
 首版任务要可查、可解释、可定位；完整人工治理台不需要放进主链路。
@@ -789,9 +801,15 @@ L3 写入可以再展开一层：
 
 字段名可以按团队规范调整，但表的职责边界不建议混用。
 
-`messages[]` 首版推荐保存完整 `user -> assistant` 配对，但不要把物理结构锁死成永远只能两条消息。系统事件、撤回、编辑、多模态和主动消息都需要后续扩展空间。建议统一成 `message_id / role / normalized_content / timestamp` 这类可扩展结构。
+`messages[]` 首版推荐保存完整 `user -> assistant` 配对，但不要把物理结构锁死成永远只能两条消息。
+系统事件、撤回、编辑、多模态和主动消息都需要后续扩展空间。
+当前 HTTP API 对外字段是 `content`；服务内部会先 trim 成规范化文本。
+文档流程图里的 `normalized_content` 只是内部处理概念，不是要求调用方改用另一个字段。
 
-强治理阶段再补齐 `write_fence_version / summary_cas_token / recall_priority / last_recalled_at / recall_count / deleted_at` 等字段。`data_classification / expires_at` 不建议完全后置，至少应在首版预留。当前工程用 `round_state=active / deleted_tombstone` 控制轮次是否参与摘要和重建；`deleted_tombstone` 在首版先作为来源排除标记使用，强治理阶段再扩展成完整删除墓碑和语义级防复活能力。
+强治理阶段再补齐 `write_fence_version / summary_cas_token / recall_priority / last_recalled_at / recall_count / deleted_at` 等字段。
+`data_classification / expires_at` 不建议完全后置，至少应在首版预留。
+当前工程用 `round_state=active / deleted_tombstone` 控制轮次是否参与摘要和重建。
+`deleted_tombstone` 在首版先作为来源排除标记使用，强治理阶段再扩展成完整删除墓碑和语义级防复活能力。
 
 历史对话源由上游对话域负责，不属于 L1。记忆服务只通过只读 adapter 使用它；L1 仍然只是当前会话缓存。
 
@@ -865,7 +883,7 @@ L3 写入可以再展开一层：
 | `ingest_trace_id` | 需要追踪写入链路 |
 | `deleted_at` | 强治理阶段需要删除墓碑 |
 
-`messages` 首版推荐保存完整 `user -> assistant` 配对，并统一为 `message_id / role / normalized_content / timestamp`。后续系统事件、撤回、编辑、多模态和主动消息都可以在这个结构上扩展。
+`messages` 首版推荐保存完整 `user -> assistant` 配对，并统一保留 `message_id / role / content / timestamp`。其中 `content` 保存修剪后的文本；如果后续需要保存原文和规范化文本两份内容，再显式扩展字段。当前 Pydantic 模型兼容 `normalized_content` 输入别名，但主契约仍以 `content` 为准。
 
 #### 4.2.3 `tb_memory`
 
@@ -1074,7 +1092,7 @@ L3 写入可以再展开一层：
 
 | 字段 | 值 | 含义 |
 | --- | --- | --- |
-| `status` | `pending` | 任务已登记，尚未被 worker 接手 |
+| `status` | `pending` | 任务已登记，尚未开始执行；后续独立 worker 模式下表示尚未被 worker 接手 |
 | `status` | `running` | 任务执行中 |
 | `status` | `completed` | 任务成功完成，结果已记录 |
 | `status` | `failed` | 任务失败，可根据失败类型决定是否重试 |

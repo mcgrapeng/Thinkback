@@ -1,4 +1,5 @@
 import json
+import subprocess
 from io import BytesIO
 from urllib.error import HTTPError, URLError
 
@@ -660,11 +661,12 @@ def test_real_quality_runner_writes_markdown_with_previous_comparison(tmp_path) 
         stdout="current",
         stderr="",
     )
+    current["generated_at"] = "2026-05-11T01:02:03+00:00"
 
     artifacts = write_quality_evaluation_report_artifacts(tmp_path, current)
     markdown = artifacts.markdown_path.read_text(encoding="utf-8")
 
-    assert artifacts.json_path.name == f"{QUALITY_REPORT_PREFIX}-real-quality-new.json"
+    assert artifacts.json_path.name == f"{QUALITY_REPORT_PREFIX}-20260511-001.json"
     assert f"# {QUALITY_REPORT_PREFIX}" in markdown
     assert "| 对比报告 | `real-quality-old` |" in markdown
     assert "| `recall_at_10` | 0.95 | 1.0 | +0.05 | 提升 |" in markdown
@@ -673,6 +675,35 @@ def test_real_quality_runner_writes_markdown_with_previous_comparison(tmp_path) 
     assert "| `irrelevant_l3_per_query` | 1.2 | 0.8 | -0.4 | 提升 |" in markdown
     assert "| `delete_memory` | 1 | 1 | 1.0 |" in markdown
     assert "| `rebuild` | 1 | 1 | 1.0 |" in markdown
+    assert "| `delete_session_residue_rate` | 硬门禁 | - |" in markdown
+    assert "| `delete_all_residue_rate` | 硬门禁 | - |" in markdown
+    assert "| `known_drift_regression_pass_rate` | 硬门禁 | - |" in markdown
+
+
+def test_real_quality_runner_uses_date_and_incrementing_sequence_for_report_suffix(tmp_path) -> None:
+    from script.run_real_mem0_quality_evaluation import (
+        build_quality_evaluation_run_report,
+        write_quality_evaluation_report_artifacts,
+    )
+
+    (tmp_path / f"{QUALITY_REPORT_PREFIX}-20260511-001.json").write_text("{}", encoding="utf-8")
+    (tmp_path / f"{QUALITY_REPORT_PREFIX}-20260511-002.md").write_text("# old", encoding="utf-8")
+    (tmp_path / f"{QUALITY_REPORT_PREFIX}-real-quality-legacy.json").write_text("{}", encoding="utf-8")
+
+    current = build_quality_evaluation_run_report(
+        run_id="real-quality-new",
+        child_returncode=0,
+        quality_report={"passed": True, "case_count": 1, "case_pass_rate": 1.0},
+        post_delete_report={"passed": True, "case_count": 1},
+        stdout="current",
+        stderr="",
+    )
+    current["generated_at"] = "2026-05-11T01:02:03+00:00"
+
+    artifacts = write_quality_evaluation_report_artifacts(tmp_path, current)
+
+    assert artifacts.json_path.name == f"{QUALITY_REPORT_PREFIX}-20260511-003.json"
+    assert artifacts.markdown_path.name == f"{QUALITY_REPORT_PREFIX}-20260511-003.md"
 
 
 def test_real_quality_runner_markdown_explains_dataset_boundary_and_database(tmp_path) -> None:
@@ -789,9 +820,10 @@ def test_real_quality_runner_markdown_marks_production_quality_dataset_sufficien
     markdown = artifacts.markdown_path.read_text(encoding="utf-8")
 
     assert "| 质量 case 总数 | 40 |" in markdown
-    assert "| 质量-only 生产级覆盖 | 达到 |" in markdown
-    assert "已覆盖生产级质量风险" in markdown
-    assert "不代表广义生产级泛化覆盖已经充分" not in markdown
+    assert "| 首版核心质量覆盖 | 达到 |" in markdown
+    assert "核心质量风险已达到首版门禁" in markdown
+    assert "不代表广义生产级泛化覆盖已经充分" in markdown
+    assert "已覆盖生产级质量风险" not in markdown
 
 
 def test_real_quality_runner_writes_failure_report_without_child_json(tmp_path) -> None:
@@ -816,6 +848,30 @@ def test_real_quality_runner_writes_failure_report_without_child_json(tmp_path) 
     assert current["failure_phase"] == "environment_or_execution"
     assert "| 最终结论 | 未通过 |" in markdown
     assert "OPENAI_API_KEY and QDRANT_URL are required" in markdown
+
+
+def test_real_quality_runner_writes_failure_report_on_child_timeout(monkeypatch, tmp_path) -> None:
+    from script.run_real_mem0_quality_evaluation import run_real_quality_evaluation
+
+    def fake_run(*args, **kwargs):  # type: ignore[no-untyped-def]
+        raise subprocess.TimeoutExpired(
+            cmd=kwargs.get("args") or args[0],
+            timeout=12,
+            output="quality scope: run_id=real-quality-timeout\nappend started",
+            stderr="",
+        )
+
+    monkeypatch.setattr("script.run_real_mem0_quality_evaluation.subprocess.run", fake_run)
+
+    artifacts = run_real_quality_evaluation(tmp_path, timeout_seconds=12)
+    report = json.loads(artifacts.json_path.read_text(encoding="utf-8"))
+    markdown = artifacts.markdown_path.read_text(encoding="utf-8")
+
+    assert report["run_id"] == "real-quality-timeout"
+    assert report["passed"] is False
+    assert report["failure_phase"] == "environment_or_execution"
+    assert "timed out after 12s" in report["stderr_tail"]
+    assert "timed out after 12s" in markdown
 
 
 def test_quality_report_does_not_count_duplicate_slots_across_context_partitions() -> None:
@@ -2258,7 +2314,7 @@ def test_fault_injection_api_process_keeps_explicit_environment_over_dotenv(
     monkeypatch.setenv("POSTGRES_DATABASE", "liaoriver_memory")
     monkeypatch.setenv("POSTGRES_PORT", "5432")
     monkeypatch.setenv("REDIS_PORT", "6379")
-    monkeypatch.setenv("REDIS_PASSWORD", "zpeng512")
+    monkeypatch.setenv("REDIS_PASSWORD", "redis-secret")
     monkeypatch.setattr(
         "script.real_mem0_p0_fault_injection.dotenv_values",
         lambda path: {
@@ -2281,7 +2337,7 @@ def test_fault_injection_api_process_keeps_explicit_environment_over_dotenv(
     assert env["POSTGRES_DATABASE"] == "liaoriver_memory"  # type: ignore[index]
     assert env["POSTGRES_PORT"] == "5432"  # type: ignore[index]
     assert env["REDIS_PORT"] == "6379"  # type: ignore[index]
-    assert env["REDIS_PASSWORD"] == "zpeng512"  # type: ignore[index]
+    assert env["REDIS_PASSWORD"] == "redis-secret"  # type: ignore[index]
     assert env["QDRANT_URL"] == "http://127.0.0.1:1"  # type: ignore[index]
 
 

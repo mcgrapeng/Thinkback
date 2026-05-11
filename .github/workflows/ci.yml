@@ -14,7 +14,9 @@ jobs:
       postgres:
         image: postgres:18.3
         env:
+          # 中文注释：CI PostgreSQL 用户名。
           POSTGRES_USER: postgres
+          # 中文注释：CI PostgreSQL 密码，仅用于临时测试服务。
           POSTGRES_PASSWORD: postgres
           # 中文注释：CI 也使用当前工程统一库名，避免历史测试库名配置回流。
           POSTGRES_DB: liaoriver_memory

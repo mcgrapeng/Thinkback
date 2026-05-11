@@ -22,7 +22,16 @@ alembic/versions/20260504_0001_memory_p0_tables.py
 
 ## 2. 迁移前检查
 
-确认 `.env` 或运行环境里数据库变量正确：
+确认 `.env` 或运行环境里数据库变量正确。下面只展示字段形状；如果使用仓库的 Docker Compose 本地 PostgreSQL，默认密码是 `postgres`，如果使用你自己已有的数据库，真实密码按你的 `.env` 为准：
+
+| 变量 | 中文说明 |
+| --- | --- |
+| `POSTGRES_HOST` | PostgreSQL 主机名；控制台本地调试通常是 `localhost`，K8s 中通常是 Service DNS。 |
+| `POSTGRES_PORT` | PostgreSQL 端口；本地默认 `5432`。 |
+| `POSTGRES_USER` | PostgreSQL 用户名。 |
+| `POSTGRES_PASSWORD` | PostgreSQL 密码；生产必须从 Secret 注入。 |
+| `POSTGRES_DATABASE` | PostgreSQL 数据库名；本工程统一使用 `liaoriver_memory`。 |
+| `PYTHONPATH` | 本地执行 Alembic 时的 Python 导入路径，设置为 `src`。 |
 
 ```bash
 POSTGRES_HOST=localhost
@@ -36,6 +45,8 @@ POSTGRES_DATABASE=liaoriver_memory
 
 1. 停掉本机占用 `5432` 的旧服务。
 2. 修改 `docker-compose.yml` 的宿主机端口和 `.env` 的 `POSTGRES_PORT`，保持两边一致。
+
+这里的 `.env` 端口是宿主机或控制台命令视角。Compose 的 `app` 容器访问 `postgres` 服务时使用容器内固定端口 `5432`，由 `docker-compose.yml` 显式覆盖，避免把宿主机调试端口带进容器。
 
 ## 3. 执行迁移
 

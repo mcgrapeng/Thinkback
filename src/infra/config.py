@@ -9,6 +9,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
+    # 中文注释：运行配置只读取 .env 一个模板来源；K8s 生产环境通过 ConfigMap/Secret 覆盖同名变量。
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
@@ -30,6 +31,7 @@ class Settings(BaseSettings):
     postgres_port: int = 5432
     postgres_user: str = "postgres"
     postgres_password: str = "postgres"
+    # 中文注释：数据库名是业务口径，默认值必须与 Docker、K8s、CI 和文档保持一致。
     postgres_database: str = "liaoriver_memory"
 
     redis_host: str = "localhost"
@@ -47,6 +49,7 @@ class Settings(BaseSettings):
     memory_embedding_model: str = "text-embedding-v4"
     mem0_history_db_path: str = ".mem0/history.db"
     memory_l3_write_mode: Literal["sync", "async"] = "async"
+    # 中文注释：下面三项控制 API 进程内 L3 后台写入容量，不代表最终线上容量承诺。
     memory_l3_executor_workers: int = 16
     memory_l3_max_pending_tasks: int = 256
     memory_l3_queue_wait_seconds: float = 5.0

@@ -3,6 +3,8 @@
 本文档定义 Thinkback 记忆服务的性能与稳定性测试方案。
 覆盖范围包括并发、容量、短周期稳定性、故障注入和资源观测。
 
+当前任务不要求执行稳定性测试。本文只保留需要做性能、容量或稳定性验收时的方案口径；本轮工程验收以主链路真实质量评测、单元测试、K8s 配置校验和本地调试能力为准。
+
 本文不定义记忆质量门禁。
 记忆质量评测见
 [AI虚拟社交记忆服务首版主链路记忆质量评测方案](AI虚拟社交记忆服务首版主链路质量评测方案.md)。
@@ -44,7 +46,7 @@
 | 重试 | transient_retry_rate、retry_success_rate。 | 判断外部依赖抖动是否被正确吸收。 |
 | 吞吐 | throughput_recall_rps、throughput_append_rps。 | 在质量通过前提下观察处理能力。 |
 | 资源 | CPU、memory RSS、连接池占用、Redis、Postgres、Qdrant 耗时。 | 判断是否接近饱和或持续增长。 |
-| 队列 | l3_pending_write_tasks、l3_available_capacity。 | 判断 L3 后台抽取是否积压。 |
+| L3 后台状态 | `/memory/l3/background-status` 返回的 `write_mode`、`executor_workers`、`max_pending_tasks`、`pending_write_tasks`、`cleanup_tasks`、`available_capacity`。 | 判断 L3 后台抽取是否积压、容量是否接近上限。 |
 
 不纳入本文的指标：
 
@@ -60,8 +62,18 @@
 
 先用 `script/real_mem0_p0_preprod_pressure.py` 生成各阶段 JSON，再把这些 JSON 汇总成生产前报告。
 注：`real_mem0_p0_preprod_pressure.py` 实际调用 P0 生产前压测编排逻辑。
+性能与稳定性脚本默认写入 `docs/reports`，这是性能报告目录；首版记忆质量报告仍写入 `docs/report`。
 注：下面命令只把 `THINKBACK_API_URL` 显式写在命令行里。
 底层短压测脚本仍会从环境变量或 `.env` 读取 `OPENAI_API_KEY`、`QDRANT_URL`、PostgreSQL 和 Redis 配置；缺少这些真实依赖时会直接失败，不应解读为压测通过。
+
+相关环境变量说明：
+
+| 变量 | 中文说明 |
+| --- | --- |
+| `THINKBACK_API_URL` | 压测脚本访问 Thinkback API 的地址。 |
+| `OPENAI_API_KEY` | 模型服务密钥，供 Mem0 Library 抽取和向量化使用。 |
+| `QDRANT_URL` | Qdrant 向量库地址，供 Mem0 Library 写入和召回 L3 记忆。 |
+| `POSTGRES_DATABASE` | PostgreSQL 数据库名；本工程统一使用 `liaoriver_memory`。 |
 
 快速短探针示例：
 
@@ -163,6 +175,17 @@ PYTHONPATH=src .venv/bin/python script/real_mem0_p0_preprod_pressure.py \
 ```bash
 curl ${THINKBACK_API_URL}/memory/l3/background-status
 ```
+
+返回字段口径：
+
+| 字段 | 说明 |
+| --- | --- |
+| `write_mode` | 当前 L3 写入模式，通常是 `sync` 或 `async`。 |
+| `executor_workers` | L3 后台线程池 worker 数。 |
+| `max_pending_tasks` | L3 后台写入最大排队容量。 |
+| `pending_write_tasks` | 当前正在等待或执行的 L3 写入任务数。 |
+| `cleanup_tasks` | 后台清理任务数。 |
+| `available_capacity` | 剩余可排队容量。 |
 
 ## 5. 报告内容要求
 

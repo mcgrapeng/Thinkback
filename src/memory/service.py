@@ -115,6 +115,7 @@ class MemoryService:
         restricted_or_unsafe = self._is_restricted_or_unsafe(request.messages)
         l3_slot_reserved = False
         if self.l3_write_mode == "async" and not restricted_or_unsafe:
+            # 中文注释：先占队列槽位再落可靠任务，避免接口返回成功后才发现后台 L3 队列已经满。
             self._reserve_l3_background_write_slot()
             l3_slot_reserved = True
 
@@ -149,6 +150,7 @@ class MemoryService:
                 )
             else:
                 self._upsert_default_summary(request.user_id, request.character_id)
+                # 中文注释：P0 主链路先用确定性槽位索引兜底，防止真实 Mem0 抽取偶发漏掉关键偏好。
                 self._backfill_p0_slots_from_round_source(
                     source_text=" ".join(
                         message.content.strip()
@@ -419,6 +421,7 @@ class MemoryService:
             }
             query_slot = self._query_conflict_slot(request.query)
             if query_slot:
+                # 中文注释：槽位类问题优先查业务索引，避免向量召回没有命中时丢掉最新纠错事实。
                 self._backfill_matching_slot_memories(
                     items,
                     query=request.query,
@@ -901,12 +904,26 @@ class MemoryService:
                 "preferred drink",
                 "drink preference",
                 "beverage preference",
+                "what drink",
+                "which drink",
+                "what beverage",
+                "which beverage",
+                "drink does the user",
+                "beverage does the user",
             )
         ):
             return "favorite:drink"
         if any(
             marker in normalized
-            for marker in ("喜欢吃", "食物", "favorite food", "food preference")
+            for marker in (
+                "喜欢吃",
+                "食物",
+                "favorite food",
+                "food preference",
+                "what food",
+                "which food",
+                "food does the user",
+            )
         ):
             return "favorite:food"
         if any(
@@ -914,6 +931,34 @@ class MemoryService:
             for marker in ("提醒睡觉", "催睡觉", "睡眠提醒", "睡觉偏好", "sleep reminder")
         ):
             return "sleep_reminder_preference"
+        if any(
+            marker in normalized
+            # 中文注释：质量主链路会问“会议时间是什么”，需要映射到会议时间偏好槽位。
+            for marker in ("会议时间", "开会时间", "会议", "meeting time", "calendar")
+        ):
+            return "meeting_time_preference"
+        if any(
+            marker in normalized
+            # 中文注释：“喜欢什么运动”是运动偏好，不应落到更泛的喜好类向量召回。
+            for marker in ("运动", "exercise", "sport")
+        ):
+            return "exercise_preference"
+        if any(
+            marker in normalized
+            # 中文注释：剧情/角色扮演里的据点属于 story-world 槽位，和真实用户位置隔离。
+            for marker in (
+                "剧情设定里的据点",
+                "剧情",
+                "角色扮演",
+                "据点",
+                "基地",
+                "story-world base",
+                "story base",
+                "roleplay base",
+                "base location",
+            )
+        ):
+            return "story_world_base_location"
         return None
 
     @staticmethod
@@ -991,6 +1036,7 @@ class MemoryService:
         for memory_text in self._p0_canonical_memories_from_source(source_text):
             if not self._memory_supported_by_source(memory_text, l3_metadata):
                 continue
+            # 中文注释：同一轮来源已经有相同槽位事实时不重复写，保持 append 幂等。
             existing_same_source = [
                 memory
                 for memory in self.repository.active_memories(user_id, character_id)

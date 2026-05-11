@@ -65,8 +65,8 @@
 ## 5. 指标建议值总览
 
 所有质量指标都需要有明确处理方式，但不都适合设成数值硬门禁。
-首版只把会直接破坏记忆可信度的指标设为硬门禁；
-排序、条目级精度和表达漂移先作为观察或复核指标。
+首版只把会直接破坏记忆可信度的指标设为硬门禁。
+排序和条目级精度先作为观察指标；表达漂移已经有受控样本，按自动化门禁处理。
 
 建议值解释规则：
 
@@ -101,11 +101,11 @@
 | `cross_user_leak_rate` | 硬门禁 | 本轮样本内为 `0`。 | 未达即未通过。 | 不能召回其他用户的事实。 |
 | `cross_character_leak_rate` | 硬门禁 | 本轮样本内为 `0`。 | 未达即未通过。 | 不能召回其他角色的事实。 |
 | `roleplay_real_mix_rate` | 硬门禁 | 本轮样本内为 `0`。 | 未达即未通过。 | 现实和剧情记忆不能混用。 |
+| `known_drift_regression_pass_rate` | 硬门禁 | `>= 0.95`。 | 未达即未通过。 | 表达漂移样本通过率。 |
 | `top1_hit_rate` | 观察 | 不设硬门禁，记录本地基线。 | 低于基线时复核。 | 正确事实是否排第一。 |
 | `mrr` | 观察 | 不设硬门禁，记录本地基线。 | 低于基线时复核。 | 正确事实整体排序位置。 |
 | `item_precision_at_10` | 观察 | 不设硬门禁，记录本地基线。 | 辅助解释召回噪声。 | top10 条目级相关比例。 |
 | `irrelevant_l3_per_query` | 观察 | 不设硬门禁，越低越好。 | 异常升高时排查。 | 每次 query 的无关 L3 数。 |
-| `known_drift_regression_pass_rate` | 复核 | 首版可为 `null`。 | 有样本后再设门禁。 | 表达漂移样本通过率。 |
 
 ## 6. 指标依据与阈值合理性
 
@@ -147,6 +147,16 @@ Mem0、Zep 等公开资料更多给出 benchmark 分数、检索深度、模型�
 top10 中既要命中当前事实，也不能包含旧值或无关事实。
 `item_precision_at_10` 用于观察 top10 条目级相关比例。
 
+是否符合主流指标规范的结论：
+
+| 结论 | 说明 |
+| --- | --- |
+| 符合主流方向 | `Recall@10`、case 级 `Precision@10`、条目级 `P@10`、`MRR` 和 Top1 命中率都来自检索/RAG 常见评测范式。 |
+| 做了记忆服务必要扩展 | 删除残留、重建复活、跨 user/character 泄漏、现实/剧情混用和重复 active，不是通用 IR 指标，但属于记忆服务必须验证的生命周期和隔离不变量。 |
+| 没有过度设计 | 首版不引入复杂 judge、多轮在线 A/B、长期漂移统计或稳定性指标；这些放到扩展样本、线上灰度或性能与稳定性测试中。 |
+| 没有明显遗漏 P0 质量风险 | 当前覆盖写入、召回、纠错、负样本、表达漂移、删除、重建和三类隔离；未覆盖的长尾语言、异常输入和线上分布不在首版质量门禁中宣称。 |
+| 指标值合理 | 核心受控样本要求全通过；扩展样本才使用 `>= 0.95`、`<= 0.02` 这类比例阈值；删除、重建和隔离保持 `0` 容忍。 |
+
 公开参考资料：
 
 | 来源 | 本文采用方式 |
@@ -182,19 +192,36 @@ https://blog.getzep.com/zep-a-temporal-knowledge-graph-architecture-for-agent-me
 | 评测数据写入独立报告 | 本文只定义方案、指标和门禁，不记录本轮结果。 |
 | 阈值调整必须有样本依据 | 扩展样本后可以按场景重新分层，但不能降低生命周期和隔离不变量。 |
 
+不能把通过结果单独宣称为“广义生产级泛化覆盖已经充分”，原因有三点。
+第一，当前样本刻意覆盖昵称、宠物、地点、生日、饮品、食物、隔离、删除和重建这些高风险主链路，不等于覆盖真实线上全部表达、语言、角色设定、长尾事实和异常输入。
+第二，评测环境验证的是一轮真实依赖下的质量门禁，不包含本次明确排除的并发、容量、soak、故障注入和长期漂移。
+第三，Mem0 抽取和模型服务存在版本、提示词、模型、网络和外部服务波动；要宣称广义生产级泛化充分，必须有更大样本集、线上灰度数据、稳定性证据和持续回归结果共同支撑。
+因此，本文通过结论只能表述为“首版主链路质量门禁通过”，不代表广义生产级泛化覆盖已经充分，也不能扩大成“生产泛化已经充分证明”。
+
 ## 8. 执行方法
 
 首版质量评测应使用真实依赖执行，不使用 fake 模式替代。
 默认使用包装脚本执行评测并写入独立 JSON / Markdown 报告。
-注：下面命令按当前默认写入 `docs/` 根目录。
-如果希望和性能报告统一归档，可以把 `--docs-dir docs` 改成 `--docs-dir docs/reports`。
+注：脚本直接运行时默认写入 `docs/` 根目录；当前工程推荐显式写入 `docs/report`，与 `make quality-real` 保持一致。
+生成的报告文件名后缀使用 `YYYYMMDD-递增序号`，例如 `AI虚拟社交记忆服务首版主链路质量评测报告-20260511-001.json`。
+`YYYYMMDD` 取包装报告 `generated_at` 的日期；同一天重复执行时，序号按报告目录内已有 JSON/Markdown 最大序号继续递增。
+`run_id` 仍保留在 JSON 内部，用于隔离数据和关联脚本输出。
 自动生成的 Markdown 适合快速看结论和失败指标；它不是人工定稿报告，逐 case 证据仍需要按报告模板补齐。
+
+执行命令中的环境变量说明：
+
+| 变量 | 中文说明 |
+| --- | --- |
+| `OPENAI_API_KEY` | 模型服务密钥，供 Mem0 Library 抽取和向量化使用。 |
+| `QDRANT_URL` | Qdrant 向量库地址，供 Mem0 Library 写入和召回 L3 记忆。 |
+| `THINKBACK_API_URL` | 质量评测脚本访问 Thinkback API 的地址。 |
+| `PYTHONPATH` | 让脚本能从 `src` 目录导入工程代码。 |
 
 ```bash
 env OPENAI_API_KEY=${OPENAI_API_KEY:?set OPENAI_API_KEY} \
 QDRANT_URL=${QDRANT_URL:?set QDRANT_URL} \
 THINKBACK_API_URL=${THINKBACK_API_URL:?set THINKBACK_API_URL} \
-PYTHONPATH=src .venv/bin/python script/run_real_mem0_quality_evaluation.py --docs-dir docs
+PYTHONPATH=src .venv/bin/python script/run_real_mem0_quality_evaluation.py --docs-dir docs/report
 ```
 
 如果只需要在控制台查看原始 `quality` 和 `post_delete` JSON，可直接运行：
@@ -212,8 +239,10 @@ PYTHONPATH=src .venv/bin/python script/real_mem0_quality_regression.py
 | --- | --- |
 | 环境真实 | API、Mem0 Library、OpenAI 或 OpenAI-compatible endpoint、Qdrant、PostgreSQL 必须可用。 |
 | 数据隔离 | 每次执行使用唯一 `run_id`、user、character、session。 |
-| 结果留痕 | 保存评测运行 JSON、原始 `quality` / `post_delete` 对象和失败 case。当前自动生成的 Markdown 只汇总失败 case 和失败指标；JSON 可提供 run_id、指标、`case_results` 和子进程输出尾部。逐 case 的 query、期望事实、禁用事实要从脚本 case 定义或人工报告补齐；召回摘要和 active memory 证据可从 stdout/stderr tail、数据库快照或人工复核补充。 |
+| 结果留痕 | 保存评测运行 JSON、原始 `quality` / `post_delete` 对象和失败 case。自动生成 Markdown 只汇总失败 case 和失败指标；JSON 提供 run_id、指标、`case_results` 和子进程输出尾部。 |
+| 失败证据补齐 | 逐 case 的 query、期望事实、禁用事实从脚本 case 定义或人工报告补齐；召回摘要和 active memory 证据可从 stdout/stderr tail、数据库快照或人工复核补充。 |
 | 报告分离 | 本文不写入任何本轮数据，包装脚本把结果写入独立评测报告。 |
+| 总超时 | 包装脚本默认 `QUALITY_EVALUATION_TIMEOUT_SECONDS=900`。如果外部模型、Mem0 或网络长时间不返回，应生成 `environment_or_execution` 失败报告，不得把卡住状态当成质量通过。 |
 
 ## 9. 报告要求
 

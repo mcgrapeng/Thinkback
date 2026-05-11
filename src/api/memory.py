@@ -25,6 +25,7 @@ from memory.service import MemoryService
 router = APIRouter(prefix="/memory", tags=["memory"])
 P = ParamSpec("P")
 R = TypeVar("R")
+# 中文注释：记忆服务内部仍有同步数据库和 Mem0 调用；这里统一丢进受限线程池，避免阻塞 FastAPI 事件循环。
 _memory_call_limiter = CapacityLimiter(settings.memory_api_worker_limit)
 
 
@@ -37,6 +38,7 @@ async def _run_memory_call(method: Callable[P, R], *args: P.args, **kwargs: P.kw
         )
     except ValueError as exc:
         detail = str(exc)
+        # 中文注释：领域层抛 ValueError 时，HTTP 层只做状态码映射，不改写英文错误文本，方便日志和调用方排查。
         if "fail-closed" in detail:
             status_code = 403
         elif "conflict" in detail:

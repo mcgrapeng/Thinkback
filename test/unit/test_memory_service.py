@@ -139,6 +139,23 @@ class SkipsCatCorrectionBackend(FakeMemoryBackend):
         )
 
 
+class SkipsQualitySlotBackend(FakeMemoryBackend):
+    def add(self, messages, *, user_id, character_id, metadata=None):  # type: ignore[no-untyped-def]
+        text = " ".join(
+            message["content"].strip()
+            for message in messages
+            if message.get("content", "").strip()
+        )
+        if any(marker in text for marker in ("会议时间偏好", "运动偏好更新", "剧情设定里的据点")):
+            return []
+        return super().add(
+            messages,
+            user_id=user_id,
+            character_id=character_id,
+            metadata=metadata,
+        )
+
+
 class ScoredBackend(FakeMemoryBackend):
     def search(
         self,
@@ -1295,6 +1312,32 @@ def test_recall_backfills_matching_business_slot_when_backend_misses() -> None:
     assert l3_contents == ["User current work status: accepted a job offer from Moonshot"]
 
 
+def test_recall_backfills_drink_preference_for_english_prefer_question() -> None:
+    repository = InMemoryMemoryRepository()
+    backend = FakeMemoryBackend()
+    service = MemoryService(repository=repository, backend=backend)
+    repository.add_memory_index(
+        backend_memory_id="drink-tea",
+        user_id="user-1",
+        character_id="char-1",
+        source_refs=[{"session_id": "session-1", "round_id": "round-11"}],
+        memory_text="User favorite drink: 茶",
+    )
+
+    response = service.recall(
+        RecallMemoryRequest(
+            user_id="user-1",
+            character_id="char-1",
+            session_id="session-1",
+            query="What drink does the user currently prefer?",
+            intent=RecallIntent.PREFERENCE,
+        )
+    )
+
+    l3_contents = [item.content for item in response.items if item.layer == "L3"]
+    assert l3_contents == ["User favorite drink: 茶"]
+
+
 def test_recall_filters_backend_l3_items_by_explicit_query_slot() -> None:
     repository = InMemoryMemoryRepository()
     backend = FakeMemoryBackend()
@@ -2321,6 +2364,101 @@ def test_canonicalizes_roleplay_place_from_story_source() -> None:
     canonical = service._p0_canonical_memories_from_source("剧情设定里的据点在海边灯塔。")
 
     assert "Story-world base location: 海边灯塔" in canonical
+
+
+def test_recall_backfills_meeting_time_preference_when_backend_misses_extraction() -> None:
+    repository = InMemoryMemoryRepository()
+    service = MemoryService(repository=repository, backend=SkipsQualitySlotBackend())
+    service.append(
+        make_append(
+            round_id="round-calendar",
+            content="会议时间偏好改一下：不要上午，尽量安排在下午。",
+        )
+    )
+
+    active_contents = [
+        memory.memory_text for memory in repository.active_memories("user-1", "char-1")
+    ]
+    assert "User meeting time preference: 下午" in active_contents
+
+    response = service.recall(
+        RecallMemoryRequest(
+            user_id="user-1",
+            character_id="char-1",
+            session_id="session-1",
+            query="用户偏好的会议时间是什么？",
+            intent=RecallIntent.PREFERENCE,
+        )
+    )
+
+    l3_contents = [item.content for item in response.items if item.layer == "L3"]
+    assert l3_contents == ["User meeting time preference: 下午"]
+
+
+def test_recall_backfills_exercise_preference_when_backend_misses_extraction() -> None:
+    repository = InMemoryMemoryRepository()
+    service = MemoryService(repository=repository, backend=SkipsQualitySlotBackend())
+    service.append(
+        make_append(
+            round_id="round-exercise",
+            content="运动偏好更新：现在喜欢游泳，不再坚持跑步。",
+        )
+    )
+
+    active_contents = [
+        memory.memory_text for memory in repository.active_memories("user-1", "char-1")
+    ]
+    assert "User exercise preference: 游泳" in active_contents
+
+    response = service.recall(
+        RecallMemoryRequest(
+            user_id="user-1",
+            character_id="char-1",
+            session_id="session-1",
+            query="用户现在喜欢什么运动？",
+            intent=RecallIntent.PREFERENCE,
+        )
+    )
+
+    l3_contents = [item.content for item in response.items if item.layer == "L3"]
+    assert l3_contents == ["User exercise preference: 游泳"]
+
+
+def test_recall_backfills_roleplay_base_location_when_backend_misses_extraction() -> None:
+    repository = InMemoryMemoryRepository()
+    service = MemoryService(repository=repository, backend=SkipsQualitySlotBackend())
+    service.append(
+        make_append(
+            round_id="round-roleplay-place",
+            content="剧情设定里的据点在海边灯塔。",
+            metadata={
+                "context_type": "roleplay",
+                "roleplay_mode": "on",
+                "fact_subject": "story_world",
+                "backend_categories": ["story_world"],
+            },
+        )
+    )
+
+    active_memories = repository.active_memories("user-1", "char-1")
+    assert [memory.memory_text for memory in active_memories] == [
+        "Story-world base location: 海边灯塔"
+    ]
+    assert active_memories[0].context_type == "roleplay"
+    assert active_memories[0].fact_subject == "story_world"
+
+    response = service.recall(
+        RecallMemoryRequest(
+            user_id="user-1",
+            character_id="char-1",
+            session_id="session-1",
+            query="剧情设定里的据点在哪？",
+            intent=RecallIntent.MEMORY_QUERY,
+        )
+    )
+
+    l3_contents = [item.content for item in response.items if item.layer == "L3"]
+    assert l3_contents == ["Story-world base location: 海边灯塔"]
 
 
 def test_mem0_work_status_stopped_evaluating_wording_is_canonicalized() -> None:

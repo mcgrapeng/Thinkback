@@ -17,17 +17,46 @@
 
 ## 2. 环境变量
 
-最小配置见 `.env.example`。生产环境必须显式设置：
+最小配置见 `.env.example`。生产 API 运行环境必须显式设置：
+
+| 变量 | 中文说明 |
+| --- | --- |
+| `POSTGRES_HOST` | PostgreSQL 主机名，K8s 中通常是 Service DNS。 |
+| `POSTGRES_PORT` | PostgreSQL 端口。 |
+| `POSTGRES_USER` | PostgreSQL 用户名。 |
+| `POSTGRES_PASSWORD` | PostgreSQL 密码，生产必须放在 Secret。 |
+| `POSTGRES_DATABASE` | PostgreSQL 数据库名；本工程统一使用 `liaoriver_memory`。 |
+| `REDIS_HOST` | Redis 主机名，K8s 中通常是 Service DNS。 |
+| `REDIS_PORT` | Redis 端口。 |
+| `REDIS_DB` | Redis DB 编号；首版默认使用 `0`。 |
+| `REDIS_PASSWORD` | Redis 密码，生产如启用鉴权必须放在 Secret。 |
+| `QDRANT_URL` | Qdrant 向量库地址；生产不要写成本机 `localhost`。 |
+| `QDRANT_API_KEY` | Qdrant 鉴权密钥，生产远端 Qdrant 应配置。 |
+| `OPENAI_API_KEY` | 模型服务密钥；OpenAI 和兼容 OpenAI 协议的服务都统一使用它。 |
+| `MEMORY_OPENAI_BASE_URL` | OpenAI-compatible endpoint 的 base URL，直接用官方 endpoint 时可留空。 |
+| `MEMORY_QDRANT_COLLECTION` | Mem0 写入 Qdrant 的集合名。 |
+| `MEMORY_EMBEDDING_DIMS` | Embedding 向量维度，必须与模型实际输出一致。 |
+| `MEMORY_LLM_MODEL` | Mem0 抽取记忆使用的 LLM 模型名。 |
+| `MEMORY_EMBEDDING_MODEL` | Mem0 生成向量使用的 Embedding 模型名。 |
+| `MEM0_HISTORY_DB_PATH` | Mem0 Library 本地历史数据库路径，容器里要挂到可写目录。 |
+| `MEMORY_L3_WRITE_MODE` | L3 写入模式；生产推荐 `async`。 |
+| `MEMORY_API_WORKER_LIMIT` | `/memory/*` 同步路由线程池并发上限。 |
+| `MEMORY_L3_EXECUTOR_WORKERS` | L3 后台抽取线程数。 |
+| `MEMORY_L3_MAX_PENDING_TASKS` | L3 后台写入队列容量。 |
+| `MEMORY_L3_QUEUE_WAIT_SECONDS` | L3 队列接近满时的最长等待秒数。 |
+| `READINESS_TIMEOUT_SECONDS` | `/health/ready` 检查依赖的单项超时时间。 |
 
 ```bash
-POSTGRES_HOST=
-POSTGRES_PORT=
-POSTGRES_USER=
+POSTGRES_HOST=postgres
+POSTGRES_PORT=5432
+POSTGRES_USER=postgres
 POSTGRES_PASSWORD=
-POSTGRES_DATABASE=
+POSTGRES_DATABASE=liaoriver_memory
 
-REDIS_HOST=
-REDIS_PORT=
+REDIS_HOST=redis
+REDIS_PORT=6379
+REDIS_DB=0
+REDIS_PASSWORD=
 
 QDRANT_URL=https://qdrant.example.internal
 QDRANT_API_KEY=
@@ -45,6 +74,16 @@ MEMORY_L3_EXECUTOR_WORKERS=16
 MEMORY_L3_MAX_PENDING_TASKS=256
 MEMORY_L3_QUEUE_WAIT_SECONDS=5
 READINESS_TIMEOUT_SECONDS=30
+```
+
+评测脚本运行环境可以额外设置：
+
+| 变量 | 中文说明 |
+| --- | --- |
+| `QUALITY_EVALUATION_TIMEOUT_SECONDS` | 真实质量评测包装脚本的总超时，不是 API 运行时配置，也不写入 K8s ConfigMap。 |
+
+```bash
+QUALITY_EVALUATION_TIMEOUT_SECONDS=900
 ```
 
 Mem0 不再作为独立 REST Server 部署。
@@ -81,7 +120,26 @@ Mem0 L3 抽取在后台任务中沉淀，避免外部 LLM/Embedding 抖动把写
 | `MEMORY_L3_QUEUE_WAIT_SECONDS` | 队列接近满时最多等待多久。超过后仍无容量，会返回明确错误而不是静默丢任务。 |
 | `READINESS_TIMEOUT_SECONDS` | `/health/ready` 检查数据库、Redis、Qdrant、Mem0 Library 时的单项依赖超时时间。 |
 
+`QUALITY_EVALUATION_TIMEOUT_SECONDS` 只影响 `script/run_real_mem0_quality_evaluation.py`。
+它不是 API 进程运行配置，也不需要写进 `k8s/configmap.yaml`。
+外部模型或 Mem0 卡住时，包装脚本会生成 `environment_or_execution` 失败报告，而不是无限挂起。
+
 ## 3. 本地启动
+
+本地只保留一个环境变量模板：
+
+```bash
+cp .env.example .env
+```
+
+复制后按本机依赖调整 `.env`，至少确认 `OPENAI_API_KEY`、`QDRANT_URL`、`POSTGRES_DATABASE=liaoriver_memory`、Redis 和 PostgreSQL 账号密码正确。
+模板默认与 `docker-compose.yml` 对齐：PostgreSQL 示例密码是 `postgres`，Redis 默认不带密码。
+如果本机已经有自建中间件，按实际密码覆盖 `.env` 即可，不要把个人机器密码写回模板。
+
+本地有两种调试方式：
+
+1. 控制台 API 调试：`make debug-api` 读取 `.env`，连接宿主机视角的 `localhost:5432`、`localhost:6379` 和 `localhost:6333`。
+2. Compose app 容器调试：`docker compose up app` 会在容器内使用 `postgres:5432`、`redis:6379`；Qdrant 不在当前 Compose 内，默认用 `http://host.docker.internal:6333` 访问宿主机，可用 `DOCKER_QDRANT_URL` 改成远端地址。
 
 安装依赖：
 
@@ -107,6 +165,13 @@ PYTHONPATH=src .venv/bin/alembic upgrade head
 PYTHONPATH=src .venv/bin/uvicorn api.app:app --app-dir src --host 0.0.0.0 --port 8000
 ```
 
+也可以使用 Makefile 本地调试入口，它会用当前工程约定的本地端口 `18082` 和本地依赖默认值：
+
+```bash
+make debug-api
+make debug-ready
+```
+
 当前 L3 `MEMORY_L3_WRITE_MODE=async` 使用 API 进程内线程池执行后台抽取，不依赖独立 worker 消费。
 
 ## 4. 图形化 API 文档
@@ -118,6 +183,8 @@ PYTHONPATH=src .venv/bin/uvicorn api.app:app --app-dir src --host 0.0.0.0 --port
 | Swagger UI | `http://localhost:8000/docs` | 图形化查看接口、请求体、响应体，并可直接发起调试请求。 |
 | ReDoc | `http://localhost:8000/redoc` | 以文档阅读方式查看 API 分组、模型和字段。 |
 | OpenAPI JSON | `http://localhost:8000/openapi.json` | 给自动化工具、SDK 生成器或接口校验工具使用。 |
+
+如果使用 `make debug-api`，把上面的端口改成 `18082`。
 
 图形化 API 文档只描述 HTTP 接口契约。
 记忆质量评测、性能与稳定性测试和具体评测报告仍分别维护在对应文档中。
@@ -148,14 +215,21 @@ password authentication failed for user "postgres"
 评测报告模板见 `docs/AI虚拟社交记忆服务首版主链路质量评测报告模板.md`。
 性能与稳定性测试见 `docs/AI虚拟社交记忆服务性能与稳定性测试方案.md`。
 真实结论必须分别看召回质量、删除重建、隔离，以及并发、资源、稳定性和失败重试。
+当前任务暂不要求执行稳定性测试；不要把质量评测通过解读为容量、稳定性或线上 SLO 已达标。
 
-脚本：
+推荐先执行首版质量评测包装脚本，它会运行真实依赖下的质量回归，并在 `docs/report` 生成 JSON/Markdown 报告：
+
+```bash
+make quality-real
+```
+
+如果只想做早期 5 轮 smoke 验证，可以运行：
 
 ```bash
 PYTHONPATH=src .venv/bin/python script/real_mem0_pressure.py
 ```
 
-它会执行：
+`real_mem0_pressure.py` 会执行：
 
 1. 检查 `OPENAI_API_KEY`、`QDRANT_URL`。
 2. 检查 Mem0 Library 能否通过 OpenAI 和 Qdrant 完成基础调用。
@@ -176,6 +250,14 @@ RuntimeError: real validation requires: OPENAI_API_KEY
 这不是测试通过，也不是代码失败，而是环境未满足真实验证条件。
 
 ## 7. 生产注意事项
+
+生产环境目标是 Kubernetes。当前仓库的入口是：
+
+```bash
+kubectl apply -k k8s
+```
+
+部署前先复制并修改 `k8s/secret.example.yaml` 中的密钥值，确认 `k8s/configmap.yaml` 里的 `POSTGRES_DATABASE` 为 `liaoriver_memory`，并把镜像地址替换成实际发布镜像。
 
 1. API 默认使用 PostgreSQL 业务仓库，不允许生产路径退回内存仓库。
 2. Mem0 以 Library 方式嵌入 Thinkback；Qdrant 独立部署，不能假设和 Thinkback 同主机。

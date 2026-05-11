@@ -15,6 +15,7 @@ from typing import Any
 
 REPORT_PREFIX = "AI虚拟社交记忆服务首版主链路质量评测报告"
 DEFAULT_DOCS_DIR = Path("docs")
+DEFAULT_TIMEOUT_SECONDS = 900
 QUALITY_SCRIPT = Path("script/real_mem0_quality_regression.py")
 
 _METRIC_SPECS: tuple[tuple[str, str, bool], ...] = (
@@ -25,6 +26,8 @@ _METRIC_SPECS: tuple[tuple[str, str, bool], ...] = (
     ("false_positive_rate", "lower", True),
     ("duplicate_active_rate", "lower", True),
     ("delete_memory_residue_rate", "lower", True),
+    ("delete_session_residue_rate", "lower", True),
+    ("delete_all_residue_rate", "lower", True),
     ("rebuild_resurrection_rate", "lower", True),
     ("cross_user_leak_rate", "lower", True),
     ("cross_character_leak_rate", "lower", True),
@@ -33,7 +36,7 @@ _METRIC_SPECS: tuple[tuple[str, str, bool], ...] = (
     ("mrr", "higher", False),
     ("item_precision_at_10", "higher", False),
     ("irrelevant_l3_per_query", "lower", False),
-    ("known_drift_regression_pass_rate", "higher", False),
+    ("known_drift_regression_pass_rate", "higher", True),
 )
 
 
@@ -106,8 +109,9 @@ def write_quality_evaluation_report_artifacts(
     docs_dir.mkdir(parents=True, exist_ok=True)
     run_id = str(report["run_id"])
     previous = _load_latest_previous_report(docs_dir, run_id)
-    json_path = docs_dir / f"{REPORT_PREFIX}-{run_id}.json"
-    markdown_path = docs_dir / f"{REPORT_PREFIX}-{run_id}.md"
+    report_stem = _next_report_stem(docs_dir, report)
+    json_path = docs_dir / f"{report_stem}.json"
+    markdown_path = docs_dir / f"{report_stem}.md"
     json_path.write_text(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
     markdown_path.write_text(render_quality_evaluation_markdown(report, previous), encoding="utf-8")
     return ReportArtifacts(json_path=json_path, markdown_path=markdown_path)
@@ -232,25 +236,47 @@ def render_quality_evaluation_markdown(
     return "\n".join(lines)
 
 
-def run_real_quality_evaluation(docs_dir: Path = DEFAULT_DOCS_DIR) -> ReportArtifacts:
-    completed = subprocess.run(
-        [sys.executable, str(QUALITY_SCRIPT)],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    combined_output = "\n".join(part for part in (completed.stdout, completed.stderr) if part)
+def run_real_quality_evaluation(
+    docs_dir: Path = DEFAULT_DOCS_DIR,
+    *,
+    timeout_seconds: int | None = None,
+) -> ReportArtifacts:
+    effective_timeout_seconds = timeout_seconds or _quality_timeout_seconds_from_environment()
+    try:
+        completed = subprocess.run(
+            [sys.executable, str(QUALITY_SCRIPT)],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=effective_timeout_seconds,
+        )
+        child_returncode = completed.returncode
+        stdout = completed.stdout
+        stderr = completed.stderr
+    except subprocess.TimeoutExpired as exc:
+        # 中文注释：真实模型/Mem0 调用可能被外部服务卡住；超时也要落报告，避免评测命令无限挂起。
+        stdout = _timeout_stream_text(exc.output)
+        stderr = "\n".join(
+            part
+            for part in (
+                _timeout_stream_text(exc.stderr),
+                f"quality evaluation timed out after {effective_timeout_seconds}s",
+            )
+            if part
+        )
+        child_returncode = 124
+    combined_output = "\n".join(part for part in (stdout, stderr) if part)
     run_id = extract_run_id(combined_output) or f"real-quality-{datetime.now(UTC).strftime('%Y%m%dT%H%M%S')}"
-    child_reports = extract_quality_json_reports(completed.stdout)
+    child_reports = extract_quality_json_reports(stdout)
     quality_report = child_reports[0] if len(child_reports) >= 1 else None
     post_delete_report = child_reports[1] if len(child_reports) >= 2 else None
     report = build_quality_evaluation_run_report(
         run_id=run_id,
-        child_returncode=completed.returncode,
+        child_returncode=child_returncode,
         quality_report=quality_report,
         post_delete_report=post_delete_report,
-        stdout=completed.stdout,
-        stderr=completed.stderr,
+        stdout=stdout,
+        stderr=stderr,
     )
     return write_quality_evaluation_report_artifacts(docs_dir, report)
 
@@ -258,8 +284,14 @@ def run_real_quality_evaluation(docs_dir: Path = DEFAULT_DOCS_DIR) -> ReportArti
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--docs-dir", type=Path, default=DEFAULT_DOCS_DIR)
+    parser.add_argument(
+        "--timeout-seconds",
+        type=int,
+        default=None,
+        help="Maximum seconds to wait for the child real-quality script.",
+    )
     args = parser.parse_args()
-    artifacts = run_real_quality_evaluation(args.docs_dir)
+    artifacts = run_real_quality_evaluation(args.docs_dir, timeout_seconds=args.timeout_seconds)
     print(f"wrote json report: {artifacts.json_path}")
     print(f"wrote markdown report: {artifacts.markdown_path}")
 
@@ -277,6 +309,25 @@ def _postgres_database_from_environment() -> str:
     if database_url:
         return database_url.rstrip("/").rsplit("/", maxsplit=1)[-1].split("?", maxsplit=1)[0]
     return "liaoriver_memory"
+
+
+def _quality_timeout_seconds_from_environment() -> int:
+    raw_value = os.environ.get("QUALITY_EVALUATION_TIMEOUT_SECONDS")
+    if raw_value:
+        try:
+            value = int(raw_value)
+        except ValueError:
+            return DEFAULT_TIMEOUT_SECONDS
+        return max(1, value)
+    return DEFAULT_TIMEOUT_SECONDS
+
+
+def _timeout_stream_text(value: str | bytes | None) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return value
 
 
 def _failure_phase(
@@ -314,6 +365,30 @@ def _load_latest_previous_report(docs_dir: Path, current_run_id: str) -> dict[st
     if not reports:
         return None
     return max(reports, key=lambda item: str(item.get("generated_at", "")))
+
+
+def _next_report_stem(docs_dir: Path, report: dict[str, Any]) -> str:
+    generated_date = _report_date(report)
+    sequence = _next_daily_report_sequence(docs_dir, generated_date)
+    return f"{REPORT_PREFIX}-{generated_date}-{sequence:03d}"
+
+
+def _report_date(report: dict[str, Any]) -> str:
+    raw_generated_at = str(report.get("generated_at") or "")
+    try:
+        return datetime.fromisoformat(raw_generated_at).strftime("%Y%m%d")
+    except ValueError:
+        return datetime.now(UTC).strftime("%Y%m%d")
+
+
+def _next_daily_report_sequence(docs_dir: Path, generated_date: str) -> int:
+    pattern = re.compile(rf"^{re.escape(REPORT_PREFIX)}-{generated_date}-(\d{{3}})\.(?:json|md)$")
+    sequences: list[int] = []
+    for path in docs_dir.glob(f"{REPORT_PREFIX}-{generated_date}-*.*"):
+        match = pattern.match(path.name)
+        if match:
+            sequences.append(int(match.group(1)))
+    return max(sequences, default=0) + 1
 
 
 def _quality(report: dict[str, Any] | None) -> dict[str, Any]:
@@ -403,8 +478,8 @@ def _dataset_boundary_lines(
     first_version_gate = "足够支撑，当前报告已通过" if report.get("passed") else "未通过，不能支撑"
     production_quality_sufficient = _production_quality_dataset_sufficient(quality, post_delete)
     broad_production_coverage = (
-        "已覆盖生产级质量风险：槽位纠错、负样本、表达漂移、隔离、单条删除、"
-        "session 删除、all 删除和 rebuild 复活；本结论不包含稳定性。"
+        "核心质量风险已达到首版门禁，覆盖槽位纠错、负样本、表达漂移、隔离、"
+        "单条删除、session 删除、all 删除和 rebuild 复活；但仍不代表广义生产级泛化覆盖已经充分。"
         if production_quality_sufficient
         else (
             "不代表广义生产级泛化覆盖已经充分；当前样本是受控核心样本，"
@@ -424,7 +499,7 @@ def _dataset_boundary_lines(
         f"| 主链路质量 case | {quality_case_count} |",
         f"| 删除与重建 case | {post_delete_case_count} |",
         f"| 首版主链路质量门禁 | {first_version_gate} |",
-        f"| 质量-only 生产级覆盖 | {'达到' if production_quality_sufficient else '未达到'} |",
+        f"| 首版核心质量覆盖 | {'达到' if production_quality_sufficient else '未达到'} |",
         f"| 广义生产级覆盖 | {broad_production_coverage} |",
         f"| 稳定性测试 | {stability_scope} |",
     ]

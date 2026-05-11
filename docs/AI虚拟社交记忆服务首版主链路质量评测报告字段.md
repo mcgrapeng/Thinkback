@@ -4,7 +4,7 @@
 字段分为两层：
 
 1. 原始质量报告字段：`script/real_mem0_quality_regression.py` 输出的 JSON 对象。
-2. 评测运行包装字段：`script/run_real_mem0_quality_evaluation.py` 默认写入 `docs/` 的 JSON 报告外层对象；执行时可用 `--docs-dir` 改到 `docs/reports` 等目录。
+2. 评测运行包装字段：`script/run_real_mem0_quality_evaluation.py` 写入报告目录的 JSON 外层对象。脚本直接运行时默认目录是 `docs/`；当前工程推荐通过 `make quality-real` 写入 `docs/report`。
 
 第 2 至第 5 节描述原始质量报告字段；这些字段在包装报告中位于 `quality` 或 `post_delete` 对象内。
 评测方案见 [首版记忆质量评测方案](AI虚拟社交记忆服务首版主链路质量评测方案.md)。
@@ -43,7 +43,7 @@
 | `cross_user_leak_rate` | number/null | 跨 user 泄漏比例。 | 可先由 case 门禁覆盖。 |
 | `cross_character_leak_rate` | number/null | 跨 character 泄漏比例。 | 可先由 case 门禁覆盖。 |
 | `roleplay_real_mix_rate` | number/null | 现实/剧情混用比例。 | 可先由 case 门禁覆盖。 |
-| `known_drift_regression_pass_rate` | number/null | 表达漂移样本通过率。 | 首版可为 `null`。 |
+| `known_drift_regression_pass_rate` | number/null | 表达漂移样本通过率。 | 有表达漂移样本时参与首版硬门禁；无样本时为 `null`。 |
 
 `precision_at_10` 与 `item_precision_at_10` 的区别：
 
@@ -62,11 +62,11 @@
 | `conflict_pollution_rate` | 核心为 `0`；扩展 `<= 0.02`。 | 高于建议值即未通过。 |
 | `false_positive_rate` | 负样本为 `0`；扩展 `<= 0.02`。 | 高于建议值即未通过。 |
 | 删除、重建、隔离类字段 | 本轮样本内为 `0`。 | 按生命周期和作用域不变量解释。 |
+| `known_drift_regression_pass_rate` | `>= 0.95`。 | 有表达漂移样本时低于建议值即未通过。 |
 | `top1_hit_rate` | 不设硬门禁。 | 观察排序质量，低于本地基线时复核。 |
 | `mrr` | 不设硬门禁。 | 观察整体排序位置，低于本地基线时复核。 |
 | `item_precision_at_10` | 不设硬门禁。 | 辅助解释 top10 噪声。 |
 | `irrelevant_l3_per_query` | 不设硬门禁，越低越好。 | 异常升高时排查召回噪声。 |
-| `known_drift_regression_pass_rate` | 首版可为 `null`。 | 有样本后再设门禁。 |
 
 ## 3. 执行与失败字段
 
@@ -95,8 +95,8 @@
 | `active_after_rebuild` | number | rebuild 后的 active 记忆数。 |
 | `transient_retry_rate` | number | 瞬时失败占请求数的比例。 |
 | `critical_slot_pass_rate` | number/null | 核心槽位通过率，当前保留为诊断字段。 |
-| `delete_session_residue_rate` | number/null | 会话级删除残留，首版可为 `null`。 |
-| `delete_all_residue_rate` | number/null | 全量删除残留，首版可为 `null`。 |
+| `delete_session_residue_rate` | number/null | 会话级删除残留；有对应 case 时参与首版硬门禁。 |
+| `delete_all_residue_rate` | number/null | 全量删除残留；有对应 case 时参与首版硬门禁。 |
 | `dirty_summary_recall_rate` | number/null | 污染摘要被召回比例，当前保留为诊断字段。 |
 | `source_ref_loss_rate` | number/null | 来源引用丢失比例，当前保留为诊断字段。 |
 | `idempotency_failure_rate` | number/null | 幂等失败比例，当前保留为诊断字段。 |
@@ -126,8 +126,13 @@
 ## 6. 评测运行包装字段
 
 以下字段属于 `script/run_real_mem0_quality_evaluation.py` 写入报告目录的 JSON 外层对象。
-默认报告目录是 `docs/`；如果执行时指定 `--docs-dir docs/reports`，字段结构不变，只是文件位置变化。
+脚本直接运行时默认报告目录是 `docs/`；当前工程的 Makefile 使用 `--docs-dir docs/report`。
+如果手动指定其他 `--docs-dir`，字段结构不变，只是文件位置变化。
 包装对象用于留存一次完整执行、对比历史报告和渲染 Markdown。
+报告文件名使用 `AI虚拟社交记忆服务首版主链路质量评测报告-YYYYMMDD-递增序号.json/md`。
+`YYYYMMDD` 取包装报告 `generated_at` 的日期；同一天已有 JSON 或 Markdown 报告时，序号按最大值加一。
+示例：`AI虚拟社交记忆服务首版主链路质量评测报告-20260511-001.json`。
+`run_id` 不再拼进文件名，但仍保存在 JSON 中用于数据隔离、日志排查和历史对比。
 
 | 字段 | 类型 | 直白解释 |
 | --- | --- | --- |
@@ -138,6 +143,7 @@
 | `failure_phase` | string/null | 失败阶段；通过时为 `null`。 |
 | `quality` | object/null | 主链路原始质量报告对象。 |
 | `post_delete` | object/null | 删除与重建复查原始质量报告对象。 |
+| `postgres_database` | string | 本次评测使用的 PostgreSQL 数据库名；未显式提供时默认按环境或 `liaoriver_memory` 推断。 |
 | `stdout_tail` | string | 子进程标准输出尾部，用于排障。 |
 | `stderr_tail` | string | 子进程标准错误尾部，用于排障。 |
 
@@ -180,7 +186,7 @@
   "roleplay_real_mix_rate": 0.0,
   "dirty_summary_recall_rate": null,
   "source_ref_loss_rate": null,
-  "known_drift_regression_pass_rate": null,
+  "known_drift_regression_pass_rate": 1.0,
   "http_5xx_rate": null,
   "timeout_rate": null,
   "idempotency_failure_rate": null,
@@ -230,13 +236,13 @@
     "false_positive_rate": "automatic",
     "duplicate_active_rate": "automatic",
     "delete_memory_residue_rate": "case_gate",
-    "delete_session_residue_rate": "pending",
-    "delete_all_residue_rate": "pending",
+    "delete_session_residue_rate": "case_gate",
+    "delete_all_residue_rate": "case_gate",
     "rebuild_resurrection_rate": "case_gate",
     "cross_user_leak_rate": "case_gate",
     "cross_character_leak_rate": "case_gate",
     "roleplay_real_mix_rate": "case_gate",
-    "known_drift_regression_pass_rate": "manual_review"
+    "known_drift_regression_pass_rate": "automatic"
   }
 }
 ```
@@ -259,6 +265,7 @@
     ]
   },
   "post_delete": null,
+  "postgres_database": "liaoriver_memory",
   "stdout_tail": "...",
   "stderr_tail": "..."
 }

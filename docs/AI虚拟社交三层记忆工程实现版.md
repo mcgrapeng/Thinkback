@@ -2,7 +2,20 @@
 
 > 本文承接《AI虚拟社交三层记忆架构》的工程实现细节，面向实现、联调和排障。架构主文讲清楚问题、三层分工、四条闭环和数据落点；本文只展开服务入口、任务编排、幂等、降级、治理和可观测性。
 >
-> 工程实现仍遵守一个边界：L3 不自研记忆引擎。写入侧优先复用 Mem0 的抽取、分类和去重能力；检索侧优先复用 Mem0 的语义检索、过滤、阈值、数量限制和重排能力；显式更新/删除由业务命令调用 Mem0 update/delete。范围删除必须先按业务索引找出当前 `user_id × character_id` 下的 backend memory id，再逐条调用 Mem0 delete；不能把业务范围删除直接映射成 Mem0 原生 `delete_all()`。冲突收敛按当前 Mem0 版本实测，能交给 Mem0 的交给 Mem0，不能稳定表达的部分才由业务侧显式 update/delete/rebuild 兜底。应用层只做业务隔离、任务编排、审计、L1/L2 和最终召回融合。
+> 工程实现仍遵守一个边界：L3 不自研记忆引擎。
+> 写入侧优先复用 Mem0 的抽取、分类和去重能力；检索侧优先复用 Mem0 的语义检索、过滤、阈值、数量限制和重排能力。
+> 显式更新和删除由业务命令调用 Mem0 update/delete。
+> 范围删除必须先按业务索引找出当前 `user_id × character_id` 下的 backend memory id，再逐条调用 Mem0 delete；不能把业务范围删除直接映射成 Mem0 原生 `delete_all()`。
+> 冲突收敛按当前 Mem0 版本实测：能交给 Mem0 的交给 Mem0，不能稳定表达的部分才由业务侧显式 update/delete/rebuild 兜底。
+> 应用层只做业务隔离、任务编排、审计、L1/L2 和最终召回融合。
+
+当前工程实现口径如下：
+
+- 对外 HTTP 路由是未加版本前缀的 `/memory/*`，健康检查是 `/health`、`/health/live`、`/health/ready`。
+- API 层通过 `anyio.to_thread.run_sync` 把同步业务边界放入受限线程池，避免阻塞 FastAPI 事件循环。
+- L3 默认使用 API 进程内线程池做后台写入，`MEMORY_L3_WRITE_MODE=async` 时不会启动独立 worker。
+- 当前任务查询只提供 `GET /memory/tasks/{task_id}`；按 `request_id / op_type / status` 条件查询属于后续管理面能力。
+- 生产部署以 `k8s/` 下的 API Deployment 和迁移 Job 为准；本地调试使用单一 `.env.example` 模板复制出的 `.env`。
 
 ---
 ## 1. 工程参考流程
@@ -16,6 +29,7 @@
 - `P2` 是强治理能力：write fence、history snapshot、tombstone、suppression、dead_letter、decay 和人工处置。
 - 后文流程中标注 `P1/P2` 的步骤不得反向阻塞 P0 上线。实现时先按每节的“P0 主路径”落地，再按真实风险逐项打开增强能力。
 - 文中 `memory_task / current_summary / summary_round_journal` 是逻辑组件名，用于解释任务、摘要和轮次账本职责，不强制等同于最终物理表名。物理表命名以数据落点和 Schema 为准；长期记忆索引表为 `tb_memory`，用户-角色关系状态表为 `tb_user_character_state`。
+- 第 1 章里的 `code / message / data(...)` 是流程伪格式，用来表达分支语义和后续网关外壳建议；当前 HTTP 响应体以第 3 章示例和 `src/memory/schemas.py` 为准。
 
 ### 1.0 首版实施流程速查
 
@@ -49,8 +63,8 @@ append 首版流程：
                |
                v
 +------------------------------+
-| 派发 extract task             |
-| worker 异步更新 L2 / L3       |
+| 更新 L2 与首版槽位             |
+| L3 sync 或 API 进程内后台写入  |
 +------------------------------+
 ```
 
@@ -173,7 +187,7 @@ rebuild 首版流程：
 [append memory command
  request_id / user_id / character_id /
  session_id / round_id / round_index? /
- messages[] / timestamp]
+ messages[] / source_timestamp]
      |
      v
 [输入契约校验]
@@ -185,7 +199,7 @@ rebuild 首版流程：
  - session_id
  - round_id
  - messages[]
- - timestamp
+ - source_timestamp
  推荐：
  - round_index
  校验：
@@ -194,9 +208,9 @@ rebuild 首版流程：
  - character_id 必须非空
  - messages[] 必须是长度为 2 的数组
  - messages[0].role 必须为 user，messages[1].role 必须为 assistant
- - 每条消息都必须包含 message_id / role / message_content
- - 每条 message_content 必须是字符串
- - timestamp 必须可解析
+ - 每条消息都必须包含 message_id / role / content
+ - 每条 content 必须是字符串
+ - source_timestamp 必须可解析
      |
      +--> invalid -> [返回 rejected
                        code=1001 /
@@ -205,10 +219,10 @@ rebuild 首版流程：
      |
      v
 [规范化输入]
- - 逐条 trim messages[].message_content -> normalized_messages[].normalized_content
+ - 逐条 trim messages[].content -> normalized_messages[].normalized_content
  - 保留 messages[].message_id / role / timestamp
- - 保留 session_id / round_id / round_index? / timestamp 作为来源信息
- - 计算 round_fingerprint = hash(normalized_messages + round_index? + session_id + timestamp)
+ - 保留 session_id / round_id / round_index? / source_timestamp 作为来源信息
+ - 计算 round_fingerprint = hash(normalized_messages + round_index? + session_id + source_timestamp)
      |
      +--> normalized_messages 中两条 normalized_content 同时为空
           -> [返回 skipped
@@ -423,14 +437,15 @@ rebuild 首版流程：
      |
      +--> 异步分支 A：L2 摘要生成 / 覆盖
      |    -> [P0 简化策略]
-     |       按 user_id × character_id 读取尚未摘要的 durable round
+     |       按 user_id × character_id 读取有效 durable round
      |       以 timestamp / round_index 稳定排序
      |       若 current_summary.summary_dirty=true
      |         -> l2_result=skipped(summary_dirty_wait_rebuild)，不生成候选摘要
      |         -> dirty 只能由 rebuild 基于删除/修复后的历史源清理
      |       若 current_summary.summary_stale=true
      |         -> 可继续滚动摘要；成功写回后清除 summary_stale
-     |       达到阈值后用 current_summary + 新增轮次生成新摘要
+     |       当前实现每次 append 后重算最近 10 条有效轮次的摘要
+     |       不等待“累计满 10 条新增轮次”才触发
      |       写回 current_summary，并记录 latest_source_round_id / updated_at
      |       不要求 fence、连续前缀、tombstone、CAS token
      |    -> [P2 强一致策略]
@@ -591,14 +606,14 @@ rebuild 首版流程：
 
 召回闭环目标：同步读取目标记忆层，并在返回前完成安全过滤、跨层去重、冲突收敛与预算裁剪，输出可直接注入回复上下文的记忆结果。`L1 / L2` 默认参与召回；`L3` 根据 skip / recall 规则决定是否查询。召回结果不是“三层原样拼接”，而是按跨层融合规则收敛后的上下文材料。
 
-当前推荐 P0 采用降级召回（degraded recall）：任一非关键层读取失败时返回其余可用层，并在响应中标记 `degraded_layers` 和 `failed_layer_reason`。只有输入协议错误、作用域隔离失败、安全过滤失败，或全部目标层均不可用时才整体失败。P2 若业务要求强一致回复，可单独启用失败关闭（fail-closed）模式。
+当前推荐 P0 采用降级召回（degraded recall）：任一非关键层读取失败时返回其余可用层，并在响应中标记 `degraded` 和 `degradation_reasons`。只有输入协议错误、作用域隔离失败、安全过滤失败，或全部目标层均不可用时才整体失败。P2 若业务要求强一致回复，可单独启用失败关闭（fail-closed）模式。
 
 P0 主路径可以简化理解为：
 
 ```text
 +------------------------------+
 | recall 请求                   |
-| retrieval_query + scope       |
+| query + user×character        |
 +--------------+---------------+
                |
                v
@@ -626,7 +641,7 @@ P0 主路径可以简化理解为：
 +------------------------------+
 ```
 
-同步返回统一格式：`code(int) + message + data(request_id, items)`；失败时返回 `code(int) + message + data(request_id, items=[], failed_layer)`。
+当前 HTTP 成功响应是 `RecallMemoryResponse(status, degraded, degradation_reasons, items)`；后续如接网关统一外壳，再在边界层包装数值码。
 
 说明：P0 按架构主文 §3.2 的召回流程落地即可；`write fence / fail-closed / event touch-back` 属于增强治理或旁路优化。
 
@@ -652,7 +667,7 @@ L3 skip rules：
 ```text
 [recall command
  request_id / user_id / character_id /
- retrieval_query / session_id?]
+ query / session_id?]
             |
             v
 [输入契约校验]
@@ -661,10 +676,10 @@ L3 skip rules：
  - request_id
  - user_id
  - character_id
- - retrieval_query
+ - query
  校验：
  - character_id 必须非空
- - retrieval_query 必须是字符串
+ - query 必须是字符串
  - session_id 可选；提供时用于读取当前会话 L1，缺失时跳过 L1，只读取 L2/L3
             |
             +--> invalid -> [返回 rejected
@@ -673,11 +688,11 @@ L3 skip rules：
                               data(request_id, items=[])]
             |
             v
-[规范化 retrieval_query]
- - trim -> normalized_retrieval_query
+[规范化 query]
+ - trim -> normalized_query
  - 过长则截断到安全上限
             |
-            +--> normalized_retrieval_query 为空
+            +--> normalized_query 为空
                  -> [返回 skipped
                      code=1002 /
                      message=empty retrieval query /
@@ -685,7 +700,7 @@ L3 skip rules：
             |
             v
 [L3 跳过规则判断]
- 输入：normalized_retrieval_query
+ 输入：normalized_query
  输出：l3_action = recall / skip
  规则：命中强制 skip -> skip；命中强制 recall -> recall；否则默认 recall
             |
@@ -712,7 +727,7 @@ L3 skip rules：
      |    -> 命中：返回短期记忆片段
      |       round_id / round_index / messages[] / timestamp / session_id
      |    -> 无命中：L1 候选为空
-     |    -> P0 失败：记录 degraded_layers=[l1]，继续使用 L2/L3
+     |    -> P0 失败：记录 degradation_reasons=[l1]，继续使用 L2/L3
      |    -> P2 fail-closed：返回 error
      |       code=2101 / message=recall failed /
      |       data(request_id, items=[], failed_layer=l1)
@@ -730,7 +745,7 @@ L3 skip rules：
      |       -> L2 候选为空或只返回降级诊断
      |       -> 不把 stale summary 注入 prompt；后续可由滚动摘要或 rebuild 修复
      |    -> 无摘要：L2 候选为空
-     |    -> P0 失败：记录 degraded_layers=[l2]，继续使用 L1/L3
+     |    -> P0 失败：记录 degradation_reasons=[l2]，继续使用 L1/L3
      |    -> P2 fail-closed：返回 error
      |       code=2101 / message=recall failed /
      |       data(request_id, items=[], failed_layer=l2)
@@ -739,7 +754,7 @@ L3 skip rules：
      |    -> L3 候选为空
      |
      +--> l3_action=recall
-          -> mem0_adapter.search(query=normalized_retrieval_query,
+          -> mem0_adapter.search(query=normalized_query,
                                  scope=user_character_scope,
                                  filters=business_filters,
                                  top_k=mem0_top_k,
@@ -752,7 +767,7 @@ L3 skip rules：
           -> 若 Mem0 rerank 或过滤能力已满足排序需求，mem0_top_k 可等于最终 L3 返回预算
           -> 只有当业务侧 recall_priority 无法下推给 Mem0 时，才使用 overfetch_top_k 做最小放大后再裁剪
           -> 无命中：L3 候选为空
-          -> P0 失败：记录 degraded_layers=[l3]，继续使用 L1/L2
+          -> P0 失败：记录 degradation_reasons=[l3]，继续使用 L1/L2
           -> P2 fail-closed：返回 error
              code=2101 / message=recall failed /
              data(request_id, items=[], failed_layer=l3)
@@ -840,7 +855,7 @@ L3 skip rules：
 
 > 参考范围：这一节展开 delete 的完整执行细节。正文只需要把握“P0 基础删除和标脏，P2 再做强一致删除治理”。
 
-删除闭环目标：按 `delete_scope` 精确清理 `L1 短期记忆`、`L2 当前摘要` 和 `L3 长期记忆`，并通过 `memory_task(op_type=delete)` 收敛为可追踪状态。
+删除闭环目标：按当前 API 的 `scope=memory/session/all` 精确清理 `L1 短期记忆`、`L2 当前摘要` 和 `L3 长期记忆`，并通过 `memory_task(op_type=delete)` 收敛为可追踪状态。
 
 分阶段看，删除链路可以这样拆：
 
@@ -881,7 +896,7 @@ P0 主路径可以简化理解为：
 +------------------------------+
 ```
 
-同步返回统一格式：`code(int) + message + data(request_id, delete_scope, task_id)`。
+当前 HTTP 成功响应是 `DeleteMemoryResponse(status, task_id, affected_memories, summary_state)`；后续如接网关统一外壳，再在边界层包装数值码。
 
 说明：P0 按架构主文 §3.3 的删除流程落地即可，但任务身份不能只使用静态 scope_key；至少需要 `scope_key + p0_scope_version` 或显式 `operation_id`。`snapshot / suppression / fence / tombstone / carry-forward` 属于 P2 强治理能力。
 
@@ -892,7 +907,7 @@ P0 主路径可以简化理解为：
 ```text
 [delete command
  request_id / user_id / character_id /
- delete_scope / session_id? / memory_id?]
+ scope / operation_id / session_id? / memory_id?]
                 |
                 v
 [输入契约校验]
@@ -901,23 +916,24 @@ P0 主路径可以简化理解为：
  - request_id
  - user_id
  - character_id
- - delete_scope
+ - scope
+ - operation_id
  校验：
- - delete_scope in {memory, session, all}
- - delete_scope=memory  -> memory_id 必填
- - delete_scope=session -> session_id 必填
+ - scope in {memory, session, all}
+ - scope=memory  -> memory_id 必填
+ - scope=session -> session_id 必填
                 |
                 +--> invalid -> [返回 rejected
                                   code=1001 /
                                   message=invalid contract /
-                                  data(request_id, delete_scope)]
+                                  data(request_id, scope)]
                 |
                 v
 [推导任务身份]
  scope_key =
- - delete_scope=memory  -> memory:{user_id}:{character_id}:{memory_id}
- - delete_scope=session -> session:{user_id}:{character_id}:{session_id}
- - delete_scope=all     -> all:{user_id}:{character_id}
+ - scope=memory  -> memory:{user_id}:{character_id}:{memory_id}
+ - scope=session -> session:{user_id}:{character_id}:{session_id}
+ - scope=all     -> all:{user_id}:{character_id}
                 |
                 v
 [读取 scope version]
@@ -946,7 +962,7 @@ P0 主路径可以简化理解为：
  - P2 读取失败则返回 error
    code=2001 /
    message=scope version query failed /
-   data(request_id, delete_scope)
+   data(request_id, scope)
                 |
                 v
 [推导任务 ID]
@@ -959,26 +975,26 @@ P0 主路径可以简化理解为：
                 +--> query failed -> [返回 error
                 |                    code=2001 /
                 |                    message=task query failed /
-                |                    data(request_id, delete_scope, task_id)]
+                |                    data(request_id, scope, task_id)]
                 |
                 +--> task exists 且 status=completed
                 |    -> [返回 already_done
                 |        code=1004 /
                 |        message=task already completed /
-                |        data(request_id, delete_scope, task_id)]
+                |        data(request_id, scope, task_id)]
                 |
                 +--> task exists 且 status in {pending, running}
                 |    -> [返回 accepted
                 |        code=0 /
                 |        message=accepted /
-                |        data(request_id, delete_scope, task_id)
+                |        data(request_id, scope, task_id)
                 |        视为同一 task_id 的幂等重放]
                 |
                 +--> task exists 且 status in {failed, dead_letter}
                 |    -> [返回 error
                 |        code=2006 /
                 |        message=task not resumable /
-                |        data(request_id, delete_scope, task_id)]
+                |        data(request_id, scope, task_id)]
                 |
                 +--> task not found
                 |    -> [继续执行
@@ -987,7 +1003,7 @@ P0 主路径可以简化理解为：
                 v
 [构造 delete_task_payload]
  request_id / user_id / character_id /
- delete_scope / session_id? / memory_id?
+ scope / session_id? / memory_id?
  scope_key / p0_scope_version? / operation_id? / scope_content_version?
  deleted_memory_snapshot? / deleted_memory_content_hash?
                 |
@@ -1006,23 +1022,23 @@ P0 主路径可以简化理解为：
                 |                         -> 返回 already_done
                 |                            code=1004 /
                 |                            message=task already completed /
-                |                            data(request_id, delete_scope, task_id)
+                |                            data(request_id, scope, task_id)
                 |                       status in {pending, running}
                 |                         -> 返回 accepted
                 |                            code=0 /
                 |                            message=accepted /
-                |                            data(request_id, delete_scope, task_id)
+                |                            data(request_id, scope, task_id)
                 |                       status in {failed, dead_letter}
                 |                         -> 返回 error
                 |                            code=2006 /
                 |                            message=task not resumable /
-                |                            data(request_id, delete_scope, task_id)
+                |                            data(request_id, scope, task_id)
                 |                       避免并发重复派发]
                 |
                 +--> persist failed -> [返回 error
                 |                         code=2003 /
                 |                         message=task persist failed /
-                |                         data(request_id, delete_scope, task_id)]
+                |                         data(request_id, scope, task_id)]
                 |
                 v
 [dispatch memory.operation(op_type=delete)]
@@ -1034,13 +1050,13 @@ P0 主路径可以简化理解为：
                 |                         返回 error
                 |                         code=2004 /
                 |                         message=dispatch failed /
-                |                         data(request_id, delete_scope, task_id)]
+                |                         data(request_id, scope, task_id)]
                 |
                 v
 [返回 accepted]
  code=0 /
  message=accepted /
- data(request_id, delete_scope, task_id)
+ data(request_id, scope, task_id)
                 |
                 v
 [worker 领取任务]
@@ -1051,9 +1067,9 @@ P0 主路径可以简化理解为：
  - 删除动作必须幂等，未命中按 count=0 处理
      |
      v
-[按 delete_scope 分派]
+[按 scope 分派]
      |
-     +--> delete_scope = memory
+     +--> scope = memory
      |    -> P0：
      |       校验 memory_id 属于 user_id × character_id
      |       幂等删除该 L3 memory
@@ -1076,7 +1092,7 @@ P0 主路径可以简化理解为：
      |       在 rebuild 完成前，recall 必须跳过 dirty current_summary
      |    -> 说明：memory 维度只删单条、不影响并发写入语义，因此不推进 fence
      |
-     +--> delete_scope = session
+     +--> scope = session
      |    -> P0：
      |       清理该 session 对应 L1 短期片段
      |       删除该 session 来源的 L3 memory
@@ -1100,7 +1116,7 @@ P0 主路径可以简化理解为：
      |    -> 对未受该 session 删除影响、仍需后续摘要的 active journal 轮次
      |       也必须 carry-forward 到推进后的 fence，避免后续 L2 增量消费只看当前 fence 时丢失待摘要轮次
      |
-     +--> delete_scope = all
+     +--> scope = all
      |    -> P0：
      |       清理该 user×character 下全部 session 的 L1 窗口、L2 和 L3 可见记忆
      |       清空 current_summary
@@ -1117,7 +1133,7 @@ P0 主路径可以简化理解为：
      |    -> append_cursor_round_index 不回退；后续 append 仍必须使用更大的连续 round_index
      |
      v
-[worker: 收敛 memory_task 状态
+[后台任务执行单元：收敛 memory_task 状态
  completed(result:
    deleted_l1_count / deleted_l3_count /
    summary_action=unchanged|recomputed|cleared|marked_dirty) /
@@ -1180,14 +1196,14 @@ P0 主路径可以简化理解为：
 +------------------------------+
 ```
 
-同步返回统一格式：`code(int) + message + data(request_id, task_id)`。
+当前 HTTP 成功响应是 `RebuildMemoryResponse(status, task_id, rebuilt_l2, rebuilt_l3)`；后续如接网关统一外壳，再在边界层包装数值码。
 
-说明：P0 按架构主文 §3.4 的重建流程落地即可，但任务身份不能只使用静态 rebuild_scope_key；至少需要 `rebuild_scope_key + p0_history_version` 或显式 `operation_id`。`history_snapshot_version / fence / tombstone / suppression` 属于 P2 强治理能力。
+说明：P0 按架构主文 §3.4 的重建流程落地即可，但任务身份不能只使用静态 rebuild_target_key；至少需要 `rebuild_target_key + p0_history_version` 或显式 `operation_id`。`history_snapshot_version / fence / tombstone / suppression` 属于 P2 强治理能力。
 
 ```text
 [rebuild command
  request_id / user_id / character_id /
- rebuild_scope / session_id?]
+ operation_id / session_id? / rebuild_l2? / rebuild_l3?]
                  |
                  v
 [输入契约校验]
@@ -1196,42 +1212,42 @@ P0 主路径可以简化理解为：
  - request_id
  - user_id
  - character_id
- - rebuild_scope
+ - operation_id
  校验：
- - rebuild_scope in {session, all}
- - rebuild_scope=session -> session_id 必填
+ - session_id 提供时表示按会话重建；不提供时表示按 user×character 全量重建
+ - rebuild_l2 / rebuild_l3 至少有一个为 true
                  |
                  +--> invalid -> [返回 rejected
                                    code=1001 /
                                    message=invalid contract /
-                                   data(request_id, rebuild_scope)]
+                                   data(request_id, rebuild_target)]
                  |
                  v
 [推导重建作用域]
- rebuild_scope_key =
- - rebuild_scope=session -> session:{user_id}:{character_id}:{session_id}
- - rebuild_scope=all     -> all:{user_id}:{character_id}
+ rebuild_target_key =
+ - rebuild_target=session -> session:{user_id}:{character_id}:{session_id}
+ - rebuild_target=all     -> all:{user_id}:{character_id}
                  |
                  v
 [读取 history version]
  来源：历史对话源
  P0 可读取轻量 `p0_history_version`，例如目标 scope 历史源 max_updated_at、history latest visible version，或由上游传入显式 operation_id；只读取当前最新可见数据，不要求强一致 snapshot。
  `history_snapshot_version` 是 P2 用于强一致重建和幂等任务身份的增强字段。
- - rebuild_scope=session -> 读取该 session 的历史快照版本作为 l3_history_snapshot_version
+ - rebuild_target=session -> 读取该 session 的历史快照版本作为 l3_history_snapshot_version
                          -> 同时读取 user×character 的全量历史快照版本作为 l2_history_snapshot_version
- - rebuild_scope=all     -> 读取该 user×character 的全量历史快照版本，同时作为 l2_history_snapshot_version 与 l3_history_snapshot_version
+ - rebuild_target=all     -> 读取该 user×character 的全量历史快照版本，同时作为 l2_history_snapshot_version 与 l3_history_snapshot_version
  说明：
  - 这两个版本共同代表“本次重建所依据的历史材料版本”
  - 历史对话新增、删除、修正后，应推进对应 scope 的 history_snapshot_version
  - P2 读取失败则返回 error
    code=2001 /
    message=history snapshot query failed /
-   data(request_id, rebuild_scope)
+   data(request_id, rebuild_target)
                  |
                  v
 [推导任务身份]
- - P0：task_id = memory-rebuild:{rebuild_scope_key}:v{p0_history_version} 或 memory-rebuild:{rebuild_scope_key}:op{operation_id}
- - P2：task_id = memory-rebuild:{rebuild_scope_key}:l2hv{l2_history_snapshot_version}:l3hv{l3_history_snapshot_version}
+ - P0：task_id = memory-rebuild:{rebuild_target_key}:v{p0_history_version} 或 memory-rebuild:{rebuild_target_key}:op{operation_id}
+ - P2：task_id = memory-rebuild:{rebuild_target_key}:l2hv{l2_history_snapshot_version}:l3hv{l3_history_snapshot_version}
                  |
                  v
 [查询 PG memory_task(task_id)]
@@ -1267,12 +1283,16 @@ P0 主路径可以简化理解为：
                  v
 [构造 rebuild_task_payload]
  request_id / user_id / character_id /
- rebuild_scope / session_id? /
- rebuild_scope_key / p0_history_version? / operation_id? / l2_history_snapshot_version? / l3_history_snapshot_version?
+ rebuild_target / session_id? /
+ rebuild_target_key / p0_history_version? / operation_id? / l2_history_snapshot_version? / l3_history_snapshot_version?
                  |
                  v
 [登记或更新 PG memory_task
- task_id=P0(memory-rebuild:{rebuild_scope_key}:v{p0_history_version} 或 memory-rebuild:{rebuild_scope_key}:op{operation_id}) 或 P2(memory-rebuild:{rebuild_scope_key}:l2hv{l2_history_snapshot_version}:l3hv{l3_history_snapshot_version})
+ P0 task_id =
+   memory-rebuild:{rebuild_target_key}:v{p0_history_version}
+   或 memory-rebuild:{rebuild_target_key}:op{operation_id}
+ P2 task_id =
+   memory-rebuild:{rebuild_target_key}:l2hv{l2_history_snapshot_version}:l3hv{l3_history_snapshot_version}
  task_type=memory
  op_type=rebuild
  task_id 唯一约束
@@ -1331,7 +1351,7 @@ P0 主路径可以简化理解为：
      v
 [推进 fence（P2）]
  - INCR user×character fence_version，记录 cutoff_write_fence_version = 推进前的值
- - rebuild_scope=all / session 统一推进同一 fence
+ - rebuild_target=all / session 统一推进同一 fence
  - 阻止旧 extract worker 在重建后写回旧 L2 / L3
  - P0 可跳过 fence 推进；通过重建任务完成时间、来源版本或直接覆盖当前 L2/L3 有效状态收敛
      |
@@ -1340,17 +1360,17 @@ P0 主路径可以简化理解为：
  - P0 可读取当前历史对话源的最新有效数据，不要求显式 history_snapshot_version
  - P2 启用以下 snapshot 读取规则：
  - L3 重建：
-     rebuild_scope=session -> 按 l3_history_snapshot_version 仅读目标 session_id 的历史对话
-     rebuild_scope=all     -> 按 l3_history_snapshot_version 读取 user×character 下全部有效历史对话
+     rebuild_target=session -> 按 l3_history_snapshot_version 仅读目标 session_id 的历史对话
+     rebuild_target=all     -> 按 l3_history_snapshot_version 读取 user×character 下全部有效历史对话
  - L2 重建：
-     无论 rebuild_scope=session 还是 all，都按 l2_history_snapshot_version 读取 user×character 下删除/修复后的全部有效历史对话
+     无论 rebuild_target=session 还是 all，都按 l2_history_snapshot_version 读取 user×character 下删除/修复后的全部有效历史对话
      并应用仍然有效的 summary_suppression
 - 读取失败 -> pending(retry_count+1, next_retry_at) / failed / dead_letter
      |
      v
 [重建 L2 steady state]
 - 基于 user×character 下“删除/修复后的全量有效完整轮次历史”重建 `current_summary + summary_cursor_round + summary_round_journal`
-- P0 可只重算 current_summary，并保留尚未摘要的最近轮次作为后续增量输入；不要求 tombstone 连续性
+- P0 可只重算 current_summary，按当前实现保留最近 10 条有效轮次形成摘要视图；不要求 tombstone 连续性
 - P0 rebuild 成功后必须清除 `summary_dirty / summary_stale`，并记录本次修复使用的 `p0_history_version` 或 `operation_id`
 - P2 若存在仍有效的 `summary_suppression`，摘要生成时必须抑制与 suppression 命中的已删 memory 语义等价的事实表达
 - P2 写入 L2 重建结果前，必须清理或覆盖 `write_fence_version<=cutoff_write_fence_version` 的旧 L2 state；不得删除或覆盖推进 fence 后新 append 写入的 journal 轮次
@@ -1374,9 +1394,9 @@ P0 主路径可以简化理解为：
      |
      v
 [重建 L3]
-- rebuild_scope=session
+- rebuild_target=session
     按业务索引列出 session 范围候选 backend_memory_id，再逐条调用 mem0_adapter.delete(memory_id)
- - rebuild_scope=all
+ - rebuild_target=all
     按业务索引列出 user×character 范围候选 backend_memory_id，再逐条调用 mem0_adapter.delete(memory_id)
     注：如果实现里保留 `delete_all` 这个方法名，它也只能是安全业务封装，内部仍应先查业务索引再逐条 Mem0 delete，不能直连 Mem0 原生 `delete_all()`。
  - 若重建范围内无历史对话 -> rebuilt_l3_count=0
@@ -1388,7 +1408,7 @@ P0 主路径可以简化理解为：
      adapter 补齐业务 metadata：character_id / session_id / source_ref_id / backend_categories? / memory_type? / importance? / 推进后的 write_fence_version / recall_priority?
      |
      v
-[worker: 收敛 memory_task 状态
+[后台任务执行单元：收敛 memory_task 状态
  completed(result:
    source_fragment_count /
    rebuilt_l3_count /
@@ -1541,7 +1561,7 @@ P0 主路径可以简化理解为：
  仅处理命中当前 partition_index 的分片数据
  cursor / page_size / heartbeat 持续更新
      |
-     +--> scan failed -> [worker: 更新 memory_task 状态
+     +--> scan failed -> [后台任务执行单元：更新 memory_task 状态
      |                    可自动重试 -> pending(retry_count+1, next_retry_at)
      |                    不可自动重试 -> failed
      |                    last_error_stage=scan]
@@ -1572,13 +1592,13 @@ P0 主路径可以简化理解为：
  - 若 dry_run=true
    -> 不落库，只产出 preview_result
      |
-     +--> batch write failed -> [worker: 更新 memory_task 状态
+     +--> batch write failed -> [后台任务执行单元：更新 memory_task 状态
      |                          可自动重试 -> pending(retry_count+1, next_retry_at)
      |                          不可自动重试 -> failed
      |                          last_error_stage=batch_write]
      |
      v
-[worker: 收敛 memory_task 状态
+[后台任务执行单元：收敛 memory_task 状态
 completed(result:
    processed_count / updated_count /
    preview_count / dry_run /
@@ -1600,22 +1620,24 @@ dead_letter(error_message)]
 
 ### 2.1 服务入口
 
-统一使用版本化 API。首版推荐先固定 `v1`，后续兼容升级只新增字段，不删除字段、不改变既有字段语义。
+当前工程直接暴露未加版本前缀的服务内路由。若后续接入 API 网关，网关可以在外层增加版本前缀，但进入 FastAPI 进程后的实际路由仍以这里为准。
 
 | 能力 | 方法与路径 | 语义 | 返回方式 |
 | --- | --- | --- | --- |
-| 写入完整轮次 | `POST /v1/memory/append` | 受理完整 `user -> assistant` 轮次，刷新 L1 并异步沉淀 L2/L3 | 同步返回入口受理结果 |
-| 融合召回 | `POST /v1/memory/recall` | 同步读取并融合 L1/L2/L3 | 同步返回召回结果，可降级成功 |
-| 删除记忆 | `POST /v1/memory/delete` | 按 `memory/session/all` 删除或标脏 | 同步返回 `task_id` |
-| 重建记忆 | `POST /v1/memory/rebuild` | 基于历史对话源重建 L2/L3 | 同步返回 `task_id` |
-| 查询任务 | `GET /v1/memory/tasks/{task_id}` | 查询异步任务最终状态 | 同步返回任务状态 |
-| 条件查询任务 | `GET /v1/memory/tasks` | 按 `request_id / op_type / status` 查询 | 同步返回任务列表 |
-| 查询影响范围 | `GET /v1/memory/affected` | 按 `user_id / character_id / session_id?` 查询受影响记忆 | 治理查询 |
-| 存活检查 | `GET /healthz` | 只判断进程是否存活 | 不访问下游依赖 |
-| 就绪检查 | `GET /readyz` | 判断服务是否可接流量 | 检查关键依赖 |
-| 指标暴露 | `GET /metrics` | 暴露 Prometheus 指标 | 不包含正文内容 |
+| 写入完整轮次 | `POST /memory/append` | 受理完整 `user -> assistant` 轮次，写入可靠轮次，刷新 L1/L2，并按配置沉淀 L3 | 同步返回处理结果和 `task_id` |
+| 融合召回 | `POST /memory/recall` | 同步读取并融合 L1/L2/L3 | 同步返回召回结果，可降级成功 |
+| 删除记忆 | `POST /memory/delete` | 按 `memory/session/all` 删除或标脏 | 同步返回 `task_id` 和影响数量 |
+| 重建记忆 | `POST /memory/rebuild` | 基于可靠轮次或历史对话源重建 L2/L3 | 同步返回 `task_id` |
+| 查询任务 | `GET /memory/tasks/{task_id}` | 按任务 ID 查询写入、删除或重建任务状态 | 同步返回任务状态 |
+| L3 后台状态 | `GET /memory/l3/background-status` | 查看 L3 后台写入模式、线程池、排队任务数和剩余容量 | 同步返回运行态诊断 |
+| 基础健康检查 | `GET /health` | 返回服务健康状态、版本和运行环境 | 不访问下游依赖 |
+| 存活检查 | `GET /health/live` | 判断 API 进程是否存活 | 不访问下游依赖 |
+| 就绪检查 | `GET /health/ready` | 判断服务是否可接流量 | 检查数据库、Redis、Qdrant、Mem0 Library |
+| Swagger UI | `GET /docs` | FastAPI 自动生成的调试文档 | 本地和内网调试使用 |
+| ReDoc | `GET /redoc` | FastAPI 自动生成的阅读型接口文档 | 本地和内网调试使用 |
+| OpenAPI JSON | `GET /openapi.json` | OpenAPI 机器可读契约 | 自动化校验或 SDK 生成使用 |
 
-首版不需要提供公网 API、开放式 SDK 或复杂管理 UI。若接入 API 网关，网关路径可以不同，但进入服务进程后的逻辑路由需要能映射到上述能力。
+首版不提供公网 API、开放式 SDK、复杂管理 UI、任务条件查询、影响范围查询或 Prometheus 指标接口。这些能力可以在后续管理面中补齐，不能在当前文档里当作已实现接口对上游承诺。
 
 ### 2.2 调用边界
 
@@ -1639,36 +1661,38 @@ X-Request-Id: req_xxx
 
 请求头里的 `X-Request-Id` 只用于链路追踪；业务幂等仍以命令协议中的稳定业务键为准。
 
-### 2.3 统一响应与错误边界
+### 2.3 当前响应与错误边界
 
-HTTP 状态表达传输层和服务可达性，响应体中的 `code / message / data` 表达记忆业务结果。不要只依赖 HTTP 状态判断业务是否完成。
+当前 FastAPI 进程内的响应模型以 `src/memory/schemas.py` 为准，不包统一 `code / message / data` 外壳。HTTP 状态表达传输层和服务可达性，响应体表达业务结果或错误详情。若后续 API 网关需要统一外壳，应由网关或兼容层包一层，不能改变当前服务内字段语义。
 
 | HTTP 状态 | 适用场景 | 业务体要求 |
 | --- | --- | --- |
-| `200` | 同步成功、跳过、业务拒绝、降级成功 | 返回 `code + message + data` |
-| `202` | 异步任务已受理 | 返回 `task_id` 或可查询锚点 |
-| `400` | 请求结构、字段类型、枚举值错误 | `code=1001` |
-| `404` | 任务或治理查询目标不存在 | 返回稳定查询错误码 |
+| `200` | 同步成功、幂等命中、降级召回成功 | 返回对应 Pydantic 响应体 |
+| `400` | 请求结构、字段类型、枚举值错误，或可恢复的业务输入错误 | FastAPI `detail` 或 Pydantic 校验错误 |
+| `403` | 隐私或安全 fail-closed | FastAPI `detail` |
+| `404` | `GET /memory/tasks/{task_id}` 查询不到任务 | FastAPI `detail=memory task not found` |
+| `409` | 幂等键对应的轮次或作用域冲突 | FastAPI `detail` |
 | `429` | 上游治理层或服务保护性并发限制 | 不登记业务任务 |
-| `500` | 未分类服务异常 | 必须记录 `trace_id` |
-| `503` | 关键依赖不可用或服务未就绪 | 不应伪装成业务成功 |
+| `502` | Mem0 Library 或记忆后端错误 | FastAPI `detail` |
+| `503` | 关键依赖不可用、服务未就绪，或 L3 后台队列满 | 不应伪装成业务成功 |
+| `500` | 未分类服务异常 | 必须记录 trace/access log |
 
-所有命令响应体保持同一外壳：
+当前响应体最小形状如下：
 
-```json
-{
-  "code": 0,
-  "message": "ok",
-  "data": {},
-  "trace_id": "trace_xxx"
-}
-```
+| 接口 | 成功响应核心字段 |
+| --- | --- |
+| `POST /memory/append` | `status / task_id / round_id / l3_events` |
+| `POST /memory/recall` | `status / degraded / degradation_reasons / items` |
+| `POST /memory/delete` | `status / task_id / affected_memories / summary_state` |
+| `POST /memory/rebuild` | `status / task_id / rebuilt_l2 / rebuilt_l3` |
+| `GET /memory/tasks/{task_id}` | `task_id / request_id / op_type / status / scope / last_error / result` |
+| `GET /memory/l3/background-status` | `write_mode / executor_workers / max_pending_tasks / pending_write_tasks / cleanup_tasks / available_capacity` |
 
-`trace_id` 可放在响应头或响应体；若两者都存在，值必须一致。
+如果后续需要统一响应外壳，建议只在边界层新增包装，不要把业务服务内部再改成两套并行协议。
 
 ### 2.4 任务查询闭环
 
-凡返回 `task_id` 的命令，都需要能通过任务查询接口查到最终状态。`append` 可以不直接返回 `task_id`，但要能按 `request_id / round_id / op_type=extract` 定位对应任务。
+凡返回 `task_id` 的命令，都需要能通过任务查询接口查到最终状态。当前工程的 `append / delete / rebuild` 都返回 `task_id`，首版只要求按 `task_id` 查询；按 `request_id / round_id / op_type / status` 查询属于后续管理面能力。
 
 首版任务状态保持简单即可：
 
@@ -1677,58 +1701,46 @@ HTTP 状态表达传输层和服务可达性，响应体中的 `code / message /
 - `completed`
 - `failed`
 
-后续再增加 `retry_count / next_retry_at`；当失败类型变复杂，再引入 `dead_letter` 和人工处置。
+后续再增加 `retry_count / next_retry_at`；当失败类型变复杂，再引入 `dead_letter` 和人工处置。当前首版代码虽然保留了 `dead_letter` 枚举，但没有启用独立死信治理流程。
 
-任务查询响应可以长这样：
+当前任务查询响应可以长这样：
 
 ```json
 {
-  "code": 0,
-  "message": "ok",
-  "data": {
-    "task_id": "memory-rebuild:session:user_xxx:char_xxx:sess_xxx:v20260419T100000Z",
-    "request_id": "req_xxx",
-    "op_type": "rebuild",
-    "status": "running",
-    "result": null,
-    "affected_scope": {
-      "user_id": "user_xxx",
-      "character_id": "char_xxx",
-      "session_id": "sess_xxx"
-    },
-    "retry_count": 0,
-    "next_retry_at": null,
-    "last_error_stage": null,
-    "error_code": null,
-    "error_message": null,
-    "created_at": "2026-04-19T10:00:00Z",
-    "updated_at": "2026-04-19T10:00:02Z",
-    "completed_at": null
+  "task_id": "memory-rebuild:user_xxx:char_xxx:op_rebuild_001",
+  "request_id": "req_xxx",
+  "op_type": "rebuild_l3",
+  "status": "running",
+  "scope": {
+    "user_id": "user_xxx",
+    "character_id": "char_xxx"
   },
-  "trace_id": "trace_xxx"
+  "last_error": null,
+  "result": {}
 }
 ```
 
-查询不到任务时，返回 `code=4040 / message=task not found`，并按 HTTP `404` 或网关统一错误规范返回。
+查询不到任务时，当前 API 返回 HTTP `404` 和 `detail=memory task not found`。
 
 ### 2.5 健康检查与依赖就绪
 
-`/healthz` 只表示进程存活，不访问 PostgreSQL、Redis、Mem0 或底层向量存储。
+`GET /health/live` 只表示进程存活，不访问 PostgreSQL、Redis、Mem0 或底层向量存储。
 
-`/readyz` 建议检查关键依赖，并返回可读状态：
+`GET /health/ready` 检查关键依赖，并返回可读状态：
 
 | 依赖 | 首版就绪含义 | 失败影响 |
 | --- | --- | --- |
 | PostgreSQL | 任务、摘要、轮次账本等逻辑表可读写 | 不可接写入、删除、重建 |
-| Redis / Queue | L1 缓存、任务派发或 worker 领取可用 | 写入受理和异步任务不可闭环 |
+| Redis | 运行时缓存和 readiness 依赖可用 | 依赖不可用时服务不应接主流量 |
 | Mem0 / 向量存储适配层 | L3 检索与写入可用 | recall 可降级，L3 写入/重建会失败或重试 |
 | 历史对话源 adapter | rebuild 可读取完整轮次 | rebuild 不可用 |
 
-推荐 `readyz` 返回三态：
+就绪检查当前返回两类服务状态：
 
 - `ready`：关键依赖可用，可以接流量。
-- `degraded`：非关键层不可用，例如 Mem0 或向量存储适配层临时异常；recall 可降级，但写入 worker 可能积压。
 - `not_ready`：PG、队列或核心配置不可用，不应接主流量。
+
+如果后续要区分 `degraded`，需要先明确哪些依赖失败仍允许接收哪类请求，避免把不可写入的状态误报为可接流量。
 
 ### 2.6 超时、重试与降级预算
 
@@ -1736,10 +1748,10 @@ HTTP 状态表达传输层和服务可达性，响应体中的 `code / message /
 
 | 链路 | 推荐总超时 | 分层预算 |
 | --- | --- | --- |
-| `append` 同步入口 | `300ms - 800ms` | 只做校验、journal、task 登记、dispatch；L2/L3 不在同步等待内 |
+| `append` 同步入口 | `300ms - 800ms` | 完成校验、journal、task 登记、L1/L2 和首版槽位索引；L3 可配置为同步或 API 进程内后台写入 |
 | `recall` | `800ms - 1500ms` | L1 `50ms`、L2 `100ms`、L3 `500ms - 1000ms`、融合裁剪 `100ms` |
-| `delete` 同步入口 | `300ms - 800ms` | 只完成任务登记和派发 |
-| `rebuild` 同步入口 | `300ms - 800ms` | 只完成任务登记和派发 |
+| `delete` 同步入口 | `300ms - 800ms` | 完成任务登记、L3 删除、L1 清理和 L2 标脏 |
+| `rebuild` 同步入口 | `300ms - 800ms` | 完成任务登记，并按请求重建 L2/L3 |
 | `task query` | `300ms` | 只查任务状态，不触发补偿 |
 
 召回默认采用 degraded success：L3 超时或单层读取失败时，返回其余可用层并标记 `degraded=true`。只有输入协议错误、作用域隔离失败、安全过滤失败，或全部目标层不可用时才整体失败。
@@ -1766,13 +1778,13 @@ HTTP 状态表达传输层和服务可达性，响应体中的 `code / message /
 首版先把这些配置项显式化：
 
 - PostgreSQL DSN
-- Redis / Queue DSN
+- Redis DSN
 - Mem0 模式与向量存储适配层连接配置
 - L1 window 大小
 - L1 缺失 `session_id` 时的召回策略，推荐跳过 L1，只使用 L2/L3
-- L2 摘要触发阈值，例如首版默认每 10 个 active round 滚动生成一次摘要；该值建议配置化，不写死在代码里
+- L2 摘要窗口，例如当前实现取最近 10 条有效 round 重算摘要；后续可配置化，不写死在代码里
 - recall 总超时与 L3 timeout
-- worker 并发数和 `max_retries`
+- API 同步线程池上限、L3 后台线程池和最大排队数
 - 是否启用 P2 能力开关：`write_fence / suppression / dead_letter / decay`
 
 数据恢复底线：
@@ -1792,7 +1804,7 @@ HTTP 状态表达传输层和服务可达性，响应体中的 `code / message /
 
 > 如果要落到接口实现，先看公共规则，再按命令查看请求和响应示例。`decay` 是后续可选协议，不影响首版核心链路。
 
-这里定义推荐基准下的五个业务命令协议，并补充任务查询协议。`healthz / readyz / metrics` 属于服务运行接口，见第 2 章。
+这里定义推荐基准下的五个业务命令协议，并补充任务查询协议。`GET /health`、`GET /health/live`、`GET /health/ready` 属于服务运行接口，见第 2 章。
 
 ### 3.1 Mem0 Adapter 约束
 
@@ -1802,23 +1814,25 @@ HTTP 状态表达传输层和服务可达性，响应体中的 `code / message /
 - adapter 必须按当前 Mem0 OSS/Platform 的实体、namespace、run、tenant、metadata filter 和返回字段实测映射该 scope。
 - 不允许把 `user_id + agent_id=character_id` 写死成严格交集隔离。若当前 Mem0 模式不能稳定表达交集，使用组合用户键、组合 namespace、租户键或其他单一强隔离键。
 - `filters={character_id, ...}` 只做二次校验、治理、审计和误写防护，不承担主要隔离职责。
-- 写入侧优先复用 Mem0 的抽取、去重和分类；检索侧优先复用 Mem0 的 filters、top_k、threshold、rerank；显式更新/删除由业务命令调用 Mem0 update/delete。范围删除由 adapter 按业务索引逐条 delete，不直接调用 Mem0 原生 `delete_all()`。冲突收敛按当前版本实测，能交给 Mem0 的交给 Mem0，不能稳定表达的部分才由业务侧显式 update/delete/rebuild 兜底。若某项参数或返回字段在当前 SDK/Platform 不可用，adapter 必须降级为等价可验证映射，不能在应用层重做记忆引擎。
+- 写入侧优先复用 Mem0 的抽取、去重和分类；检索侧优先复用 Mem0 的 filters、top_k、threshold、rerank。
+- 显式更新和删除由业务命令调用 Mem0 update/delete。
+- 范围删除由 adapter 按业务索引逐条 delete，不直接调用 Mem0 原生 `delete_all()`。
+- 冲突收敛按当前版本实测：能交给 Mem0 的交给 Mem0，不能稳定表达的部分才由业务侧显式 update/delete/rebuild 兜底。
+- 若某项参数或返回字段在当前 SDK/Platform 不可用，adapter 必须降级为等价可验证映射，不能在应用层重做记忆引擎。
 
 公共规则：
 
 - 所有业务命令都必须带 `request_id`。
 - 所有记忆命令都必须带 `character_id`；P2 `decay` 为平台调度命令，不绑定单个 `user_id × character_id`。
-- 所有同步返回只表示入口处理结果，不代表后台一定完成。
+- 当前首版的 `append / delete / rebuild` 同步返回表示该次请求的服务内处理结果；当 `MEMORY_L3_WRITE_MODE=async` 时，`append` 的 L3 写入会进入 API 进程内后台线程池，最终状态以任务查询或 L3 后台状态为准。
 - 记忆服务不重复实现鉴权和终端用户授权，协议校验只负责字段完整性、作用域隔离和记忆域安全守卫。
-- 对 `append`，`code` 必须是数值码，`message` 是稳定可读文案。
-- `task not resumable(code=2006)` 是通用后台任务语义：命中同一幂等键下不可恢复的 `failed / dead_letter` 任务时，不通过同步入口隐式恢复，需要走治理入口处理。
-- `delete / rebuild` 这类后台任务型命令推荐返回 `task_id`，便于后续查询最终状态；`decay` 是 P2 调度命令。
-- `append` 入口只需返回 `code + message + data(request_id, round_id, session_id)`；是否返回 `task_id` 不是必需项。
-- `append` 即使不返回 `task_id`，也必须能通过 `request_id / round_id / op_type=extract` 查询任务状态。
+- 当前 HTTP 响应模型不是统一 `code + message + data` 外壳，而是直接返回 Pydantic 响应体；如果后续网关要求统一外壳，应在网关或兼容层处理，不能误改已有字段语义。
+- 当前 `delete / rebuild` 返回 `task_id`，便于后续查询最终状态；`decay` 是 P2 调度命令。
+- 当前 `append` 返回 `task_id`。后续如增加条件查询，才能支持按 `request_id / round_id / op_type` 定位任务。
 
-### 3.2 append 数值码表
+### 3.2 后续统一外壳数值码建议
 
-> P0 重点关注 `accepted / invalid contract / empty round content / blocked by safety / round conflict / task not resumable`；`round index conflict` 属于 P2 连续账本场景。
+> 当前 FastAPI API 不输出这些数值码。下面只作为后续网关统一响应外壳时的业务码建议，不是当前 HTTP 响应字段。
 
 - `0`
   `accepted`
@@ -1858,7 +1872,7 @@ HTTP 状态表达传输层和服务可达性，响应体中的 `code / message /
 
 ### 3.3 append
 
-> 一个容易踩坑的点：append 同步返回只表示入口受理，不代表 L2/L3 已经沉淀完成。
+> 一个容易踩坑的点：当前 `append` 同步完成可靠轮次、L1/L2 和首版槽位索引；当 `MEMORY_L3_WRITE_MODE=async` 时，L3 会进入 API 进程内后台线程池，不代表 L3 已经全部沉淀完成。
 
 请求：
 
@@ -1874,75 +1888,46 @@ HTTP 状态表达传输层和服务可达性，响应体中的 `code / message /
     {
       "message_id": "msg_user_xxx",
       "role": "user",
-      "message_content": "我最近在评估换工作机会",
+      "content": "我最近在评估换工作机会",
       "timestamp": "2026-04-19T09:59:50Z"
     },
     {
       "message_id": "msg_assistant_xxx",
       "role": "assistant",
-      "message_content": "你更看重薪资、成长空间，还是城市机会？",
+      "content": "你更看重薪资、成长空间，还是城市机会？",
       "timestamp": "2026-04-19T10:00:00Z"
     }
   ],
-  "timestamp": "2026-04-19T10:00:00Z"
+  "source_timestamp": "2026-04-19T10:00:00Z"
 }
 ```
 
 说明：`round_index` 在 P0 为推荐字段，用于排序和排障；P2 启用连续账本时才作为强约束字段。若 P0 请求未提供 `round_index`，服务必须能退化为按 `timestamp + round_id` 稳定排序。
 
-同步受理响应：
+当前成功响应：
 
 ```json
 {
-  "code": 0,
-  "message": "accepted",
-  "data": {
-    "request_id": "req_xxx",
-    "round_id": "round_xxx",
-    "session_id": "sess_xxx"
-  }
+  "status": "completed",
+  "task_id": "memory-extract:round_xxx",
+  "round_id": "round_xxx",
+  "l3_events": [
+    {
+      "event": "DEFERRED",
+      "reason": "l3_background_write"
+    }
+  ]
 }
 ```
 
-同步跳过响应：
+幂等命中响应仍使用同一响应模型：
 
 ```json
 {
-  "code": 1002,
-  "message": "empty round content",
-  "data": {
-    "request_id": "req_xxx",
-    "round_id": "round_xxx",
-    "session_id": "sess_xxx"
-  }
-}
-```
-
-安全拒绝响应：
-
-```json
-{
-  "code": 1003,
-  "message": "blocked by safety",
-  "data": {
-    "request_id": "req_xxx",
-    "round_id": "round_xxx",
-    "session_id": "sess_xxx"
-  }
-}
-```
-
-已完成幂等响应：
-
-```json
-{
-  "code": 1004,
-  "message": "task already completed",
-  "data": {
-    "request_id": "req_xxx",
-    "round_id": "round_xxx",
-    "session_id": "sess_xxx"
-  }
+  "status": "already_done",
+  "task_id": "memory-extract:round_xxx",
+  "round_id": "round_xxx",
+  "l3_events": []
 }
 ```
 
@@ -1950,85 +1935,26 @@ HTTP 状态表达传输层和服务可达性，响应体中的 `code / message /
 
 ```json
 {
-  "code": 1005,
-  "message": "round conflict",
-  "data": {
-    "request_id": "req_xxx",
-    "round_id": "round_xxx",
-    "session_id": "sess_xxx"
-  }
-}
-```
-
-轮次顺序冲突响应：
-
-```json
-{
-  "code": 1006,
-  "message": "round index conflict",
-  "data": {
-    "request_id": "req_xxx",
-    "round_id": "round_xxx",
-    "session_id": "sess_xxx"
-  }
-}
-```
-
-不可恢复旧任务响应：
-
-```json
-{
-  "code": 2006,
-  "message": "task not resumable",
-  "data": {
-    "request_id": "req_xxx",
-    "round_id": "round_xxx",
-    "session_id": "sess_xxx"
-  }
-}
-```
-
-journal 持久化失败响应：
-
-```json
-{
-  "code": 2005,
-  "message": "journal write failed",
-  "data": {
-    "request_id": "req_xxx",
-    "round_id": "round_xxx",
-    "session_id": "sess_xxx"
-  }
-}
-```
-
-派发失败响应：
-
-```json
-{
-  "code": 2004,
-  "message": "dispatch failed",
-  "data": {
-    "request_id": "req_xxx",
-    "round_id": "round_xxx",
-    "session_id": "sess_xxx"
-  }
+  "detail": "round_id conflict with different content or scope"
 }
 ```
 
 ### 3.4 recall
 
-> 一个容易踩坑的点：首版 recall 允许降级返回。上游应读取 `items`，并根据需要关注 `degraded_layers` 一类诊断字段。
+> 一个容易踩坑的点：首版 recall 允许降级返回。上游应读取 `items`，并根据需要关注 `degraded` 和 `degradation_reasons`。
 
 请求：
 
 ```json
 {
-  "request_id": "req_xxx",
   "user_id": "user_xxx",
   "character_id": "char_xxx",
   "session_id": "sess_xxx",
-  "retrieval_query": "近期关于职业规划的记忆"
+  "query": "近期关于职业规划的记忆",
+  "intent": "chat",
+  "l3_limit": 5,
+  "l3_score_threshold": 0.5,
+  "token_budget": 1200
 }
 ```
 
@@ -2036,57 +1962,29 @@ journal 持久化失败响应：
 
 ```json
 {
-  "code": 0,
-  "message": "ok",
-  "data": {
-    "request_id": "req_xxx",
-    "degraded": false,
-    "degraded_layers": [],
-    "layer_status": {
-      "l1": "ok",
-      "l2": "ok",
-      "l3": "ok"
+  "status": "completed",
+  "degraded": false,
+  "degradation_reasons": [],
+  "items": [
+    {
+      "layer": "L2",
+      "content": "近期阶段摘要：用户处于职业决策期，持续比较薪资、成长空间与城市机会。",
+      "source": "summary",
+      "memory_id": null,
+      "score": null,
+      "metadata": {}
     },
-    "items": [
-      {
-        "layer": "l2",
-        "summary_id": "sum_xxx",
-        "content": "近期阶段摘要：用户处于职业决策期，持续比较薪资、成长空间与城市机会，后续互动应围绕择业判断与行动方案继续推进。",
-        "updated_at": "2026-04-19T10:01:00Z"
-      },
-      {
-        "layer": "l1",
-        "round_id": "round_xxx",
-        "round_index": 12,
-        "messages": [
-          {
-            "message_id": "msg_user_xxx",
-            "role": "user",
-            "normalized_content": "我最近在评估换工作机会",
-            "timestamp": "2026-04-19T09:59:50Z"
-          },
-          {
-            "message_id": "msg_assistant_xxx",
-            "role": "assistant",
-            "normalized_content": "你更看重薪资、成长空间，还是城市机会？",
-            "timestamp": "2026-04-19T10:00:00Z"
-          }
-        ],
-        "timestamp": "2026-04-19T10:00:00Z",
-        "session_id": "sess_xxx"
-      },
-      {
-        "layer": "l3",
-        "memory_id": "mem_xxx",
-        "memory_type": "event",
-        "content": "用户近期在评估换工作机会",
-        "score": 0.92,
-        "importance": 0.73,
-        "recall_priority": "high",
-        "updated_at": "2026-04-19T10:01:05Z"
+    {
+      "layer": "L3",
+      "content": "用户近期在评估换工作机会",
+      "source": "mem0",
+      "memory_id": "mem_xxx",
+      "score": 0.92,
+      "metadata": {
+        "memory_type": "event"
       }
-    ]
-  }
+    }
+  ]
 }
 ```
 
@@ -2094,29 +1992,19 @@ journal 持久化失败响应：
 
 ```json
 {
-  "code": 0,
-  "message": "ok",
-  "data": {
-    "request_id": "req_xxx",
-    "degraded": true,
-    "degraded_layers": ["l3"],
-    "layer_status": {
-      "l1": "ok",
-      "l2": "ok",
-      "l3": "timeout"
-    },
-    "failed_layer_reason": {
-      "l3": "mem0 search timeout"
-    },
-    "items": [
-      {
-        "layer": "l2",
-        "summary_id": "sum_xxx",
-        "content": "近期阶段摘要：用户处于职业决策期，持续比较薪资、成长空间与城市机会，后续互动应围绕择业判断与行动方案继续推进。",
-        "updated_at": "2026-04-19T10:01:00Z"
-      }
-    ]
-  }
+  "status": "completed",
+  "degraded": true,
+  "degradation_reasons": ["l3 timeout"],
+  "items": [
+    {
+      "layer": "L2",
+      "content": "近期阶段摘要：用户处于职业决策期，持续比较薪资、成长空间与城市机会。",
+      "source": "summary",
+      "memory_id": null,
+      "score": null,
+      "metadata": {}
+    }
+  ]
 }
 ```
 
@@ -2124,69 +2012,25 @@ journal 持久化失败响应：
 
 ```json
 {
-  "code": 0,
-  "message": "ok",
-  "data": {
-    "request_id": "req_xxx",
-    "degraded": false,
-    "degraded_layers": [],
-    "items": []
-  }
+  "status": "completed",
+  "degraded": false,
+  "degradation_reasons": [],
+  "items": []
 }
 ```
 
-查询为空跳过响应：
+查询为空、隐私 fail-closed 或全部目标层失败时，当前 API 通过 HTTP 错误状态和 `detail` 表达，不再返回 `code/message/data` 外壳。例如隐私查询 fail-closed：
 
 ```json
 {
-  "code": 1002,
-  "message": "empty retrieval query",
-  "data": {
-    "request_id": "req_xxx",
-    "degraded": false,
-    "degraded_layers": [],
-    "items": []
-  }
-}
-```
-
-失败响应：
-
-```json
-{
-  "code": 2101,
-  "message": "recall failed",
-  "data": {
-    "request_id": "req_xxx",
-    "items": [],
-    "failed_layer": "all",
-    "failed_layer_reason": {
-      "l1": "redis timeout",
-      "l2": "postgres timeout",
-      "l3": "mem0 search timeout"
-    }
-  }
-}
-```
-
-召回安全过滤失败响应：
-
-```json
-{
-  "code": 2102,
-  "message": "recall safety filter failed",
-  "data": {
-    "request_id": "req_xxx",
-    "items": [],
-    "failed_layer": "safety_filter"
-  }
+  "detail": "privacy recall fail-closed"
 }
 ```
 
 补充说明：
 
 - 返回的 `items` 是经过层内标准化、召回安全过滤、跨层去重与冲突收敛之后的结果，不等于三层原始命中的简单拼接
-- `code=0` 不代表三层都成功；`degraded=true` 表示本次召回使用了可用层降级返回，上游可继续生成回复但应记录诊断信息
+- `degraded=true` 表示本次召回使用了可用层降级返回，上游可继续生成回复但应记录诊断信息
 - 若 L2 与 L3 对同一事实表达冲突，以 L3 作为真值来源；L2 保留阶段叙事，但不重复返回同一事实表述
 - L1 提供近邻原文上下文，不与 L3 竞争真值
 - `L3 skip` 仅表示本次不发起长期记忆语义检索，不影响 L1 / L2 默认召回
@@ -2194,7 +2038,7 @@ journal 持久化失败响应：
 
 ### 3.5 delete
 
-> 一个容易踩坑的点：delete 是异步受理语义。首版删除后，如果已生效摘要可能包含被删内容，标记 L2 dirty 并由 rebuild 修复；如果只是未摘要新轮次落后，标记 stale 并允许滚动摘要或 rebuild 修复。
+> 一个容易踩坑的点：当前 `delete` 在服务内同步执行删除和标脏。删除后如果已生效摘要可能包含被删内容，标记 L2 dirty 并由 rebuild 修复；如果只是未摘要新轮次落后，标记 stale 并允许滚动摘要或 rebuild 修复。
 
 请求：
 
@@ -2203,22 +2047,20 @@ journal 持久化失败响应：
   "request_id": "req_xxx",
   "user_id": "user_xxx",
   "character_id": "char_xxx",
-  "delete_scope": "session",
+  "scope": "session",
+  "operation_id": "op_delete_session_xxx",
   "session_id": "sess_xxx"
 }
 ```
 
-同步成功响应：
+当前成功响应：
 
 ```json
 {
-  "code": 0,
-  "message": "accepted",
-  "data": {
-    "request_id": "req_xxx",
-    "delete_scope": "session",
-    "task_id": "memory-delete:session:user_xxx:char_xxx:sess_xxx:v20260419T100000Z"
-  }
+  "status": "completed",
+  "task_id": "memory-delete:session:user_xxx:char_xxx:op_delete_session_xxx",
+  "affected_memories": 3,
+  "summary_state": "dirty"
 }
 ```
 
@@ -2235,25 +2077,28 @@ journal 持久化失败响应：
   "request_id": "req_xxx",
   "user_id": "user_xxx",
   "character_id": "char_xxx",
-  "rebuild_scope": "session",
-  "session_id": "sess_xxx"
+  "operation_id": "op_rebuild_session_xxx",
+  "session_id": "sess_xxx",
+  "rebuild_l2": true,
+  "rebuild_l3": true
 }
 ```
 
-同步成功响应：
+当前成功响应：
 
 ```json
 {
-  "code": 0,
-  "message": "accepted",
-  "data": {
-    "request_id": "req_xxx",
-    "task_id": "memory-rebuild:session:user_xxx:char_xxx:sess_xxx:v20260419T100000Z"
-  }
+  "status": "completed",
+  "task_id": "memory-rebuild:user_xxx:char_xxx:op_rebuild_session_xxx",
+  "rebuilt_l2": true,
+  "rebuilt_l3": true
 }
 ```
 
-说明：P0 示例使用 `rebuild_scope_key + p0_history_version` 作为任务身份；如果历史源暂时无法提供版本，也可以由上游传入显式 `operation_id`。P2 启用 `history_snapshot_version` 后，可扩展为 `memory-rebuild:{rebuild_scope_key}:l2hv{l2_history_snapshot_version}:l3hv{l3_history_snapshot_version}`。
+说明：P0 示例使用 `rebuild_target_key + p0_history_version` 作为任务身份。
+如果历史源暂时无法提供版本，也可以由上游传入显式 `operation_id`。
+P2 启用 `history_snapshot_version` 后，可扩展为
+`memory-rebuild:{rebuild_target_key}:l2hv{l2_history_snapshot_version}:l3hv{l3_history_snapshot_version}`。
 
 全量重建请求：
 
@@ -2262,7 +2107,9 @@ journal 持久化失败响应：
   "request_id": "req_xxx_all",
   "user_id": "user_xxx",
   "character_id": "char_xxx",
-  "rebuild_scope": "all"
+  "operation_id": "op_rebuild_all_xxx",
+  "rebuild_l2": true,
+  "rebuild_l3": true
 }
 ```
 
@@ -2318,43 +2165,31 @@ dry-run 预览请求：
 按 `task_id` 查询：
 
 ```text
-GET /v1/memory/tasks/memory-rebuild:session:user_xxx:char_xxx:sess_xxx:v20260419T100000Z
+GET /memory/tasks/{task_id}
 ```
 
-按条件查询：
+按条件查询是后续管理面能力，当前 HTTP API 未实现：
 
 ```text
-GET /v1/memory/tasks?request_id=req_xxx&op_type=rebuild&status=running
+GET /memory/tasks?request_id=req_xxx&op_type=rebuild&status=running
 ```
 
 成功响应：
 
 ```json
 {
-  "code": 0,
-  "message": "ok",
-  "data": {
-    "task_id": "memory-rebuild:session:user_xxx:char_xxx:sess_xxx:v20260419T100000Z",
-    "request_id": "req_xxx",
-    "op_type": "rebuild",
-    "status": "completed",
-    "result": {
-      "l2_result": "completed",
-      "l3_result": "completed"
-    },
-    "affected_scope": {
-      "user_id": "user_xxx",
-      "character_id": "char_xxx",
-      "session_id": "sess_xxx"
-    },
-    "retry_count": 0,
-    "next_retry_at": null,
-    "last_error_stage": null,
-    "error_code": null,
-    "error_message": null,
-    "created_at": "2026-04-19T10:00:00Z",
-    "updated_at": "2026-04-19T10:00:20Z",
-    "completed_at": "2026-04-19T10:00:20Z"
+  "task_id": "memory-rebuild:user_xxx:char_xxx:op_rebuild_session_xxx",
+  "request_id": "req_xxx",
+  "op_type": "rebuild_l3",
+  "status": "completed",
+  "scope": {
+    "user_id": "user_xxx",
+    "character_id": "char_xxx"
+  },
+  "last_error": null,
+  "result": {
+    "l2_result": "completed",
+    "l3_result": "completed"
   }
 }
 ```
@@ -2363,31 +2198,26 @@ GET /v1/memory/tasks?request_id=req_xxx&op_type=rebuild&status=running
 
 ```json
 {
-  "code": 4040,
-  "message": "task not found",
-  "data": {
-    "task_id": "memory-rebuild:session:user_xxx:char_xxx:sess_xxx:v20260419T100000Z"
-  }
+  "detail": "memory task not found"
 }
 ```
 
 查询原则：
 
-- `append` 未返回 `task_id` 时，必须支持按 `request_id / round_id / op_type=extract` 查询。
+- 当前 `append` 返回 `task_id`，按 `task_id` 查询即可。按 `request_id / round_id / op_type=extract` 查询属于后续管理面能力。
 - `delete / rebuild / decay` 返回 `task_id` 时，优先按 `task_id` 查询。
 - 查询接口不隐式重试、不恢复失败任务，只返回当前状态。
 - `failed / dead_letter` 任务只能通过治理动作收敛，不能通过重复提交同一入口命令恢复。
 
 协议原则：
 
-- `append` 只有在入口受理成功时才返回 `code=0`。
-- `append` 若命中空内容、安全拒绝、已完成任务、查询失败、落库失败、派发失败，则返回对应数值码。
-- `recall` 默认是同步读语义，统一返回 `code + message + data(...)`。
-- `delete / rebuild` 默认是异步 accepted 语义；P2 `decay` 也是异步 accepted 语义，入口返回格式统一为 `code + message + data(...)`。
-- `delete / rebuild / decay` 命中已完成的同一 `task_id` 时返回 `already_done(code=1004)`，不按 rejected 处理。
+- `append` 成功、幂等命中或 L3 后台入队成功时返回 `AppendMemoryResponse`；业务冲突和依赖错误通过 HTTP 状态与 `detail` 返回。
+- `recall` 默认是同步读语义，成功时返回 `RecallMemoryResponse`。
+- 当前 `delete / rebuild` 在服务内同步执行并返回任务结果；如果后续拆成独立 worker，再调整为异步 accepted 语义。
+- `delete / rebuild` 命中已完成的同一任务时返回幂等完成语义，不按 rejected 处理。
 - 若返回 `task_id`，治理入口需要能通过它查询最终状态。
 - `task query` 只查询状态，不触发补偿或重试。
-- `skipped` 与 `rejected` 的区别体现在数值码语义上：前者表示“协议合法但无需继续”，后者表示“协议或内容被拒绝”。
+- 如果后续网关统一外壳启用数值码，`skipped` 与 `rejected` 的区别体现在数值码语义上：前者表示“协议合法但无需继续”，后者表示“协议或内容被拒绝”。
 
 ## 4. 可观测性设计
 
@@ -2396,12 +2226,12 @@ GET /v1/memory/tasks?request_id=req_xxx&op_type=rebuild&status=running
 可观测性目标：
 
 - 能查清一次请求是否被拒绝、跳过、受理、完成或失败；强治理阶段还要能查清是否进入死信。
-- 能定位问题发生在 L1、L2、L3、调度层还是 worker 层。
+- 能定位问题发生在入口、L1、L2、L3、数据库、Mem0、Qdrant 或 API 进程内后台线程池。
 - 能量化记忆系统的命中率、沉淀率和失败率；启用衰减后再量化衰减率。
 
 ### 4.1 日志
 
-> 日志目标：一次请求出问题时，能定位是入口、L1、L2、L3、dispatch 还是 worker。
+> 日志目标：一次请求出问题时，能定位是入口、L1、L2、L3、数据库、Mem0、Qdrant 还是 L3 后台线程池。
 
 推荐日志最小字段：
 
@@ -2425,8 +2255,8 @@ GET /v1/memory/tasks?request_id=req_xxx&op_type=rebuild&status=running
 - L1 派生缓存刷新成功/跳过/失败
 - L2 摘要生成成功/失败
 - L3 长期记忆抽取成功/失败
-- task 派发成功/失败
-- worker 完成/重试/失败；强治理阶段记录死信
+- L3 后台任务入队、执行完成或失败
+- 强治理阶段再记录 worker 完成、重试、失败和死信
 
 ### 4.2 指标
 
@@ -2434,7 +2264,9 @@ GET /v1/memory/tasks?request_id=req_xxx&op_type=rebuild&status=running
 
 核心指标可以分为基础指标和增强治理指标。首版先接基础指标，增强治理指标随着对应能力一起接入。
 
-指标标签保持低基数。推荐标签只使用 `op_type / status / layer / error_code / caller_service / algorithm_mode` 这类有限枚举；不要把 `user_id / character_id / session_id / round_id / memory_id / task_id / request_id` 放进 Prometheus label。需要按这些字段排障时，走日志、审计或任务查询接口。
+指标标签保持低基数。推荐标签只使用 `op_type / status / layer / error_code / caller_service / algorithm_mode` 这类有限枚举。
+不要把 `user_id / character_id / session_id / round_id / memory_id / task_id / request_id` 放进 Prometheus label。
+需要按这些字段排障时，走日志、审计或任务查询接口。
 
 - `memory_append_total`
 - `memory_append_rejected_total`
@@ -2449,7 +2281,7 @@ GET /v1/memory/tasks?request_id=req_xxx&op_type=rebuild&status=running
 - `memory_append_journal_write_failed_total`
 - `memory_l1_cache_refresh_failed_total`
 - `memory_l1_cache_refresh_skipped_total`
-- `memory_delete_scope_idempotent_hit_total`
+- `memory_delete_idempotency_hit_total`
 - `memory_task_not_resumable_total`
 - `memory_task_retry_total`
 - `memory_task_failed_total`
@@ -2473,8 +2305,9 @@ GET /v1/memory/tasks?request_id=req_xxx&op_type=rebuild&status=running
 
 - `memory_append_latency_ms`
 - `memory_recall_latency_ms`
-- `memory_dispatch_latency_ms`
-- `memory_worker_latency_ms`
+- `memory_delete_latency_ms`
+- `memory_rebuild_latency_ms`
+- `memory_l3_background_write_latency_ms`（后续接入指标时使用）
 
 ### 4.3 审计
 
@@ -2505,7 +2338,7 @@ GET /v1/memory/tasks?request_id=req_xxx&op_type=rebuild&status=running
 推荐告警场景：
 
 - `memory_task_dead_letter_total` 突增
-- `dispatch failed` 持续升高
+- `L3 background queue full` 持续升高
 - `recall failed` 持续升高
 - `append rejected` 异常升高
 - `L2` 长时间未生成新摘要
@@ -2524,10 +2357,10 @@ GET /v1/memory/tasks?request_id=req_xxx&op_type=rebuild&status=running
 
 这部分能力可以先从查询开始：
 
-- 按 `request_id` 查询整条链路
 - 按 `task_id` 查询任务状态
-- 按 `user_id / character_id / session_id` 查询受影响记忆
-- 按 `status=failed/dead_letter` 查询待处理任务
+- 后续管理面再补按 `request_id` 查询整条链路
+- 后续管理面再补按 `user_id / character_id / session_id` 查询受影响记忆
+- 后续管理面再补按 `status=failed/dead_letter` 查询待处理任务
 - 对失败任务执行：
   - 跳过
   - 人工关闭

@@ -27,7 +27,8 @@
 | Mem0 模式 | `<library>` |
 | Qdrant | `<url-or-cluster>` |
 | PostgreSQL | `<db-or-cluster>` |
-| 评测运行 JSON | `<docs/AI虚拟社交记忆服务首版主链路质量评测报告-real-quality-....json>`；若执行时使用 `--docs-dir docs/reports`，则为 `<docs/reports/AI虚拟社交记忆服务首版主链路质量评测报告-real-quality-....json>` |
+| PostgreSQL 数据库名 | `liaoriver_memory` |
+| 评测运行 JSON | `<docs/report/AI虚拟社交记忆服务首版主链路质量评测报告-YYYYMMDD-001.json>`；`YYYYMMDD` 取包装报告生成日期，若同一天已有报告，序号递增。 |
 | 原始质量 JSON | `<quality / post_delete objects>` |
 | 报告生成脚本 | `script/run_real_mem0_quality_evaluation.py` |
 | 评测脚本 | `script/real_mem0_quality_regression.py` |
@@ -53,10 +54,13 @@
 | `false_positive_rate` | `<value>` | 负样本为 `0`；扩展样本 `<= 0.02` | `<通过 / 未通过 / 需复核>` |
 | `duplicate_active_rate` | `<value>` | `0` | `<通过 / 未通过 / 需复核>` |
 | `delete_memory_residue_rate` | `<value-or-null>` | 本轮样本内为 `0` | `<通过 / 未通过 / 需复核>` |
+| `delete_session_residue_rate` | `<value-or-null>` | 本轮样本内为 `0` | `<通过 / 未通过 / 需复核>` |
+| `delete_all_residue_rate` | `<value-or-null>` | 本轮样本内为 `0` | `<通过 / 未通过 / 需复核>` |
 | `rebuild_resurrection_rate` | `<value-or-null>` | 本轮样本内为 `0` | `<通过 / 未通过 / 需复核>` |
 | `cross_user_leak_rate` | `<value-or-null>` | 本轮样本内为 `0` | `<通过 / 未通过 / 需复核>` |
 | `cross_character_leak_rate` | `<value-or-null>` | 本轮样本内为 `0` | `<通过 / 未通过 / 需复核>` |
 | `roleplay_real_mix_rate` | `<value-or-null>` | 本轮样本内为 `0` | `<通过 / 未通过 / 需复核>` |
+| `known_drift_regression_pass_rate` | `<value-or-null>` | 有表达漂移样本时 `>= 0.95` | `<通过 / 未通过 / 需复核>` |
 
 指标口径说明：
 
@@ -74,7 +78,6 @@
 | `mrr` | `<value>` | 不设硬门禁 | 低于本地基线时复核排序质量。 |
 | `item_precision_at_10` | `<value>` | 不设硬门禁 | 辅助解释 top10 召回噪声。 |
 | `irrelevant_l3_per_query` | `<value>` | 不设硬门禁，越低越好 | 异常升高时排查。 |
-| `known_drift_regression_pass_rate` | `<value-or-null>` | 首版可为 `null` | 有样本后再设门禁。 |
 
 ## 5. 样本与状态摘要
 
@@ -142,11 +145,13 @@
 | `false_positive_rate` | `<automatic>` | `<note>` |
 | `duplicate_active_rate` | `<automatic>` | `<note>` |
 | `delete_memory_residue_rate` | `<case_gate / automatic / null>` | `<note>` |
+| `delete_session_residue_rate` | `<case_gate / automatic / null>` | `<note>` |
+| `delete_all_residue_rate` | `<case_gate / automatic / null>` | `<note>` |
 | `rebuild_resurrection_rate` | `<case_gate / automatic / null>` | `<note>` |
 | `cross_user_leak_rate` | `<case_gate / automatic / null>` | `<note>` |
 | `cross_character_leak_rate` | `<case_gate / automatic / null>` | `<note>` |
 | `roleplay_real_mix_rate` | `<case_gate / automatic / null>` | `<note>` |
-| `known_drift_regression_pass_rate` | `<manual_review / null>` | `<note>` |
+| `known_drift_regression_pass_rate` | `<automatic / null>` | `<note>` |
 
 ## 11. 结论与处理建议
 
@@ -160,7 +165,11 @@
 ## 12. 评测运行包装 JSON 摘要
 
 `script/run_real_mem0_quality_evaluation.py` 写入报告目录的 JSON 使用包装结构。
-默认目录是 `docs/`；如果执行时使用 `--docs-dir docs/reports`，结构不变，文件位置变为 `docs/reports/`。
+脚本直接运行时默认目录是 `docs/`；当前工程的 `make quality-real` 使用 `docs/report`。
+如果执行时指定其他 `--docs-dir`，结构不变，文件位置改为对应目录。
+文件名后缀使用 `YYYYMMDD-递增序号`，例如 `20260511-001`。
+`YYYYMMDD` 取包装报告 `generated_at` 的日期；序号会扫描同目录下当天已有 JSON/Markdown 后递增。
+`run_id` 仍保存在 JSON 字段中，用于排查和历史对比。
 主链路指标位于 `quality`，删除与重建复查指标位于 `post_delete`。
 下面片段只展示字段位置，`<...>` 仍表示人工填写提示。
 
@@ -188,6 +197,7 @@
     "failed_metrics": [],
     "metric_automation_status": {}
   },
+  "postgres_database": "liaoriver_memory",
   "stdout_tail": "<text>",
   "stderr_tail": "<text>"
 }

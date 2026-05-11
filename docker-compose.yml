@@ -8,11 +8,20 @@ services:
     ports:
       - "8000:8000"
     environment:
+      # 中文注释：容器内 Python 模块搜索路径，确保能导入 src 下的工程代码。
       PYTHONPATH: /app/src
+      # 中文注释：本地 Compose 调试环境标识。
       ENVIRONMENT: development
+      # 中文注释：PostgreSQL 主机名；app 容器访问 compose 内部服务必须使用服务名。
       POSTGRES_HOST: postgres
+      # 中文注释：PostgreSQL 容器内端口，不能继承宿主机调试端口。
+      POSTGRES_PORT: "5432"
+      # 中文注释：Redis 主机名；app 容器访问 compose 内部服务必须使用服务名。
       REDIS_HOST: redis
-      QDRANT_URL: ${QDRANT_URL:-https://qdrant.example.internal}
+      # 中文注释：Redis 容器内端口，不能继承宿主机调试端口。
+      REDIS_PORT: "6379"
+      # 中文注释：Qdrant 当前不在本 compose 内；容器访问宿主机本地 Qdrant 用 host.docker.internal。
+      QDRANT_URL: ${DOCKER_QDRANT_URL:-http://host.docker.internal:6333}
     env_file:
       - path: .env
         required: false
@@ -28,7 +37,9 @@ services:
     ports:
       - "5432:5432"
     environment:
+      # 中文注释：本地 PostgreSQL 用户名，默认与 .env.example 对齐。
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      # 中文注释：本地 PostgreSQL 密码，默认与 .env.example 对齐。
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
       # 中文注释：本地容器库名也固定为 liaoriver_memory，避免与旧 thinkback 库混用。
       POSTGRES_DB: ${POSTGRES_DATABASE:-liaoriver_memory}

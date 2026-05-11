@@ -3,38 +3,56 @@ kind: ConfigMap
 metadata:
   name: thinkback-config
 data:
-  # 中文注释：运行身份和日志级别；生产环境默认不打开 DEBUG。
+  # 中文注释：应用名称，只用于日志和服务标识。
   APP_NAME: Thinkback
+  # 中文注释：应用版本，用于发布识别和排障。
   APP_VERSION: "0.1.0"
+  # 中文注释：运行环境标识；生产 K8s 固定为 production。
   ENVIRONMENT: production
+  # 中文注释：日志级别；生产默认 INFO，避免 DEBUG 泄漏过多细节。
   LOG_LEVEL: INFO
 
-  # 中文注释：业务数据库名统一为 liaoriver_memory；密码放在 Secret，不写入 ConfigMap。
+  # 中文注释：PostgreSQL 主机名，生产应指向数据库 Service 或平台地址。
   POSTGRES_HOST: postgres
+  # 中文注释：PostgreSQL 端口。
   POSTGRES_PORT: "5432"
+  # 中文注释：PostgreSQL 用户名；密码放在 Secret。
   POSTGRES_USER: postgres
+  # 中文注释：业务数据库名统一为 liaoriver_memory，避免与旧库混用。
   POSTGRES_DATABASE: liaoriver_memory
 
-  # 中文注释：Redis 作为 readiness 和运行时缓存依赖，不再配置 Celery broker/result backend。
+  # 中文注释：Redis 主机名，用于 readiness 和运行时缓存。
   REDIS_HOST: redis
+  # 中文注释：Redis 端口。
   REDIS_PORT: "6379"
+  # 中文注释：Redis DB 编号；首版默认使用 0。
   REDIS_DB: "0"
 
-  # 中文注释：Qdrant 是平台提供的独立向量库；API key 由 Secret 注入。
+  # 中文注释：Qdrant 是平台提供的独立向量库；生产不要写成本机 localhost。
   QDRANT_URL: https://qdrant.example.internal
 
-  # 中文注释：Mem0 Library 在 API Pod 内运行，模型和向量集合通过这些变量控制。
+  # 中文注释：OpenAI-compatible endpoint 的 base URL；直接用官方 endpoint 时可留空。
   MEMORY_OPENAI_BASE_URL: ""
+  # 中文注释：Mem0 写入 Qdrant 的集合名；向量维度变化时应换集合。
   MEMORY_QDRANT_COLLECTION: memories_qwen_1024
+  # 中文注释：Embedding 向量维度，必须与模型实际输出一致。
   MEMORY_EMBEDDING_DIMS: "1024"
+  # 中文注释：Mem0 抽取记忆使用的 LLM 模型名。
   MEMORY_LLM_MODEL: qwen3.5-flash
+  # 中文注释：Mem0 生成向量使用的 Embedding 模型名。
   MEMORY_EMBEDDING_MODEL: text-embedding-v4
+  # 中文注释：Mem0 Library 的本地历史数据库路径，Pod 内挂载到可写临时卷。
   MEM0_HISTORY_DB_PATH: .mem0/history.db
 
-  # 中文注释：生产默认异步写 L3；容量值是基线，不代表线上压测承诺。
+  # 中文注释：L3 写入模式；生产默认 async，避免外部模型抖动拖慢 append。
   MEMORY_L3_WRITE_MODE: async
+  # 中文注释：API 同步路由进入线程池的并发上限。
   MEMORY_API_WORKER_LIMIT: "8"
+  # 中文注释：L3 后台抽取线程数，影响 Mem0 写入并发。
   MEMORY_L3_EXECUTOR_WORKERS: "16"
+  # 中文注释：L3 后台写入队列容量，队列满时触发背压。
   MEMORY_L3_MAX_PENDING_TASKS: "256"
+  # 中文注释：队列接近满时最多等待秒数，超过后返回明确错误。
   MEMORY_L3_QUEUE_WAIT_SECONDS: "5"
+  # 中文注释：/health/ready 单项依赖检查超时时间，单位秒。
   READINESS_TIMEOUT_SECONDS: "30"

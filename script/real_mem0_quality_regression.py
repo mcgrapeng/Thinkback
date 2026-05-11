@@ -162,7 +162,7 @@ class RequestMetrics:
 
 
 def build_production_quality_cases() -> list[EvaluationCase]:
-    # 中文注释：这组 case 是质量-only 的生产级扩展样本，不包含稳定性、并发或容量测试。
+    # 中文注释：这组 case 只扩展首版主链路质量风险，不包含稳定性、并发或容量测试。
     # 重点覆盖真实用户容易出问题的几类语义风险：纠错后旧值污染、未知事实误召回、
     # 中英混写/转述表达漂移，以及跨用户/角色/现实剧情隔离。
     return [

@@ -28,9 +28,20 @@
 
 ## 本地调试建议
 
-1. 从 `.env.local.example` 派生本地 `.env.local`，填入 `OPENAI_API_KEY`。
+1. 从 `.env.example` 派生本地 `.env`，填入 `OPENAI_API_KEY`。
 2. 使用 `make debug-api` 启动 18082 端口的本地 API。
 3. 使用 `make debug-ready` 确认 readiness。
 4. 使用 `make quality-real` 生成真实质量评测报告。
+
+常用脚本环境变量说明：
+
+| 变量 | 中文说明 |
+| --- | --- |
+| `OPENAI_API_KEY` | 模型服务密钥，供 Mem0 Library 抽取和向量化使用。 |
+| `QDRANT_URL` | Qdrant 向量库地址。 |
+| `QDRANT_API_KEY` | Qdrant 鉴权密钥；本地无鉴权可留空。 |
+| `THINKBACK_API_URL` | 脚本访问 Thinkback API 的地址。 |
+| `POSTGRES_DATABASE` | PostgreSQL 数据库名；本工程统一使用 `liaoriver_memory`。 |
+| `QUALITY_EVALUATION_TIMEOUT_SECONDS` | 真实质量评测包装脚本的总超时。 |
 
 稳定性与质量评测是两条不同的验证路径；如果只验证质量门禁，不要混入稳定性结论。

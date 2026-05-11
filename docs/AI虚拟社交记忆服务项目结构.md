@@ -14,6 +14,7 @@ Thinkback/
 ├── test/                    单元测试和端到端假后端测试
 ├── docker-compose.yml       本地依赖栈
 ├── Dockerfile               应用镜像
+├── .env.example             唯一环境变量模板，复制为 .env 后用于本地调试
 ├── Makefile                 常用命令
 ├── pyproject.toml           Python 依赖和工具配置
 └── poetry.lock              锁定依赖版本
@@ -34,9 +35,9 @@ src/api/
 | `app.py` | FastAPI app factory、路由注册、trace/access log 中间件。 |
 | `dependencies.py` | 注入 `MemoryService`。默认使用 `SqlAlchemyMemoryRepository + Mem0LibraryMemoryBackend`。 |
 | `health.py` | `/health`、`/health/live`、`/health/ready`。 |
-| `memory.py` | `/memory/append`、`/memory/recall`、`/memory/delete`、`/memory/rebuild`、任务查询。 |
+| `memory.py` | `/memory/append`、`/memory/recall`、`/memory/delete`、`/memory/rebuild`、任务查询和 L3 后台状态查询。 |
 
-`memory.py` 的端点是 async，但服务和 Mem0 adapter 是同步边界，所以通过 `run_in_threadpool` 调用，避免阻塞事件循环。
+`memory.py` 的端点是 async，但服务和 Mem0 adapter 是同步边界，所以通过 `anyio.to_thread.run_sync` 和 `CapacityLimiter` 调用，避免阻塞事件循环并限制并发。
 
 ## 3. src/memory
 
