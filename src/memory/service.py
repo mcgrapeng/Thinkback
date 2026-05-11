@@ -774,7 +774,7 @@ class MemoryService:
             cached_at, cached_memories = cached
             if now - cached_at <= self.active_memory_cache_ttl_seconds:
                 return list(cached_memories)
-        memories = self.repository.active_memories(user_id, character_id)
+        memories: list[Any] = self.repository.active_memories(user_id, character_id)
         self._active_memory_cache[cache_key] = (now, list(memories))
         return memories
 
@@ -1059,6 +1059,32 @@ class MemoryService:
         digest = sha256(raw.encode("utf-8")).hexdigest()[:32]
         return f"local-p0:{slot or 'unknown'}:{digest}"
 
+    @staticmethod
+    def _local_partition_preserved_backend_memory_id(
+        *,
+        user_id: str,
+        character_id: str,
+        backend_memory_id: str,
+        source_refs: list[dict[str, str]],
+        memory_text: str,
+        partition: tuple[str, str, str],
+    ) -> str:
+        raw = "|".join(
+            (
+                user_id,
+                character_id,
+                backend_memory_id,
+                memory_text,
+                *partition,
+                *(
+                    f"{source_ref.get('session_id', '')}:{source_ref.get('round_id', '')}"
+                    for source_ref in source_refs
+                ),
+            )
+        )
+        digest = sha256(raw.encode("utf-8")).hexdigest()[:32]
+        return f"local-p0:partition:{digest}"
+
     def _index_l3_event(
         self,
         event: dict[str, Any],
@@ -1097,6 +1123,38 @@ class MemoryService:
             if existing is None:
                 self.backend.delete(backend_id)
             return
+        target_partition = self._conflict_partition_from_metadata(l3_metadata)
+        if existing and self._conflict_partition(existing) != target_partition:
+            # 后端有时会把同一个 memory id 从真实用户事实复用到角色扮演设定。
+            # 业务索引必须按上下文分区保留旧事实，否则真实记忆会被新分区覆盖。
+            preserved_backend_id = self._local_partition_preserved_backend_memory_id(
+                user_id=user_id,
+                character_id=character_id,
+                backend_memory_id=backend_id,
+                source_refs=list(existing.source_refs),
+                memory_text=str(existing.memory_text),
+                partition=self._conflict_partition(existing),
+            )
+            self.repository.update_memory_index(
+                existing.memory_id,
+                backend_memory_id=preserved_backend_id,
+                source_refs=list(existing.source_refs),
+                memory_text=str(existing.memory_text),
+                source_type=str(existing.source_type),
+                fact_subject=str(existing.fact_subject),
+                context_type=str(existing.context_type),
+                roleplay_mode=str(existing.roleplay_mode),
+                data_classification=str(existing.data_classification),
+                memory_type=existing.memory_type,
+                backend_categories=list(existing.backend_categories),
+                metadata={
+                    **dict(existing.metadata),
+                    "preserved_from_backend_memory_id": backend_id,
+                    "preserved_reason": "backend_id_cross_partition_reuse",
+                },
+            )
+            existing = None
+
         if existing:
             self.repository.update_memory_index(
                 existing.memory_id,
@@ -1277,6 +1335,8 @@ class MemoryService:
         if not backend_memory_id.startswith("local-p0:"):
             return False
         if MemoryService._memory_conflict_slot(getattr(memory, "memory_text", "")) != MemoryService._memory_conflict_slot(memory_text):
+            return False
+        if MemoryService._conflict_partition(memory) != MemoryService._conflict_partition_from_metadata(l3_metadata):
             return False
         existing_refs = {source_ref_key(ref) for ref in getattr(memory, "source_refs", [])}
         raw_refs = l3_metadata.get("source_refs")

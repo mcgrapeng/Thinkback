@@ -21,7 +21,6 @@ asyncpg = "^0.30.0"
 greenlet = "^3.5.0"
 alembic = "^1.18.4"
 redis = {extras = ["hiredis"], version = "^7.4.0"}
-celery = "^5.6.3"
 loguru = "^0.7.2"
 python-dotenv = "^1.0.0"
 mem0ai = "^0.1.118"

@@ -4,11 +4,9 @@ from types import SimpleNamespace
 from memory.schemas import MemoryStatus
 
 
-def test_celery_app_registers_diagnostic_memory_task() -> None:
-    from infra.tasks.celery_app import celery_app
-
-    assert celery_app.main == "thinkback"
-    assert "memory.diagnostics.ping" in celery_app.tasks
+def test_worker_runtime_surface_is_not_part_of_default_scaffold() -> None:
+    assert not Path("src/infra/tasks/celery_app.py").exists()
+    assert not Path("src/memory/tasks.py").exists()
 
 
 def test_mem0_config_builder_targets_qdrant_memory_collection() -> None:

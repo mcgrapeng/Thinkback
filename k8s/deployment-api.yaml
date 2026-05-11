@@ -22,6 +22,7 @@ spec:
         app: thinkback
         component: api
     spec:
+      serviceAccountName: thinkback
       securityContext:
         runAsNonRoot: true
       containers:
@@ -30,6 +31,12 @@ spec:
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8000
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
           env:
             - name: PYTHONPATH
               value: /app/src
@@ -38,6 +45,9 @@ spec:
                 name: thinkback-config
             - secretRef:
                 name: thinkback-secret
+          volumeMounts:
+            - name: mem0-history
+              mountPath: /app/.mem0
           readinessProbe:
             httpGet:
               path: /health/ready
@@ -52,3 +62,13 @@ spec:
             initialDelaySeconds: 15
             periodSeconds: 20
             timeoutSeconds: 3
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+      volumes:
+        - name: mem0-history
+          emptyDir: {}

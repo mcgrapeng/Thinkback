@@ -122,6 +122,23 @@ class SkipsP0SlotBackend(FakeMemoryBackend):
         )
 
 
+class SkipsCatCorrectionBackend(FakeMemoryBackend):
+    def add(self, messages, *, user_id, character_id, metadata=None):  # type: ignore[no-untyped-def]
+        text = " ".join(
+            message["content"].strip()
+            for message in messages
+            if message.get("content", "").strip()
+        )
+        if "麻薯" in text:
+            return []
+        return super().add(
+            messages,
+            user_id=user_id,
+            character_id=character_id,
+            metadata=metadata,
+        )
+
+
 class ScoredBackend(FakeMemoryBackend):
     def search(
         self,
@@ -1402,6 +1419,20 @@ def test_pet_name_correction_with_not_old_name_is_canonicalized() -> None:
     assert "团子" not in active[0].memory_text
 
 
+def test_append_backfills_cat_correction_when_backend_returns_no_event() -> None:
+    repository = InMemoryMemoryRepository()
+    backend = SkipsCatCorrectionBackend()
+    service = MemoryService(repository=repository, backend=backend)
+
+    service.append(make_append(round_id="round-1", content="我养了一只猫，名字叫团子。"))
+    service.append(make_append(round_id="round-2", content="更正一下，我的猫不叫团子，叫麻薯。"))
+
+    active = repository.active_memories("user-1", "char-1")
+    active_text = "\n".join(memory.memory_text for memory in active)
+    assert "User has a cat named 麻薯" in active_text
+    assert "User has a cat named 团子" not in active_text
+
+
 def test_chinese_pet_name_correction_is_canonicalized_to_new_name_only() -> None:
     service = MemoryService(repository=InMemoryMemoryRepository(), backend=FakeMemoryBackend())
 
@@ -2472,6 +2503,109 @@ def test_roleplay_pet_memory_does_not_supersede_real_user_pet_memory() -> None:
     active = repository.active_memories("user-1", "char-1")
     active_backend_ids = {memory.backend_memory_id for memory in active}
     assert active_backend_ids == {"real-cat", "roleplay-cat"}
+    assert repository.memories[real_cat.memory_id].memory_status.name == "ACTIVE"
+
+
+def test_backend_update_crossing_context_partition_keeps_real_pet_memory() -> None:
+    repository = InMemoryMemoryRepository()
+    backend = FakeMemoryBackend()
+    service = MemoryService(repository=repository, backend=backend)
+    real_cat = repository.add_memory_index(
+        backend_memory_id="shared-backend-cat",
+        user_id="user-1",
+        character_id="char-1",
+        source_refs=[{"session_id": "session-1", "round_id": "round-6"}],
+        memory_text="User has a cat named 麻薯",
+        metadata={
+            "source_refs": [{"session_id": "session-1", "round_id": "round-6"}],
+            "source_text": "更正一下，我的猫不叫团子，叫麻薯。",
+        },
+    )
+    backend.memories[real_cat.backend_memory_id] = {
+        "id": real_cat.backend_memory_id,
+        "memory": real_cat.memory_text,
+        "event": "ADD",
+        "user_id": "user-1",
+        "agent_id": "char-1",
+        "metadata": {},
+        "score": 0.9,
+    }
+
+    service._index_l3_event(
+        {
+            "id": "shared-backend-cat",
+            "memory": "In User's plot/story setting, they have a cat character named 露露",
+            "event": "UPDATE",
+        },
+        user_id="user-1",
+        character_id="char-1",
+        source_refs=[{"session_id": "session-1", "round_id": "round-15"}],
+        l3_metadata=service._l3_metadata(
+            [{"session_id": "session-1", "round_id": "round-15"}],
+            {
+                "context_type": "roleplay",
+                "roleplay_mode": "on",
+                "fact_subject": "story_world",
+                "backend_categories": ["story_world"],
+                "source_text": "剧情设定里，我养了一只猫叫露露。",
+            },
+        ),
+    )
+
+    active_texts = sorted(
+        memory.memory_text for memory in repository.active_memories("user-1", "char-1")
+    )
+    assert active_texts == ["User has a cat named 露露", "User has a cat named 麻薯"]
+    assert repository.memories[real_cat.memory_id].memory_status.name == "ACTIVE"
+
+
+def test_backend_update_crossing_context_partition_same_source_keeps_real_pet_memory() -> None:
+    repository = InMemoryMemoryRepository()
+    backend = FakeMemoryBackend()
+    service = MemoryService(repository=repository, backend=backend)
+    source_refs = [{"session_id": "session-1", "round_id": "round-1"}]
+    real_cat = repository.add_memory_index(
+        backend_memory_id="shared-backend-cat",
+        user_id="user-1",
+        character_id="char-1",
+        source_refs=source_refs,
+        memory_text="User has a cat named 麻薯",
+        metadata={"source_refs": source_refs},
+    )
+    backend.memories[real_cat.backend_memory_id] = {
+        "id": real_cat.backend_memory_id,
+        "memory": real_cat.memory_text,
+        "event": "ADD",
+        "user_id": "user-1",
+        "agent_id": "char-1",
+        "metadata": {},
+        "score": 0.9,
+    }
+
+    service._index_l3_event(
+        {
+            "id": "shared-backend-cat",
+            "memory": "In User's plot/story setting, they have a cat character named 露露",
+            "event": "UPDATE",
+        },
+        user_id="user-1",
+        character_id="char-1",
+        source_refs=source_refs,
+        l3_metadata=service._l3_metadata(
+            source_refs,
+            {
+                "context_type": "roleplay",
+                "roleplay_mode": "on",
+                "fact_subject": "story_world",
+                "source_text": "剧情设定里，我养了一只猫叫露露。",
+            },
+        ),
+    )
+
+    active_texts = sorted(
+        memory.memory_text for memory in repository.active_memories("user-1", "char-1")
+    )
+    assert active_texts == ["User has a cat named 露露", "User has a cat named 麻薯"]
     assert repository.memories[real_cat.memory_id].memory_status.name == "ACTIVE"
 
 

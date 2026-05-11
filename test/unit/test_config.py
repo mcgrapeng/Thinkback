@@ -8,6 +8,7 @@ def test_settings_defaults_are_thinkback_baseline() -> None:
     assert settings.app_version == "0.1.0"
     assert settings.environment == "development"
     assert settings.database_backend == "postgresql"
+    assert settings.postgres_database == "liaoriver_memory"
     assert settings.memory_backend == "redis"
     assert settings.qdrant_url == "https://qdrant.example.internal"
     assert settings.qdrant_api_key == ""
@@ -31,13 +32,15 @@ def test_settings_defaults_are_thinkback_baseline() -> None:
     assert not hasattr(settings, "mem0_backend_mode")
     assert not hasattr(settings, "memory_llm_api_key")
     assert not hasattr(settings, "memory_embedding_api_key")
+    assert not hasattr(settings, "celery_broker_url")
+    assert not hasattr(settings, "celery_result_backend")
 
 
 def test_settings_derived_urls() -> None:
     settings = Settings(_env_file=None)
 
-    assert (
-        settings.database_url == "postgresql+asyncpg://postgres:postgres@localhost:5432/thinkback"
+    assert settings.database_url == (
+        "postgresql+asyncpg://postgres:postgres@localhost:5432/liaoriver_memory"
     )
     assert settings.redis_url == "redis://localhost:6379/0"
 

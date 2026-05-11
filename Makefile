@@ -1,11 +1,17 @@
-.PHONY: help install dev test lint format run worker docker-build docker-up docker-down db-upgrade db-downgrade db-status db-history db-revision clean
+.PHONY: help install dev test lint format run debug-api debug-ready quality-real verify-local docker-build docker-up docker-down db-upgrade db-downgrade db-status db-history db-revision clean
+
+-include .env.local
+export
 
 help:
 	@echo "Thinkback - memory service"
 	@echo "  make install     - install runtime dependencies"
 	@echo "  make dev         - install dev dependencies and pre-commit"
 	@echo "  make run         - run FastAPI app"
-	@echo "  make worker      - run Celery worker"
+	@echo "  make debug-api   - run local API on 127.0.0.1:18082"
+	@echo "  make debug-ready - check local readiness on 127.0.0.1:18082"
+	@echo "  make quality-real - run real quality evaluation into docs/report"
+	@echo "  make verify-local - run lint, mypy, tests, and compose config"
 	@echo "  make test        - run tests"
 	@echo "  make lint        - run Ruff and mypy"
 	@echo "  make format      - format Python code"
@@ -23,7 +29,7 @@ test:
 	PYTHONPATH=src poetry run pytest
 
 lint:
-	poetry run ruff check src test
+	poetry run ruff check src test script
 	poetry run mypy src
 
 format:
@@ -33,8 +39,20 @@ format:
 run:
 	poetry run uvicorn --app-dir src api.app:app --reload --host 0.0.0.0 --port 8000
 
-worker:
-	PYTHONPATH=src poetry run celery -A infra.tasks.celery_app.celery_app worker -l info
+debug-api:
+	POSTGRES_HOST=localhost POSTGRES_PORT=5432 POSTGRES_USER=postgres POSTGRES_PASSWORD=zpeng512 POSTGRES_DATABASE=liaoriver_memory REDIS_HOST=localhost REDIS_PORT=6379 REDIS_DB=0 REDIS_PASSWORD=zpeng512 QDRANT_URL=http://localhost:6333 QDRANT_API_KEY= MEMORY_QDRANT_COLLECTION=memories_qwen_1024 MEMORY_EMBEDDING_DIMS=1024 MEMORY_L3_WRITE_MODE=sync PYTHONPATH=src poetry run uvicorn --app-dir src api.app:app --reload --host 127.0.0.1 --port 18082
+
+debug-ready:
+	curl -sS http://127.0.0.1:18082/health/ready
+
+quality-real:
+	POSTGRES_HOST=localhost POSTGRES_PORT=5432 POSTGRES_USER=postgres POSTGRES_PASSWORD=zpeng512 POSTGRES_DATABASE=liaoriver_memory REDIS_HOST=localhost REDIS_PORT=6379 REDIS_DB=0 REDIS_PASSWORD=zpeng512 QDRANT_URL=http://localhost:6333 QDRANT_API_KEY= MEMORY_QDRANT_COLLECTION=memories_qwen_1024 MEMORY_EMBEDDING_DIMS=1024 MEMORY_L3_WRITE_MODE=sync THINKBACK_API_URL=http://127.0.0.1:18082 PYTHONPATH=src poetry run python script/run_real_mem0_quality_evaluation.py --docs-dir docs/report
+
+verify-local:
+	poetry run ruff check src test script
+	poetry run mypy src
+	PYTHONPATH=src poetry run pytest
+	docker compose config >/tmp/thinkback-compose.yml
 
 docker-build:
 	docker build -t thinkback:latest -f Dockerfile .

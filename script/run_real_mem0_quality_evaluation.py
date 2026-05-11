@@ -454,7 +454,7 @@ def _production_quality_dataset_sufficient(
         for category, minimum in required_category_counts.items()
     )
     required_metrics_clean = all(
-        value in {0, 0.0}
+        value in {0}
         for value in (
             quality.get("conflict_pollution_rate"),
             quality.get("false_positive_rate"),

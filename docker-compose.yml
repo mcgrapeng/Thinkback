@@ -12,31 +12,6 @@ services:
       POSTGRES_HOST: postgres
       REDIS_HOST: redis
       QDRANT_URL: ${QDRANT_URL:-https://qdrant.example.internal}
-      CELERY_BROKER_URL: redis://redis:6379/0
-      CELERY_RESULT_BACKEND: redis://redis:6379/1
-    env_file:
-      - path: .env
-        required: false
-    depends_on:
-      - postgres
-      - redis
-    networks:
-      - thinkback-network
-
-  worker:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: thinkback-worker
-    command: ["celery", "-A", "infra.tasks.celery_app.celery_app", "worker", "-l", "info"]
-    environment:
-      PYTHONPATH: /app/src
-      ENVIRONMENT: development
-      POSTGRES_HOST: postgres
-      REDIS_HOST: redis
-      QDRANT_URL: ${QDRANT_URL:-https://qdrant.example.internal}
-      CELERY_BROKER_URL: redis://redis:6379/0
-      CELERY_RESULT_BACKEND: redis://redis:6379/1
     env_file:
       - path: .env
         required: false
@@ -54,7 +29,7 @@ services:
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
-      POSTGRES_DB: ${POSTGRES_DATABASE:-thinkback}
+      POSTGRES_DB: ${POSTGRES_DATABASE:-liaoriver_memory}
     volumes:
       - postgres-data:/var/lib/postgresql/data
     networks:

@@ -30,7 +30,7 @@ class Settings(BaseSettings):
     postgres_port: int = 5432
     postgres_user: str = "postgres"
     postgres_password: str = "postgres"
-    postgres_database: str = "thinkback"
+    postgres_database: str = "liaoriver_memory"
 
     redis_host: str = "localhost"
     redis_port: int = 6379
@@ -66,11 +66,6 @@ class Settings(BaseSettings):
         if value < 1:
             raise ValueError("memory_api_worker_limit must be >= 1")
         return value
-
-    celery_broker_url: str = "redis://localhost:6379/0"
-    celery_result_backend: str = "redis://localhost:6379/1"
-    celery_task_time_limit: int = 3600
-    celery_task_soft_time_limit: int = 3000
 
     @property
     def database_url(self) -> str:
