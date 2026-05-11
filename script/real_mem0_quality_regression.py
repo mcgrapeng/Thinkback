@@ -886,8 +886,18 @@ def _is_transient_network_failure(exc: BaseException) -> bool:
     if isinstance(exc, TimeoutError):
         return True
     reason = getattr(exc, "reason", exc)
+    if isinstance(reason, ConnectionRefusedError):
+        return True
     lowered = str(reason).lower()
-    return any(marker in lowered for marker in ("timed out", "timeout", "temporarily unavailable"))
+    return any(
+        marker in lowered
+        for marker in (
+            "timed out",
+            "timeout",
+            "temporarily unavailable",
+            "connection refused",
+        )
+    )
 
 
 def _post_json(

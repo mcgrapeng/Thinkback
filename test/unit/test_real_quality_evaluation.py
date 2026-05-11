@@ -1028,9 +1028,47 @@ def test_post_json_retries_transient_network_timeout(monkeypatch) -> None:
     assert metrics.transient_failure_count == 1
 
 
+def test_post_json_retries_connection_refused_during_quality_run(monkeypatch) -> None:
+    attempts = 0
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args) -> None:  # type: ignore[no-untyped-def]
+            return None
+
+        def read(self) -> bytes:
+            return b'{"status":"completed"}'
+
+    def fake_urlopen(*args, **kwargs):  # type: ignore[no-untyped-def]
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise URLError(ConnectionRefusedError(61, "Connection refused"))
+        return Response()
+
+    metrics = RequestMetrics()
+    monkeypatch.setattr(real_mem0_quality_regression, "urlopen", fake_urlopen)
+
+    response = _post_json(
+        "http://127.0.0.1:18082",
+        "/memory/append",
+        {"hello": "world"},
+        request_metrics=metrics,
+        max_attempts=2,
+        sleep_seconds=0,
+    )
+
+    assert response == {"status": "completed"}
+    assert attempts == 2
+    assert metrics.retry_count == 1
+    assert metrics.transient_failure_count == 1
+
+
 def test_post_json_records_non_transient_network_failure(monkeypatch) -> None:
     def fake_urlopen(*args, **kwargs):  # type: ignore[no-untyped-def]
-        raise URLError("connection refused")
+        raise URLError("name or service not known")
 
     metrics = RequestMetrics()
     monkeypatch.setattr(real_mem0_quality_regression, "urlopen", fake_urlopen)
@@ -1054,7 +1092,8 @@ def test_post_json_records_non_transient_network_failure(monkeypatch) -> None:
 def test_network_timeout_is_transient_for_quality_runner() -> None:
     assert _is_transient_network_failure(TimeoutError("timed out")) is True
     assert _is_transient_network_failure(URLError("timed out")) is True
-    assert _is_transient_network_failure(URLError("connection refused")) is False
+    assert _is_transient_network_failure(URLError(ConnectionRefusedError(61, "Connection refused"))) is True
+    assert _is_transient_network_failure(URLError("name or service not known")) is False
 
 
 def test_pressure_suite_report_fails_when_any_gate_fails() -> None:
