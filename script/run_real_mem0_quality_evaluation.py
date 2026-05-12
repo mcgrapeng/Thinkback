@@ -15,7 +15,8 @@ from typing import Any
 
 REPORT_PREFIX = "AI虚拟社交记忆服务首版主链路质量评测报告"
 DEFAULT_DOCS_DIR = Path("docs")
-DEFAULT_TIMEOUT_SECONDS = 900
+# 中文注释：真实 Mem0/模型调用会逐轮写入，当前首版质量样本在慢供应商环境下可能超过 15 分钟。
+DEFAULT_TIMEOUT_SECONDS = 1800
 QUALITY_SCRIPT = Path("script/real_mem0_quality_regression.py")
 
 _METRIC_SPECS: tuple[tuple[str, str, bool], ...] = (

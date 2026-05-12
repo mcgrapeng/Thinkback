@@ -96,6 +96,7 @@ class OperationType(StrEnum):
     DELETE_MEMORY = "delete_memory"
     DELETE_SESSION = "delete_session"
     DELETE_ALL = "delete_all"
+    REBUILD = "rebuild"
     REBUILD_L2 = "rebuild_l2"
     REBUILD_L3 = "rebuild_l3"
 
@@ -194,6 +195,12 @@ class RebuildMemoryRequest(BaseModel):
     history_version: str | None = None
     rebuild_l2: bool = True
     rebuild_l3: bool = True
+
+    @model_validator(mode="after")
+    def validate_rebuild_layer_selection(self) -> RebuildMemoryRequest:
+        if not self.rebuild_l2 and not self.rebuild_l3:
+            raise ValueError("rebuild requires at least one layer")
+        return self
 
 
 class MemoryItem(BaseModel):

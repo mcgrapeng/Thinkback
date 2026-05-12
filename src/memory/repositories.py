@@ -7,6 +7,7 @@ import hashlib
 from collections.abc import Coroutine
 from dataclasses import dataclass, field
 from datetime import datetime
+from threading import Lock, Thread
 from typing import Any, Protocol, TypeVar
 from uuid import uuid4
 
@@ -513,15 +514,49 @@ class SqlAlchemyMemoryRepository(L1CacheMixin):
     ) -> None:
         self.session_factory = session_factory
         self.l1_cache: dict[str, list[JournalEntry]] = {}
+        # 中文注释：SQLAlchemy async engine 绑定事件循环；同步服务边界必须把所有 DB coroutine 固定投递到同一个私有 loop。
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._loop_thread: Thread | None = None
+        self._loop_lock = Lock()
 
     def _run(self, awaitable: Coroutine[Any, Any, T]) -> T:
         try:
             asyncio.get_running_loop()
         except RuntimeError:
-            return asyncio.run(awaitable)
+            loop = self._ensure_loop()
+            return asyncio.run_coroutine_threadsafe(awaitable, loop).result()
         raise RuntimeError(
             "SqlAlchemyMemoryRepository is sync at the service boundary; call it from a worker thread."
         )
+
+    def _ensure_loop(self) -> asyncio.AbstractEventLoop:
+        with self._loop_lock:
+            if self._loop and self._loop.is_running():
+                return self._loop
+            loop = asyncio.new_event_loop()
+
+            def run_loop() -> None:
+                asyncio.set_event_loop(loop)
+                loop.run_forever()
+
+            thread = Thread(target=run_loop, name="thinkback-sqlalchemy-loop", daemon=True)
+            thread.start()
+            self._loop = loop
+            self._loop_thread = thread
+            return loop
+
+    def close(self) -> None:
+        with self._loop_lock:
+            loop = self._loop
+            thread = self._loop_thread
+            self._loop = None
+            self._loop_thread = None
+        if loop and loop.is_running():
+            loop.call_soon_threadsafe(loop.stop)
+        if thread:
+            thread.join(timeout=2)
+        if loop and not loop.is_closed():
+            loop.close()
 
     def get_round(self, round_id: str) -> JournalEntry | None:
         return self._run(self._get_round(round_id))

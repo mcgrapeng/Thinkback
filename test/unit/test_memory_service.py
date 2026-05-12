@@ -8,6 +8,7 @@ from memory.schemas import (
     DeleteMemoryRequest,
     DeleteScope,
     MessageRole,
+    OperationType,
     RebuildMemoryRequest,
     RecallIntent,
     RecallMemoryRequest,
@@ -3686,6 +3687,53 @@ def test_rebuild_is_idempotent_by_operation_id() -> None:
     assert first.status == "completed"
     assert second.status == "already_done"
     assert len(service.backend.memories) == memory_count_after_first
+
+
+def test_rebuild_task_op_type_matches_requested_layers() -> None:
+    service = MemoryService(repository=InMemoryMemoryRepository(), backend=FakeMemoryBackend())
+    service.append(make_append(round_id="round-1", content="我喜欢猫"))
+
+    service.rebuild(
+        RebuildMemoryRequest(
+            request_id="rebuild-l2",
+            user_id="user-1",
+            character_id="char-1",
+            operation_id="op-rebuild-l2",
+            rebuild_l2=True,
+            rebuild_l3=False,
+        )
+    )
+    service.rebuild(
+        RebuildMemoryRequest(
+            request_id="rebuild-l3",
+            user_id="user-1",
+            character_id="char-1",
+            operation_id="op-rebuild-l3",
+            rebuild_l2=False,
+            rebuild_l3=True,
+        )
+    )
+    service.rebuild(
+        RebuildMemoryRequest(
+            request_id="rebuild-both",
+            user_id="user-1",
+            character_id="char-1",
+            operation_id="op-rebuild-both",
+            rebuild_l2=True,
+            rebuild_l3=True,
+        )
+    )
+
+    l2_task = service.get_task("memory-rebuild:op-rebuild-l2")
+    l3_task = service.get_task("memory-rebuild:op-rebuild-l3")
+    combined_task = service.get_task("memory-rebuild:op-rebuild-both")
+
+    assert l2_task is not None
+    assert l3_task is not None
+    assert combined_task is not None
+    assert l2_task.op_type is OperationType.REBUILD_L2
+    assert l3_task.op_type is OperationType.REBUILD_L3
+    assert combined_task.op_type is OperationType.REBUILD
 
 
 def test_session_rebuild_keeps_other_session_l3_memories() -> None:

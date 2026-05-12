@@ -874,6 +874,14 @@ def test_real_quality_runner_writes_failure_report_on_child_timeout(monkeypatch,
     assert "timed out after 12s" in markdown
 
 
+def test_real_quality_runner_default_timeout_allows_slow_real_model_calls(monkeypatch) -> None:
+    from script.run_real_mem0_quality_evaluation import _quality_timeout_seconds_from_environment
+
+    monkeypatch.delenv("QUALITY_EVALUATION_TIMEOUT_SECONDS", raising=False)
+
+    assert _quality_timeout_seconds_from_environment() == 1800
+
+
 def test_quality_report_does_not_count_duplicate_slots_across_context_partitions() -> None:
     active_memories = [
         MemorySnapshot(

@@ -240,6 +240,13 @@ def test_single_env_example_uses_liaoriver_memory_and_local_middleware() -> None
         assert expected in env_example
 
 
+def test_alembic_static_example_url_uses_current_database_name() -> None:
+    alembic_ini = Path("alembic.ini").read_text(encoding="utf-8")
+
+    assert "liaoriver_memory" in alembic_ini
+    assert "localhost:5432/thinkback" not in alembic_ini
+
+
 def test_github_actions_ci_runs_quality_gates() -> None:
     workflow = Path(".github/workflows/ci.yml").read_text(encoding="utf-8")
 
@@ -359,7 +366,7 @@ def test_deployment_guide_keeps_quality_timeout_out_of_api_runtime_config() -> N
     assert "评测脚本运行环境" in guide
     api_runtime_section = guide.split("评测脚本运行环境", maxsplit=1)[0]
     assert "QUALITY_EVALUATION_TIMEOUT_SECONDS" not in api_runtime_section
-    assert "QUALITY_EVALUATION_TIMEOUT_SECONDS=900" in guide
+    assert "QUALITY_EVALUATION_TIMEOUT_SECONDS=1800" in guide
     assert "POSTGRES_DATABASE=liaoriver_memory" in api_runtime_section
     assert "| `REDIS_DB` | Redis DB 编号；首版默认使用 `0`。" in api_runtime_section
     assert "| `REDIS_PASSWORD` | Redis 密码，生产如启用鉴权必须放在 Secret。" in api_runtime_section
@@ -525,6 +532,36 @@ def test_quality_docs_explain_metric_rationale_without_overclaiming() -> None:
         assert expected in docs_text
 
     assert "已覆盖生产级质量风险" not in docs_text
+
+
+def test_architecture_doc_marks_future_rerank_and_history_source_fallback() -> None:
+    architecture = Path("docs/AI虚拟社交三层记忆架构.md").read_text(encoding="utf-8")
+
+    assert "显式重排属于后续可接入能力，不按当前代码能力宣称" in architecture
+    assert "当前代码没有显式 `rerank` 入参" in architecture
+    assert "未注入历史源时回退到可靠轮次存储并排除已删除来源" in architecture
+    assert "filter/rerank" not in architecture
+    assert "传入 adapter 已隔离后的 filters、top_k、threshold、rerank 参数" not in architecture
+
+
+def test_architecture_doc_states_current_implementation_boundaries() -> None:
+    architecture = Path("docs/AI虚拟社交三层记忆架构.md").read_text(encoding="utf-8")
+
+    for expected in [
+        "当前 Thinkback 代码里的 L2 是首版 P0 简化摘要",
+        "还不是 LLM 生成的完整关系阶段摘要器",
+        "L3 重建是首版增量修复口径",
+        "不是无条件全量清空重写",
+        "业务 service 还没有把它接入 append、recall、delete 或 rebuild 主链路",
+        "当前代码的安全准入是确定性硬规则",
+        "不是完整内容安全审核、敏感分级模型或合规治理系统",
+        "最终裁决主要由上游编排层和最终 prompt 组装层执行",
+        "metadata.memory_as_data=true",
+        "属于上游 prompt 组装层责任",
+        "op_type=rebuild",
+        "result.rebuilt_l2 / result.rebuilt_l3",
+    ]:
+        assert expected in architecture
 
 
 def test_removed_celery_runtime_is_not_a_dependency() -> None:

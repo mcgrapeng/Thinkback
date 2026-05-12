@@ -530,7 +530,7 @@ class MemoryService:
         task = TaskEntry(
             task_id=f"memory-rebuild:{request.operation_id}",
             request_id=request.request_id,
-            op_type=OperationType.REBUILD_L2,
+            op_type=self._rebuild_operation_type(request),
             scope={"user_id": request.user_id, "character_id": request.character_id},
             status=TaskStatus.RUNNING,
             operation_id=request.operation_id,
@@ -661,6 +661,14 @@ class MemoryService:
             last_error=task.last_error,
             result=task.result,
         )
+
+    @staticmethod
+    def _rebuild_operation_type(request: RebuildMemoryRequest) -> OperationType:
+        if request.rebuild_l2 and request.rebuild_l3:
+            return OperationType.REBUILD
+        if request.rebuild_l3:
+            return OperationType.REBUILD_L3
+        return OperationType.REBUILD_L2
 
     def _ensure_l3_extract_task(
         self,

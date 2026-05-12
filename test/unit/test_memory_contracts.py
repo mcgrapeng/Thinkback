@@ -6,6 +6,7 @@ from memory.schemas import (
     DeleteScope,
     MemoryType,
     MessageRole,
+    RebuildMemoryRequest,
     RecallIntent,
     RecallMemoryRequest,
     SummaryState,
@@ -80,3 +81,15 @@ def test_recall_request_has_l3_score_threshold() -> None:
     )
 
     assert request.l3_score_threshold == 0.5
+
+
+def test_rebuild_request_requires_at_least_one_layer() -> None:
+    with pytest.raises(ValidationError, match="at least one"):
+        RebuildMemoryRequest(
+            request_id="rebuild-empty",
+            user_id="user-1",
+            character_id="char-1",
+            operation_id="op-rebuild-empty",
+            rebuild_l2=False,
+            rebuild_l3=False,
+        )

@@ -1,3 +1,4 @@
+import asyncio
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -49,6 +50,26 @@ def test_default_memory_service_uses_sql_repository(monkeypatch) -> None:
     service = dependencies.get_memory_service()
 
     assert isinstance(service.repository, SqlAlchemyMemoryRepository)
+
+
+def test_sql_repository_reuses_one_private_event_loop_for_sync_calls() -> None:
+    from memory.repositories import SqlAlchemyMemoryRepository
+
+    repository = SqlAlchemyMemoryRepository()
+    observed_loops: list[asyncio.AbstractEventLoop] = []
+
+    async def capture_loop() -> None:
+        observed_loops.append(asyncio.get_running_loop())
+
+    try:
+        repository._run(capture_loop())
+        repository._run(capture_loop())
+    finally:
+        close = getattr(repository, "close", None)
+        if callable(close):
+            close()
+
+    assert observed_loops[0] is observed_loops[1]
 
 
 def test_memory_service_can_use_mem0_library_backend_from_settings(monkeypatch) -> None:

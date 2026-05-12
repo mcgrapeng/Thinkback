@@ -242,7 +242,7 @@ PYTHONPATH=src .venv/bin/python script/real_mem0_quality_regression.py
 | 结果留痕 | 保存评测运行 JSON、原始 `quality` / `post_delete` 对象和失败 case。自动生成 Markdown 只汇总失败 case 和失败指标；JSON 提供 run_id、指标、`case_results` 和子进程输出尾部。 |
 | 失败证据补齐 | 逐 case 的 query、期望事实、禁用事实从脚本 case 定义或人工报告补齐；召回摘要和 active memory 证据可从 stdout/stderr tail、数据库快照或人工复核补充。 |
 | 报告分离 | 本文不写入任何本轮数据，包装脚本把结果写入独立评测报告。 |
-| 总超时 | 包装脚本默认 `QUALITY_EVALUATION_TIMEOUT_SECONDS=900`。如果外部模型、Mem0 或网络长时间不返回，应生成 `environment_or_execution` 失败报告，不得把卡住状态当成质量通过。 |
+| 总超时 | 包装脚本默认 `QUALITY_EVALUATION_TIMEOUT_SECONDS=1800`。如果外部模型、Mem0 或网络长时间不返回，应生成 `environment_or_execution` 失败报告，不得把卡住状态当成质量通过。 |
 
 ## 9. 报告要求
 
