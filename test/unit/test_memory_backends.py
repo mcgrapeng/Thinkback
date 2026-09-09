@@ -1,6 +1,12 @@
-import pytest
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier, Event, Lock, get_ident
+from time import sleep
+from typing import Any
 
-from memory.backends import FakeMemoryBackend
+import pytest
+from loguru import logger
+
+from innies_memory.memory.backends import FakeMemoryBackend
 
 
 def test_fake_backend_add_search_delete_all_are_scoped() -> None:
@@ -10,48 +16,54 @@ def test_fake_backend_add_search_delete_all_are_scoped() -> None:
     result = backend.add(
         messages,
         user_id="user-1",
-        character_id="char-1",
+        memory_scope_id="innies",
         metadata={"source_refs": [{"session_id": "s1", "round_id": "r1"}]},
     )
 
     assert result[0]["event"] == "ADD"
-    assert backend.search("睡觉", user_id="user-1", character_id="char-1", limit=5)
-    assert backend.search("睡觉", user_id="user-1", character_id="char-2", limit=5) == []
+    assert backend.search("睡觉", user_id="user-1", memory_scope_id="innies", limit=5)
+    assert backend.search("睡觉", user_id="user-1", memory_scope_id="other-session", limit=5) == []
 
-    deleted = backend.delete_all(user_id="user-1", character_id="char-1")
+    deleted = backend.delete_all(user_id="user-1", memory_scope_id="innies")
 
     assert deleted == 1
-    assert backend.search("睡觉", user_id="user-1", character_id="char-1", limit=5) == []
+    assert backend.search("睡觉", user_id="user-1", memory_scope_id="innies", limit=5) == []
 
 
-def test_mem0_library_config_builder_targets_shared_qdrant_and_openai() -> None:
-    from memory.backends import build_mem0_library_config
+def test_mem0_library_config_builder_targets_milvus_and_openai() -> None:
+    from innies_memory.memory.backends import build_mem0_library_config
 
     config = build_mem0_library_config(
-        openai_api_key="openai-secret",
-        openai_base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
-        qdrant_url="http://localhost:6333",
-        qdrant_api_key="qdrant-secret",
-        collection_name="thinkback_memories",
-        llm_model="gpt-5-mini",
-        embedding_model="text-embedding-3-small",
+        llm_api_key="openai-secret",
+        llm_base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+        embedding_api_key="",
+        embedding_base_url="http://embedding.example.internal:7345/v1",
+        milvus_url="http://localhost:19530",
+        milvus_token="milvus-user:milvus-secret",
+        milvus_database="innies",
+        collection_name="innies_memories",
+        llm_model="qwen-plus-latest",
+        embedding_model="zhiman-embedding",
         history_db_path=".mem0/history.db",
+        embedding_model_dims=1536,
     )
 
     assert config == {
         "vector_store": {
-            "provider": "qdrant",
+            "provider": "milvus",
             "config": {
-                "collection_name": "thinkback_memories",
-                "url": "http://localhost:6333",
-                "api_key": "qdrant-secret",
+                "collection_name": "innies_memories",
+                "url": "http://localhost:19530",
+                "token": "milvus-user:milvus-secret",
+                "db_name": "innies",
                 "embedding_model_dims": 1536,
+                "metric_type": "COSINE",
             },
         },
         "llm": {
             "provider": "openai",
             "config": {
-                "model": "gpt-5-mini",
+                "model": "qwen-plus-latest",
                 "api_key": "openai-secret",
                 "openai_base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
             },
@@ -59,56 +71,227 @@ def test_mem0_library_config_builder_targets_shared_qdrant_and_openai() -> None:
         "embedder": {
             "provider": "openai",
             "config": {
-                "model": "text-embedding-3-small",
-                "api_key": "openai-secret",
-                "openai_base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+                "model": "zhiman-embedding",
+                "api_key": "",
+                "openai_base_url": "http://embedding.example.internal:7345/v1",
                 "embedding_dims": 1536,
             },
         },
         "history_db_path": ".mem0/history.db",
+        "custom_instructions": config["custom_instructions"],
     }
 
 
-def test_mem0_library_config_builder_supports_unauthenticated_qdrant_host_port() -> None:
-    from memory.backends import build_mem0_library_config
+def test_mem0_library_config_builder_supports_unauthenticated_milvus() -> None:
+    from innies_memory.memory.backends import build_mem0_library_config
 
     config = build_mem0_library_config(
-        openai_api_key="openai-secret",
-        openai_base_url="",
-        qdrant_url="http://qdrant.internal:6333",
-        qdrant_api_key="",
-        collection_name="thinkback_memories",
+        llm_api_key="openai-secret",
+        llm_base_url="",
+        embedding_api_key="",
+        embedding_base_url="",
+        milvus_url="http://milvus.internal:19530",
+        milvus_token="",
+        milvus_database="default",
+        collection_name="innies_memories",
         llm_model="gpt-5-mini",
         embedding_model="text-embedding-3-small",
         history_db_path=".mem0/history.db",
+        embedding_model_dims=1536,
     )
 
     assert config["vector_store"]["config"] == {
-        "collection_name": "thinkback_memories",
-        "host": "qdrant.internal",
-        "port": 6333,
+        "collection_name": "innies_memories",
+        "url": "http://milvus.internal:19530",
+        "token": "",
+        "db_name": "default",
         "embedding_model_dims": 1536,
+        "metric_type": "COSINE",
     }
 
 
-def test_mem0_library_config_builder_rejects_https_qdrant_url_without_api_key() -> None:
-    from memory.backends import build_mem0_library_config
+def test_openai_compatible_embedding_omits_dimensions_and_uses_dummy_key(monkeypatch) -> None:
+    from mem0.configs.embeddings.base import BaseEmbedderConfig
 
-    with pytest.raises(ValueError, match="QDRANT_API_KEY is required"):
-        build_mem0_library_config(
-            openai_api_key="openai-secret",
-            openai_base_url="",
-            qdrant_url="https://qdrant.example.internal",
-            qdrant_api_key="",
-            collection_name="thinkback_memories",
-            llm_model="gpt-5-mini",
-            embedding_model="text-embedding-3-small",
-            history_db_path=".mem0/history.db",
+    from innies_memory.memory import embeddings
+    from innies_memory.memory.embeddings import OpenAICompatibleEmbeddingNoDimensions
+
+    observed: dict[str, Any] = {}
+
+    class FakeEmbeddings:
+        def create(self, **kwargs):  # type: ignore[no-untyped-def]
+            observed["create_kwargs"] = kwargs
+
+            class FakeDatum:
+                embedding = [0.1, 0.2, 0.3]
+
+            class FakeResponse:
+                data = [FakeDatum()]
+
+            return FakeResponse()
+
+    class FakeOpenAI:
+        def __init__(self, **kwargs):  # type: ignore[no-untyped-def]
+            observed["client_kwargs"] = kwargs
+            self.embeddings = FakeEmbeddings()
+
+    monkeypatch.setenv("OPENAI_API_KEY", "llm-secret")
+    monkeypatch.setattr(embeddings, "OpenAI", FakeOpenAI)
+
+    embedder = OpenAICompatibleEmbeddingNoDimensions(
+        BaseEmbedderConfig(
+            model="zhiman-embedding",
+            api_key="",
+            openai_base_url="http://embedding.example.internal:7345/v1",
+            embedding_dims=1024,
+        )
+    )
+
+    result = embedder.embed("ping\npong", memory_action="search")
+
+    assert result == [0.1, 0.2, 0.3]
+    assert observed["client_kwargs"] == {
+        "api_key": "not-required",
+        "base_url": "http://embedding.example.internal:7345/v1",
+    }
+    assert observed["create_kwargs"] == {
+        "input": ["ping pong"],
+        "model": "zhiman-embedding",
+    }
+
+
+def test_mem0_library_backend_registers_custom_embedder_provider(monkeypatch, tmp_path) -> None:
+    from mem0.utils.factory import EmbedderFactory
+
+    from innies_memory.memory.backends import Mem0LibraryMemoryBackend
+
+    observed: dict[str, Any] = {}
+    original_mapping = dict(EmbedderFactory.provider_to_class)
+
+    class FakeMemory:
+        @classmethod
+        def from_config(cls, config):  # type: ignore[no-untyped-def]
+            observed["config"] = config
+            observed["provider_path"] = EmbedderFactory.provider_to_class.get("openai")
+            return cls()
+
+    monkeypatch.setitem(
+        __import__("sys").modules, "mem0", type("FakeMem0", (), {"Memory": FakeMemory})
+    )
+
+    try:
+        backend = Mem0LibraryMemoryBackend(
+            config={
+                "history_db_path": str(tmp_path / "history.db"),
+                "embedder": {"provider": "openai", "config": {}},
+            }
         )
 
+        assert isinstance(backend.memory_client, FakeMemory)
+        assert observed["provider_path"] == (
+            "innies_memory.memory.embeddings.OpenAICompatibleEmbeddingNoDimensions"
+        )
+        assert observed["config"]["embedder"]["provider"] == "openai"
+    finally:
+        EmbedderFactory.provider_to_class.clear()
+        EmbedderFactory.provider_to_class.update(original_mapping)
 
-def test_mem0_library_backend_maps_add_search_update_delete_and_scoped_delete_all_with_limit() -> None:
-    from memory.backends import Mem0LibraryMemoryBackend
+
+def test_mem0_library_backend_logs_english_call_summaries_without_content() -> None:
+    from innies_memory.memory.backends import Mem0LibraryMemoryBackend
+
+    class FakeMemoryClient:
+        def add(self, messages, **kwargs):  # type: ignore[no-untyped-def]
+            _ = messages
+            _ = kwargs
+            return {"results": [{"id": "m1", "memory": "private memory", "event": "ADD"}]}
+
+        def search(self, query, **kwargs):  # type: ignore[no-untyped-def]
+            _ = query
+            _ = kwargs
+            return {"results": []}
+
+    sink: list[str] = []
+    handler_id = logger.add(sink.append, level="INFO", format="{message} {extra}")
+    backend = Mem0LibraryMemoryBackend(
+        config={"history_db_path": ".mem0/history.db"},
+        memory_client=FakeMemoryClient(),
+        max_concurrent_calls=2,
+    )
+    try:
+        backend.add(
+            [{"role": "user", "content": "backend secret text"}],
+            user_id="user-1",
+            memory_scope_id="innies",
+        )
+        backend.search(
+            "backend query text",
+            user_id="user-1",
+            memory_scope_id="innies",
+            limit=3,
+        )
+    finally:
+        logger.remove(handler_id)
+
+    logs = "\n".join(sink)
+    assert "memory backend call started" in logs
+    assert "memory backend call completed" in logs
+    assert "operation" in logs
+    assert "max_concurrent_calls" in logs
+    assert "backend secret text" not in logs
+    assert "backend query text" not in logs
+
+
+def test_mem0_library_backend_disables_mem0_telemetry_capture(monkeypatch) -> None:
+    import mem0
+    import mem0.memory.main as mem0_main
+    import mem0.memory.telemetry as mem0_telemetry
+
+    from innies_memory.memory.backends import Mem0LibraryMemoryBackend
+
+    calls: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
+
+    def leaky_capture_event(*args: Any, **kwargs: Any) -> None:
+        calls.append((args, kwargs))
+
+    class FakeMemory:
+        @classmethod
+        def from_config(cls, config):  # type: ignore[no-untyped-def]
+            _ = config
+            mem0_main.capture_event("mem0.init", cls())
+            mem0_telemetry.capture_event("mem0.add", cls())
+            return cls()
+
+    monkeypatch.setattr(mem0, "Memory", FakeMemory)
+    monkeypatch.setattr(mem0_main, "capture_event", leaky_capture_event)
+    monkeypatch.setattr(mem0_telemetry, "capture_event", leaky_capture_event)
+
+    backend = Mem0LibraryMemoryBackend(config={"history_db_path": ".mem0/history.db"})
+
+    assert isinstance(backend.memory_client, FakeMemory)
+    assert calls == []
+
+
+def test_disable_mem0_telemetry_is_thread_stable() -> None:
+    import threading
+
+    import mem0.memory.telemetry as mem0_telemetry
+
+    from innies_memory.memory.backends import disable_mem0_telemetry
+
+    disable_mem0_telemetry()
+    before = len(threading.enumerate())
+
+    for _ in range(20):
+        mem0_telemetry.capture_event("mem0.add", object())
+
+    assert len(threading.enumerate()) == before
+
+
+def test_mem0_library_backend_maps_add_search_update_delete_and_scoped_delete_all_with_limit() -> (
+    None
+):
+    from innies_memory.memory.backends import Mem0LibraryMemoryBackend
 
     class FakeMemoryClient:
         def __init__(self) -> None:
@@ -142,21 +325,23 @@ def test_mem0_library_backend_maps_add_search_update_delete_and_scoped_delete_al
             raise AssertionError("library backend must not call mem0 delete_all() directly")
 
     client = FakeMemoryClient()
-    backend = Mem0LibraryMemoryBackend(config={"history_db_path": ".mem0/history.db"}, memory_client=client)
+    backend = Mem0LibraryMemoryBackend(
+        config={"history_db_path": ".mem0/history.db"}, memory_client=client
+    )
 
     add_events = backend.add(
         [{"role": "user", "content": "我喜欢猫"}],
         user_id="user-1",
-        character_id="char-1",
+        memory_scope_id="innies",
         metadata={"memory_type": "preference"},
     )
-    search_results = backend.search("猫", user_id="user-1", character_id="char-1", limit=3)
+    search_results = backend.search("猫", user_id="user-1", memory_scope_id="innies", limit=3)
     threshold_results = backend.search(
-        "猫", user_id="user-1", character_id="char-1", limit=3, threshold=0.7
+        "猫", user_id="user-1", memory_scope_id="innies", limit=3, threshold=0.7
     )
     backend.update("m1", "用户喜欢猫")
     backend.delete("m1")
-    deleted = backend.delete_all(user_id="user-1", character_id="char-1")
+    deleted = backend.delete_all(user_id="user-1", memory_scope_id="innies")
 
     assert add_events == [{"id": "m1", "memory": "用户喜欢猫", "event": "ADD", "score": 1.0}]
     assert search_results == [{"id": "m1", "memory": "用户喜欢猫", "score": 0.9}]
@@ -169,15 +354,15 @@ def test_mem0_library_backend_maps_add_search_update_delete_and_scoped_delete_al
             ([{"role": "user", "content": "我喜欢猫"}],),
             {
                 "user_id": "user-1",
-                "agent_id": "char-1",
-                "metadata": {"memory_type": "preference", "character_id": "char-1"},
+                "agent_id": "innies",
+                "metadata": {"memory_type": "preference", "memory_scope_id": "innies"},
             },
         ),
         (
             "search",
             ("猫",),
             {
-                "filters": {"user_id": "user-1", "agent_id": "char-1"},
+                "filters": {"user_id": "user-1", "agent_id": "innies"},
                 "limit": 3,
                 "threshold": None,
             },
@@ -186,7 +371,7 @@ def test_mem0_library_backend_maps_add_search_update_delete_and_scoped_delete_al
             "search",
             ("猫",),
             {
-                "filters": {"user_id": "user-1", "agent_id": "char-1"},
+                "filters": {"user_id": "user-1", "agent_id": "innies"},
                 "limit": 3,
                 "threshold": 0.7,
             },
@@ -196,15 +381,128 @@ def test_mem0_library_backend_maps_add_search_update_delete_and_scoped_delete_al
         (
             "get_all",
             (),
-            {"filters": {"user_id": "user-1", "agent_id": "char-1"}, "limit": 10000},
+            {"filters": {"user_id": "user-1", "agent_id": "innies"}, "limit": 10000},
         ),
         ("delete", ("m1",), {}),
         ("delete", ("m2",), {}),
     ]
 
 
+def test_mem0_library_backend_delete_ignores_missing_milvus_vector() -> None:
+    from innies_memory.memory.backends import Mem0LibraryMemoryBackend
+
+    class FakeMemoryClient:
+        def delete(self, memory_id):  # type: ignore[no-untyped-def]
+            _ = memory_id
+            raise IndexError("list index out of range")
+
+    backend = Mem0LibraryMemoryBackend(
+        config={"history_db_path": ".mem0/history.db"},
+        memory_client=FakeMemoryClient(),
+    )
+
+    backend.delete("already-missing")
+
+
+def test_mem0_library_backend_delete_still_raises_unexpected_errors() -> None:
+    from innies_memory.memory.backends import Mem0LibraryMemoryBackend
+
+    class FakeMemoryClient:
+        def delete(self, memory_id):  # type: ignore[no-untyped-def]
+            _ = memory_id
+            raise RuntimeError("milvus unavailable")
+
+    backend = Mem0LibraryMemoryBackend(
+        config={"history_db_path": ".mem0/history.db"},
+        memory_client=FakeMemoryClient(),
+    )
+
+    with pytest.raises(RuntimeError, match="milvus unavailable"):
+        backend.delete("m1")
+
+
+def test_mem0_library_backend_update_retries_not_found_visibility_window(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """add 后紧邻 update 的 pk 点查不可见窗口：not found 应退避重试后成功。"""
+
+    from innies_memory.memory.backends import Mem0LibraryMemoryBackend
+
+    class FlakyMemoryClient:
+        def __init__(self) -> None:
+            self.update_calls = 0
+
+        def update(self, memory_id, data):  # type: ignore[no-untyped-def]
+            self.update_calls += 1
+            if self.update_calls <= 2:
+                raise ValueError(
+                    f"Memory with id {memory_id} not found. Please provide a valid 'memory_id'"
+                )
+            return {"message": "Memory updated successfully!"}
+
+    sleeps: list[float] = []
+    monkeypatch.setattr("innies_memory.memory.backends.mem0_library.time.sleep", sleeps.append)
+
+    client = FlakyMemoryClient()
+    backend = Mem0LibraryMemoryBackend(
+        config={"history_db_path": ".mem0/history.db"}, memory_client=client
+    )
+
+    backend.update("m1", "用户喜欢猫")
+
+    assert client.update_calls == 3
+    assert sleeps == [0.5, 1.0]
+
+
+def test_mem0_library_backend_update_does_not_retry_unrelated_valueerrors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """not found 之外的 ValueError（真实缺失/配置错误）不重试，直接上抛。"""
+
+    from innies_memory.memory.backends import Mem0LibraryMemoryBackend
+
+    class FakeMemoryClient:
+        def update(self, memory_id, data):  # type: ignore[no-untyped-def]
+            raise ValueError("expiration_date must be YYYY-MM-DD")
+
+    sleeps: list[float] = []
+    monkeypatch.setattr("innies_memory.memory.backends.mem0_library.time.sleep", sleeps.append)
+
+    backend = Mem0LibraryMemoryBackend(
+        config={"history_db_path": ".mem0/history.db"}, memory_client=FakeMemoryClient()
+    )
+
+    with pytest.raises(RuntimeError, match="expiration_date"):
+        backend.update("m1", "用户喜欢猫")
+    assert sleeps == []
+
+
+def test_mem0_library_backend_update_gives_up_after_bounded_retries(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """持续 not found 时按退避序列重试满后上抛，不无限循环。"""
+
+    from innies_memory.memory.backends import Mem0LibraryMemoryBackend
+
+    class AlwaysMissingClient:
+        def update(self, memory_id, data):  # type: ignore[no-untyped-def]
+            raise ValueError(f"Memory with id {memory_id} not found")
+
+    sleeps: list[float] = []
+    monkeypatch.setattr("innies_memory.memory.backends.mem0_library.time.sleep", sleeps.append)
+
+    client = AlwaysMissingClient()
+    backend = Mem0LibraryMemoryBackend(
+        config={"history_db_path": ".mem0/history.db"}, memory_client=client
+    )
+
+    with pytest.raises(RuntimeError, match="not found"):
+        backend.update("m1", "用户喜欢猫")
+    assert sleeps == [0.5, 1.0, 2.0]
+
+
 def test_mem0_library_backend_supports_legacy_entity_scope_kwargs() -> None:
-    from memory.backends import Mem0LibraryMemoryBackend
+    from innies_memory.memory.backends import Mem0LibraryMemoryBackend
 
     class FakeLegacyMemoryClient:
         def __init__(self) -> None:
@@ -231,19 +529,21 @@ def test_mem0_library_backend_supports_legacy_entity_scope_kwargs() -> None:
             return {"message": "Memory deleted successfully!"}
 
     client = FakeLegacyMemoryClient()
-    backend = Mem0LibraryMemoryBackend(config={"history_db_path": ".mem0/history.db"}, memory_client=client)
+    backend = Mem0LibraryMemoryBackend(
+        config={"history_db_path": ".mem0/history.db"}, memory_client=client
+    )
 
-    assert backend.search("猫", user_id="user-1", character_id="char-1", limit=3) == [
+    assert backend.search("猫", user_id="user-1", memory_scope_id="innies", limit=3) == [
         {"id": "m1", "memory": "用户喜欢猫", "score": 0.9}
     ]
-    assert backend.delete_all(user_id="user-1", character_id="char-1") == 1
+    assert backend.delete_all(user_id="user-1", memory_scope_id="innies") == 1
     assert client.calls == [
         (
             "search",
             ("猫",),
             {
                 "user_id": "user-1",
-                "agent_id": "char-1",
+                "agent_id": "innies",
                 "limit": 3,
                 "filters": None,
                 "threshold": None,
@@ -252,14 +552,14 @@ def test_mem0_library_backend_supports_legacy_entity_scope_kwargs() -> None:
         (
             "get_all",
             (),
-            {"user_id": "user-1", "agent_id": "char-1", "limit": 10000, "filters": None},
+            {"user_id": "user-1", "agent_id": "innies", "limit": 10000, "filters": None},
         ),
         ("delete", ("m1",), {}),
     ]
 
 
 def test_mem0_library_backend_supports_top_k_mem0_versions() -> None:
-    from memory.backends import Mem0LibraryMemoryBackend
+    from innies_memory.memory.backends import Mem0LibraryMemoryBackend
 
     class FakeTopKMemoryClient:
         def __init__(self) -> None:
@@ -280,18 +580,20 @@ def test_mem0_library_backend_supports_top_k_mem0_versions() -> None:
             return {"message": "Memory deleted successfully!"}
 
     client = FakeTopKMemoryClient()
-    backend = Mem0LibraryMemoryBackend(config={"history_db_path": ".mem0/history.db"}, memory_client=client)
+    backend = Mem0LibraryMemoryBackend(
+        config={"history_db_path": ".mem0/history.db"}, memory_client=client
+    )
 
-    assert backend.search("猫", user_id="user-1", character_id="char-1", limit=3) == [
+    assert backend.search("猫", user_id="user-1", memory_scope_id="innies", limit=3) == [
         {"id": "m1", "memory": "用户喜欢猫", "score": 0.9}
     ]
-    assert backend.delete_all(user_id="user-1", character_id="char-1") == 1
+    assert backend.delete_all(user_id="user-1", memory_scope_id="innies") == 1
     assert client.calls == [
         (
             "search",
             ("猫",),
             {
-                "filters": {"user_id": "user-1", "agent_id": "char-1"},
+                "filters": {"user_id": "user-1", "agent_id": "innies"},
                 "top_k": 3,
                 "threshold": None,
             },
@@ -299,45 +601,89 @@ def test_mem0_library_backend_supports_top_k_mem0_versions() -> None:
         (
             "get_all",
             (),
-            {"filters": {"user_id": "user-1", "agent_id": "char-1"}, "top_k": 10000},
+            {"filters": {"user_id": "user-1", "agent_id": "innies"}, "top_k": 10000},
         ),
         ("delete", ("m1",), {}),
     ]
 
 
-def test_mem0_library_backend_health_check_runs_library_search_ping() -> None:
-    from memory.backends import Mem0LibraryMemoryBackend
+def test_mem0_library_backend_health_check_runs_library_add_and_cleanup_probe() -> None:
+    from innies_memory.memory.backends import Mem0LibraryMemoryBackend
 
     class FakeMemoryClient:
         def __init__(self) -> None:
             self.calls: list[tuple[str, tuple, dict]] = []
 
-        def search(self, query, *, filters, limit, threshold):  # type: ignore[no-untyped-def]
-            kwargs = {"filters": filters, "limit": limit, "threshold": threshold}
-            self.calls.append(("search", (query,), kwargs))
-            return {"results": []}
+        def add(self, messages, **kwargs):  # type: ignore[no-untyped-def]
+            self.calls.append(("add", (messages,), kwargs))
+            return {"results": [{"id": "health-memory", "memory": "health", "event": "ADD"}]}
+
+        def delete(self, memory_id):  # type: ignore[no-untyped-def]
+            self.calls.append(("delete", (memory_id,), {}))
+            return {"message": "Memory deleted successfully!"}
 
     client = FakeMemoryClient()
-    backend = Mem0LibraryMemoryBackend(config={"history_db_path": ".mem0/history.db"}, memory_client=client)
+    backend = Mem0LibraryMemoryBackend(
+        config={"history_db_path": ".mem0/history.db"}, memory_client=client
+    )
 
     status = backend.health_check()
 
     assert status == {"status": "ready", "detail": "ok"}
-    assert client.calls == [
-        (
-            "search",
-            ("thinkback library health check",),
-            {
-                "filters": {"user_id": "thinkback-health", "agent_id": "thinkback-health"},
-                "limit": 1,
-                "threshold": None,
-            },
-        )
-    ]
+    assert client.calls[0][0] == "add"
+    assert client.calls[0][1][0][0]["role"] == "user"
+    assert client.calls[0][2]["user_id"] == "innies-memory-health"
+    assert client.calls[0][2]["agent_id"] == "innies-memory-health"
+    assert client.calls[0][2]["metadata"]["memory_scope_id"] == "innies-memory-health"
+    assert client.calls[1:] == [("delete", ("health-memory",), {})]
+
+
+def test_mem0_library_backend_health_check_reports_llm_probe_failure() -> None:
+    from innies_memory.memory.backends import Mem0LibraryMemoryBackend
+
+    class FakeMemoryClient:
+        def add(self, messages, **kwargs):  # type: ignore[no-untyped-def]
+            _ = messages
+            _ = kwargs
+            raise RuntimeError("connection refused")
+
+    backend = Mem0LibraryMemoryBackend(
+        config={"history_db_path": ".mem0/history.db"}, memory_client=FakeMemoryClient()
+    )
+
+    status = backend.health_check()
+
+    assert status["status"] == "not_ready"
+    assert "mem0 library add failed" in status["detail"]
+    assert "connection refused" in status["detail"]
+
+
+def test_mem0_library_backend_health_check_reports_cleanup_delete_failure() -> None:
+    from innies_memory.memory.backends import Mem0LibraryMemoryBackend
+
+    class FakeMemoryClient:
+        def add(self, messages, **kwargs):  # type: ignore[no-untyped-def]
+            _ = messages
+            _ = kwargs
+            return {"results": [{"id": "health-memory", "memory": "health", "event": "ADD"}]}
+
+        def delete(self, memory_id):  # type: ignore[no-untyped-def]
+            _ = memory_id
+            raise RuntimeError("milvus delete unavailable")
+
+    backend = Mem0LibraryMemoryBackend(
+        config={"history_db_path": ".mem0/history.db"}, memory_client=FakeMemoryClient()
+    )
+
+    status = backend.health_check()
+
+    assert status["status"] == "not_ready"
+    assert "mem0 library delete failed" in status["detail"]
+    assert "milvus delete unavailable" in status["detail"]
 
 
 def test_mem0_library_backend_creates_history_db_parent_directory(tmp_path) -> None:
-    from memory.backends import Mem0LibraryMemoryBackend
+    from innies_memory.memory.backends import Mem0LibraryMemoryBackend
 
     history_db_path = tmp_path / "nested" / "history.db"
     observed: dict[str, bool] = {}
@@ -360,3 +706,336 @@ def test_mem0_library_backend_creates_history_db_parent_directory(tmp_path) -> N
         "parent_exists": True,
         "history_db_path": str(history_db_path),
     }
+
+
+def test_mem0_library_backend_builds_lazy_client_once_under_concurrent_access() -> None:
+    from innies_memory.memory.backends import Mem0LibraryMemoryBackend
+
+    class FakeMemoryClient:
+        pass
+
+    calls = 0
+    calls_lock = Lock()
+
+    def memory_factory(_config):  # type: ignore[no-untyped-def]
+        nonlocal calls
+        with calls_lock:
+            calls += 1
+        sleep(0.05)
+        return FakeMemoryClient()
+
+    backend = Mem0LibraryMemoryBackend(
+        config={"history_db_path": ".mem0/history.db"},
+        memory_factory=memory_factory,
+    )
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        clients = list(executor.map(lambda _index: backend.memory_client, range(8)))
+
+    assert calls == 1
+    assert len({id(client) for client in clients}) == 1
+
+
+def test_mem0_library_backend_allows_calls_to_initialized_client_concurrently() -> None:
+    from innies_memory.memory.backends import Mem0LibraryMemoryBackend
+
+    class BlockingMemoryClient:
+        def __init__(self) -> None:
+            self.active_calls = 0
+            self.max_active_calls = 0
+            self.lock = Lock()
+            self.add_entered = Event()
+            self.search_entered = Event()
+            self.release_add = Event()
+
+        def add(self, messages, **kwargs):  # type: ignore[no-untyped-def]
+            _ = messages
+            _ = kwargs
+            self._enter()
+            self.add_entered.set()
+            try:
+                self.release_add.wait(timeout=5)
+                return {"results": [{"id": "m1", "memory": "用户喜欢茶", "event": "ADD"}]}
+            finally:
+                self._exit()
+
+        def search(self, query, *, filters, limit, threshold):  # type: ignore[no-untyped-def]
+            _ = query
+            _ = filters
+            _ = limit
+            _ = threshold
+            self._enter()
+            self.search_entered.set()
+            try:
+                return {"results": [{"id": "m1", "memory": "用户喜欢茶"}]}
+            finally:
+                self._exit()
+
+        def _enter(self) -> None:
+            with self.lock:
+                self.active_calls += 1
+                self.max_active_calls = max(self.max_active_calls, self.active_calls)
+
+        def _exit(self) -> None:
+            with self.lock:
+                self.active_calls -= 1
+
+    client = BlockingMemoryClient()
+    backend = Mem0LibraryMemoryBackend(
+        config={"history_db_path": ".mem0/history.db"},
+        memory_client=client,
+    )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        add_future = executor.submit(
+            backend.add,
+            [{"role": "user", "content": "我喜欢茶"}],
+            user_id="user-1",
+            memory_scope_id="innies",
+        )
+        assert client.add_entered.wait(timeout=1)
+
+        search_future = executor.submit(
+            backend.search,
+            "茶",
+            user_id="user-1",
+            memory_scope_id="innies",
+            limit=1,
+        )
+        assert client.search_entered.wait(timeout=1)
+
+        client.release_add.set()
+        assert add_future.result(timeout=1)[0]["event"] == "ADD"
+        assert search_future.result(timeout=1)[0]["memory"] == "用户喜欢茶"
+
+    assert client.max_active_calls == 2
+
+
+def test_mem0_library_backend_runs_mem0_internal_thread_pool_inline() -> None:
+    import concurrent.futures
+
+    import mem0.memory.main as mem0_main
+
+    from innies_memory.memory.backends import Mem0LibraryMemoryBackend
+
+    original_mem0_concurrent = mem0_main.concurrent
+    original_std_executor = concurrent.futures.ThreadPoolExecutor
+
+    class FakeMem0Client:
+        __module__ = "mem0.memory.main"
+
+        def add(self, messages, **kwargs):  # type: ignore[no-untyped-def]
+            _ = messages
+            _ = kwargs
+            with mem0_main.concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
+                future = executor.submit(get_ident)
+                mem0_main.concurrent.futures.wait([future])
+                worker_thread_id = future.result(timeout=1)
+            return {"results": [{"id": "m1", "memory": str(worker_thread_id), "event": "ADD"}]}
+
+    try:
+        caller_thread_id = get_ident()
+        backend = Mem0LibraryMemoryBackend(
+            config={"history_db_path": ".mem0/history.db"},
+            memory_client=FakeMem0Client(),
+        )
+
+        result = backend.add(
+            [{"role": "user", "content": "我喜欢茶"}],
+            user_id="user-1",
+            memory_scope_id="innies",
+        )
+
+        assert result[0]["memory"] == str(caller_thread_id)
+        assert concurrent.futures.ThreadPoolExecutor is original_std_executor
+    finally:
+        mem0_main.concurrent = original_mem0_concurrent
+
+
+def test_mem0_library_backend_limits_concurrent_mem0_calls() -> None:
+    from innies_memory.memory.backends import Mem0LibraryMemoryBackend
+
+    class BlockingMemoryClient:
+        def __init__(self) -> None:
+            self.entered = 0
+            self.active_calls = 0
+            self.max_active_calls = 0
+            self.lock = Lock()
+            self.first_two_entered = Event()
+            self.release_calls = Event()
+
+        def search(self, query, *, filters, limit, threshold):  # type: ignore[no-untyped-def]
+            _ = query
+            _ = filters
+            _ = limit
+            _ = threshold
+            with self.lock:
+                self.entered += 1
+                self.active_calls += 1
+                self.max_active_calls = max(self.max_active_calls, self.active_calls)
+                if self.entered == 2:
+                    self.first_two_entered.set()
+            try:
+                self.release_calls.wait(timeout=5)
+                return {"results": [{"id": "m1", "memory": "用户喜欢茶"}]}
+            finally:
+                with self.lock:
+                    self.active_calls -= 1
+
+    client = BlockingMemoryClient()
+    backend = Mem0LibraryMemoryBackend(
+        config={"history_db_path": ".mem0/history.db"},
+        memory_client=client,
+        max_concurrent_calls=2,
+    )
+    start = Barrier(4)
+
+    def search() -> list[dict[str, Any]]:
+        start.wait(timeout=3)
+        return backend.search(
+            "茶",
+            user_id="user-1",
+            memory_scope_id="innies",
+            limit=1,
+        )
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        futures = [executor.submit(search) for _ in range(8)]
+        assert client.first_two_entered.wait(timeout=1)
+        sleep(0.05)
+        with client.lock:
+            entered_before_release = client.entered
+        client.release_calls.set()
+
+        assert all(future.result(timeout=1)[0]["memory"] == "用户喜欢茶" for future in futures)
+
+    assert entered_before_release == 2
+    assert client.max_active_calls == 2
+
+
+def test_mem0_library_backend_does_not_spawn_mem0_threads_during_concurrent_calls() -> None:
+    import threading
+
+    import mem0.memory.main as mem0_main
+
+    from innies_memory.memory.backends import Mem0LibraryMemoryBackend
+
+    original_mem0_concurrent = mem0_main.concurrent
+    thread_ids: set[int] = set()
+    thread_ids_lock = Lock()
+
+    class FakeMem0Client:
+        def search(self, query, *, filters, limit, threshold):  # type: ignore[no-untyped-def]
+            _ = query
+            _ = filters
+            _ = limit
+            _ = threshold
+            with mem0_main.concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
+                futures = [executor.submit(threading.get_ident) for _ in range(8)]
+                mem0_main.concurrent.futures.wait(futures)
+                with thread_ids_lock:
+                    thread_ids.update(future.result(timeout=1) for future in futures)
+            return {"results": [{"id": "m1", "memory": "用户喜欢茶"}]}
+
+    backend = Mem0LibraryMemoryBackend(
+        config={"history_db_path": ".mem0/history.db"},
+        memory_client=FakeMem0Client(),
+        max_concurrent_calls=4,
+    )
+    start = Barrier(4)
+
+    def search() -> list[dict[str, Any]]:
+        start.wait(timeout=3)
+        return backend.search(
+            "茶",
+            user_id="user-1",
+            memory_scope_id="innies",
+            limit=1,
+        )
+
+    try:
+        with ThreadPoolExecutor(max_workers=4) as executor:
+            futures = [executor.submit(search) for _ in range(4)]
+            caller_thread_ids = {future.result(timeout=3)[0]["memory"] for future in futures}
+
+        assert caller_thread_ids == {"用户喜欢茶"}
+        assert len(thread_ids) <= 4
+    finally:
+        mem0_main.concurrent = original_mem0_concurrent
+
+
+def test_mem0_library_backend_delete_retries_not_found_then_converges(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """mem0 v2 窗口性 not found：退避重试后成功删除（supersede 清理场景）。"""
+
+    from innies_memory.memory.backends import Mem0LibraryMemoryBackend
+
+    class FlakyMemoryClient:
+        def __init__(self) -> None:
+            self.delete_calls = 0
+
+        def delete(self, memory_id):  # type: ignore[no-untyped-def]
+            self.delete_calls += 1
+            if self.delete_calls == 1:
+                raise ValueError(f"Memory with id {memory_id} not found")
+            return {"message": "Memory deleted successfully!"}
+
+    sleeps: list[float] = []
+    monkeypatch.setattr("innies_memory.memory.backends.mem0_library.time.sleep", sleeps.append)
+
+    client = FlakyMemoryClient()
+    backend = Mem0LibraryMemoryBackend(
+        config={"history_db_path": ".mem0/history.db"}, memory_client=client
+    )
+
+    backend.delete("m1")
+
+    assert client.delete_calls == 2
+    assert sleeps == [0.5]
+
+
+def test_mem0_library_backend_delete_not_found_after_retries_is_idempotent_skip(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """重试预算耗尽仍 not found：与并发已删除不可区分，幂等跳过不上抛。"""
+
+    from innies_memory.memory.backends import Mem0LibraryMemoryBackend
+
+    class AlwaysMissingClient:
+        def delete(self, memory_id):  # type: ignore[no-untyped-def]
+            raise ValueError(f"Memory with id {memory_id} not found")
+
+    sleeps: list[float] = []
+    monkeypatch.setattr("innies_memory.memory.backends.mem0_library.time.sleep", sleeps.append)
+
+    backend = Mem0LibraryMemoryBackend(
+        config={"history_db_path": ".mem0/history.db"}, memory_client=AlwaysMissingClient()
+    )
+
+    backend.delete("m1")  # 不抛即通过
+
+    assert sleeps == [0.5, 1.0, 2.0]
+
+
+def test_mem0_library_backend_delete_does_not_retry_unrelated_valueerrors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """not found 之外的 ValueError 不重试直接上抛（真实故障要暴露）。"""
+
+    from innies_memory.memory.backends import Mem0LibraryMemoryBackend
+
+    class FakeMemoryClient:
+        def delete(self, memory_id):  # type: ignore[no-untyped-def]
+            raise ValueError("vector store connection refused")
+
+    sleeps: list[float] = []
+    monkeypatch.setattr("innies_memory.memory.backends.mem0_library.time.sleep", sleeps.append)
+
+    backend = Mem0LibraryMemoryBackend(
+        config={"history_db_path": ".mem0/history.db"}, memory_client=FakeMemoryClient()
+    )
+
+    with pytest.raises(RuntimeError, match="connection refused"):
+        backend.delete("m1")
+    assert sleeps == []

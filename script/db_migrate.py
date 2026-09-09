@@ -12,7 +12,7 @@ def run_alembic(args: list[str]) -> int:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Thinkback database migration helper")
+    parser = argparse.ArgumentParser(description="innies-memory database migration helper")
     parser.add_argument("command", choices=["upgrade", "downgrade", "current", "history"])
     parser.add_argument("revision", nargs="?", default="head")
     parsed = parser.parse_args()

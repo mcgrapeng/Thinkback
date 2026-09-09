@@ -1,6 +1,6 @@
-from memory.backends import FakeMemoryBackend
-from memory.repositories import InMemoryMemoryRepository
-from memory.schemas import (
+from innies_memory.memory.backends import FakeMemoryBackend
+from innies_memory.memory.repositories import InMemoryMemoryRepository
+from innies_memory.memory.schemas import (
     AppendMemoryRequest,
     DeleteMemoryRequest,
     DeleteScope,
@@ -9,7 +9,7 @@ from memory.schemas import (
     RecallIntent,
     RecallMemoryRequest,
 )
-from memory.service import MemoryService
+from innies_memory.memory.service import MemoryService
 
 
 def append_round(service: MemoryService, index: int, text: str) -> None:
@@ -17,7 +17,6 @@ def append_round(service: MemoryService, index: int, text: str) -> None:
         AppendMemoryRequest(
             request_id=f"req-{index}",
             user_id="user-e2e",
-            character_id="char-e2e",
             session_id="session-e2e",
             round_id=f"round-{index}",
             round_index=index,
@@ -48,10 +47,9 @@ def test_fake_backend_full_chain_append_recall_delete_rebuild_recall() -> None:
     first_recall = service.recall(
         RecallMemoryRequest(
             user_id="user-e2e",
-            character_id="char-e2e",
             session_id="session-e2e",
             query="换工作",
-            intent=RecallIntent.MEMORY_QUERY,
+            intent=RecallIntent.CHAT,
         )
     )
 
@@ -66,7 +64,6 @@ def test_fake_backend_full_chain_append_recall_delete_rebuild_recall() -> None:
         DeleteMemoryRequest(
             request_id="delete-e2e",
             user_id="user-e2e",
-            character_id="char-e2e",
             scope=DeleteScope.MEMORY,
             operation_id="delete-e2e-op",
             memory_id=memory_id,
@@ -76,10 +73,9 @@ def test_fake_backend_full_chain_append_recall_delete_rebuild_recall() -> None:
     deleted_recall = service.recall(
         RecallMemoryRequest(
             user_id="user-e2e",
-            character_id="char-e2e",
             session_id="session-e2e",
             query="睡觉",
-            intent=RecallIntent.PREFERENCE,
+            intent=RecallIntent.CHAT,
         )
     )
 
@@ -89,17 +85,15 @@ def test_fake_backend_full_chain_append_recall_delete_rebuild_recall() -> None:
         RebuildMemoryRequest(
             request_id="rebuild-e2e",
             user_id="user-e2e",
-            character_id="char-e2e",
             operation_id="rebuild-e2e-op",
         )
     )
     final_recall = service.recall(
         RecallMemoryRequest(
             user_id="user-e2e",
-            character_id="char-e2e",
             session_id="session-e2e",
             query="换工作",
-            intent=RecallIntent.MEMORY_QUERY,
+            intent=RecallIntent.CHAT,
         )
     )
 

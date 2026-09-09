@@ -1,12 +1,14 @@
 import json
+import socket
 import subprocess
+import sys
 from io import BytesIO
+from pathlib import Path
 from urllib.error import HTTPError, URLError
 
-from script import real_mem0_quality_regression
+from script import real_mem0_p0_short_pressure, real_mem0_quality_regression
 from script.build_p0_pressure_final_report import build_final_report
 from script.real_mem0_p0_fault_injection import (
-    _start_api_process,
     _wait_for_readiness,
     build_fault_injection_report,
     build_library_fault_scenario_specs,
@@ -45,12 +47,10 @@ from script.real_mem0_quality_regression import (
     _is_transient_http_failure,
     _is_transient_network_failure,
     _post_json,
-    build_post_delete_quality_cases,
-    build_production_quality_cases,
     build_quality_report,
 )
 
-QUALITY_REPORT_PREFIX = "AI虚拟社交记忆服务首版主链路质量评测报告"
+QUALITY_REPORT_PREFIX = "innies-memory首版主链路质量评测报告"
 
 
 def test_quality_report_counts_recall_precision_false_positive_and_conflicts() -> None:
@@ -80,7 +80,9 @@ def test_quality_report_counts_recall_precision_false_positive_and_conflicts() -
     results = [
         QueryResult(case_name="nickname", recalled_text="User prefers to be called 小鹏"),
         QueryResult(case_name="negative-dog", recalled_text=""),
-        QueryResult(case_name="location", recalled_text="User lives in 上海\nUser previously lived in 杭州"),
+        QueryResult(
+            case_name="location", recalled_text="User lives in 上海\nUser previously lived in 杭州"
+        ),
     ]
 
     report = build_quality_report(cases, results, active_memory_count=8, active_after_rebuild=8)
@@ -93,32 +95,6 @@ def test_quality_report_counts_recall_precision_false_positive_and_conflicts() -
     assert report["conflict_pollution_rate"] == 1 / 3
     assert report["passed"] is False
     assert report["failed_cases"] == ["location"]
-
-
-def test_negative_quality_case_allows_unrelated_clean_l3_items() -> None:
-    cases = [
-        EvaluationCase(
-            name="negative-phone",
-            category="negative_control",
-            query="用户现在用什么手机？",
-            expected_terms=[],
-            forbidden_terms=["iPhone", "Android", "手机", "phone"],
-        ),
-    ]
-    results = [
-        QueryResult(
-            case_name="negative-phone",
-            recalled_text="User communication preference: 简洁直接的建议",
-            l3_count=1,
-            l3_contents=["User communication preference: 简洁直接的建议"],
-        ),
-    ]
-
-    report = build_quality_report(cases, results, active_memory_count=1, active_after_rebuild=1)
-
-    assert report["case_pass_rate"] == 1.0
-    assert report["false_positive_rate"] == 0.0
-    assert report["failed_cases"] == []
 
 
 def test_quality_report_includes_item_precision_top1_and_mrr() -> None:
@@ -221,17 +197,16 @@ def test_quality_report_includes_case_details_and_category_metrics() -> None:
     }
 
 
-def test_quality_scope_round_ids_are_unique_across_characters() -> None:
+def test_quality_scope_round_ids_are_unique_across_sessions() -> None:
     scope = QualityScope(
         run_id="quality-run",
         user_id="user-1",
-        character_id="character-a",
         session_id="session-a",
     )
-    other_scope = scope.for_character("character-b", "session-b")
+    other_scope = scope.for_session("session-b")
 
     assert scope.user_id == other_scope.user_id
-    assert scope.character_id != other_scope.character_id
+    assert scope.session_id != other_scope.session_id
     assert scope.round_id(1) != other_scope.round_id(1)
 
 
@@ -239,41 +214,20 @@ def test_quality_scope_round_ids_are_unique_across_users() -> None:
     scope = QualityScope(
         run_id="quality-run",
         user_id="user-1",
-        character_id="character-a",
         session_id="session-a",
     )
     other_scope = scope.for_user("user-2", "session-b")
 
     assert scope.user_id != other_scope.user_id
-    assert scope.character_id == other_scope.character_id
     assert scope.round_id(1) != other_scope.round_id(1)
-
-
-def test_quality_scope_identifiers_fit_memory_task_database_columns() -> None:
-    run_id = "real-quality-20260510T152500-556362f2"
-    scope = QualityScope(
-        run_id=run_id,
-        user_id=f"{run_id}-user",
-        character_id=f"{run_id}-lifecycle-character",
-        session_id=f"{run_id}-lifecycle-session-main",
-    )
-
-    # 中文注释：真实库 tb_memory_task 的这些字段是 varchar(128)，评测 ID 不能只追求可读而超长。
-    operation_id = scope.operation_id("rebuild-after-memory-session-delete")
-
-    assert len(scope.request_id("rebuild-after-memory-session-delete")) <= 128
-    assert len(operation_id) <= 113
-    assert len(f"memory-rebuild:{operation_id}") <= 128
-    assert len(f"memory-delete:{operation_id}") <= 128
-    assert len(scope.round_id(99)) <= 113
-    assert len(f"memory-extract:{scope.round_id(99)}") <= 128
-    assert operation_id.endswith("rebuild-after-memory-session-delete-op")
 
 
 def test_quality_report_includes_request_metrics() -> None:
     metrics = RequestMetrics(request_count=4, retry_count=2, transient_failure_count=2)
 
-    report = build_quality_report([], [], active_memory_count=0, active_after_rebuild=0, request_metrics=metrics)
+    report = build_quality_report(
+        [], [], active_memory_count=0, active_after_rebuild=0, request_metrics=metrics
+    )
 
     assert report["request_metrics"] == {
         "request_count": 4,
@@ -290,7 +244,9 @@ def test_quality_report_includes_latency_metrics() -> None:
     latency.record("append", 0.030)
     latency.record("recall", 0.100)
 
-    report = build_quality_report([], [], active_memory_count=0, active_after_rebuild=0, latency_metrics=latency)
+    report = build_quality_report(
+        [], [], active_memory_count=0, active_after_rebuild=0, latency_metrics=latency
+    )
 
     assert report["latency_ms"]["append"] == {"p50": 20, "p95": 30, "p99": 30}
     assert report["latency_ms"]["recall"] == {"p50": 100, "p95": 100, "p99": 100}
@@ -323,8 +279,6 @@ def test_quality_report_exposes_quality_stable_metric_fields() -> None:
     assert report["delete_all_residue_rate"] is None
     assert report["rebuild_resurrection_rate"] is None
     assert report["cross_user_leak_rate"] is None
-    assert report["cross_character_leak_rate"] is None
-    assert report["roleplay_real_mix_rate"] is None
     assert report["dirty_summary_recall_rate"] is None
     assert report["source_ref_loss_rate"] is None
     assert report["critical_slot_pass_rate"] is None
@@ -336,55 +290,10 @@ def test_quality_report_exposes_quality_stable_metric_fields() -> None:
     assert report["metric_automation_status"]["recall_at_10"] == "automatic"
     assert report["metric_automation_status"]["irrelevant_l3_per_query"] == "automatic"
     assert report["metric_automation_status"]["delete_memory_residue_rate"] == "case_gate"
-    assert report["metric_automation_status"]["delete_session_residue_rate"] == "case_gate"
-    assert report["metric_automation_status"]["delete_all_residue_rate"] == "case_gate"
     assert report["metric_automation_status"]["cross_user_leak_rate"] == "case_gate"
-    assert report["metric_automation_status"]["known_drift_regression_pass_rate"] == "automatic"
 
 
-def test_production_quality_dataset_has_broader_case_coverage() -> None:
-    cases = build_production_quality_cases()
-    names = {case.name for case in cases}
-    category_counts: dict[str, int] = {}
-    tagged_counts: dict[str, int] = {}
-    for case in cases:
-        category_counts[case.category] = category_counts.get(case.category, 0) + 1
-        for tag in case.metric_tags:
-            tagged_counts[tag] = tagged_counts.get(tag, 0) + 1
-
-    assert len(cases) >= 30
-    assert category_counts["slot_conflict"] >= 12
-    assert category_counts["negative_control"] >= 6
-    assert category_counts["isolation"] >= 6
-    assert category_counts["expression_drift"] >= 6
-    assert tagged_counts["known_drift_regression_pass_rate"] >= 6
-    assert tagged_counts["cross_user_leak_rate"] >= 2
-    assert tagged_counts["cross_character_leak_rate"] >= 2
-    assert tagged_counts["roleplay_real_mix_rate"] >= 2
-    assert "negative-never-shared-phone" in names
-    assert "cat-current-english-paraphrase" in names
-
-
-def test_post_delete_quality_dataset_covers_memory_session_all_and_rebuild() -> None:
-    cases = build_post_delete_quality_cases()
-    names = {case.name for case in cases}
-    tagged_counts: dict[str, int] = {}
-    for case in cases:
-        for tag in case.metric_tags:
-            tagged_counts[tag] = tagged_counts.get(tag, 0) + 1
-
-    assert len(cases) >= 8
-    assert "deleted-cat-after-delete" in names
-    assert "deleted-session-drink-after-delete" in names
-    assert "deleted-all-nickname-after-delete" in names
-    assert "deleted-all-nickname-after-rebuild" in names
-    assert tagged_counts["delete_memory_residue_rate"] >= 1
-    assert tagged_counts["delete_session_residue_rate"] >= 2
-    assert tagged_counts["delete_all_residue_rate"] >= 2
-    assert tagged_counts["rebuild_resurrection_rate"] >= 3
-
-
-def test_quality_report_computes_scope_leak_rates_from_tagged_cases() -> None:
+def test_quality_report_computes_user_leak_rate_from_tagged_cases() -> None:
     cases = [
         EvaluationCase(
             name="cross-user-clean",
@@ -395,63 +304,52 @@ def test_quality_report_computes_scope_leak_rates_from_tagged_cases() -> None:
             metric_tags=("cross_user_leak_rate",),
         ),
         EvaluationCase(
-            name="cross-character-leak",
+            name="cross-user-leak",
             category="isolation",
             query="用户的猫叫什么？",
             expected_terms=["麻薯"],
-            forbidden_terms=["泡芙"],
-            metric_tags=("cross_character_leak_rate",),
-        ),
-        EvaluationCase(
-            name="roleplay-clean",
-            category="isolation",
-            query="剧情设定里的猫叫什么？",
-            expected_terms=["露露"],
-            forbidden_terms=["麻薯"],
-            metric_tags=("roleplay_real_mix_rate",),
+            forbidden_terms=["奶盖"],
+            metric_tags=("cross_user_leak_rate",),
         ),
     ]
     results = [
         QueryResult(case_name="cross-user-clean", recalled_text="User has a cat named 麻薯"),
-        QueryResult(case_name="cross-character-leak", recalled_text="User has a cat named 泡芙"),
-        QueryResult(case_name="roleplay-clean", recalled_text="Story-world cat is 露露"),
+        QueryResult(case_name="cross-user-leak", recalled_text="User has a cat named 奶盖"),
     ]
 
-    report = build_quality_report(cases, results, active_memory_count=3, active_after_rebuild=3)
+    report = build_quality_report(cases, results, active_memory_count=2, active_after_rebuild=2)
 
-    assert report["cross_user_leak_rate"] == 0.0
-    assert report["cross_character_leak_rate"] == 1.0
-    assert report["roleplay_real_mix_rate"] == 0.0
+    assert report["cross_user_leak_rate"] == 0.5
     assert {
-        "metric": "cross_character_leak_rate",
-        "actual": 1.0,
+        "metric": "cross_user_leak_rate",
+        "actual": 0.5,
         "expected": "<= 0",
     } in report["failed_metrics"]
 
 
-def test_quality_report_scope_leak_rates_only_count_l3_content() -> None:
+def test_quality_report_user_leak_rate_only_counts_l3_content() -> None:
     cases = [
         EvaluationCase(
-            name="roleplay-cat",
+            name="cross-user-cat",
             category="isolation",
-            query="剧情设定里的猫叫什么？",
-            expected_terms=["露露"],
-            forbidden_terms=["麻薯"],
-            metric_tags=("roleplay_real_mix_rate",),
+            query="用户的猫叫什么？",
+            expected_terms=["麻薯"],
+            forbidden_terms=["奶盖"],
+            metric_tags=("cross_user_leak_rate",),
         ),
     ]
     results = [
         QueryResult(
-            case_name="roleplay-cat",
-            recalled_text="User has a cat named 露露",
-            all_recalled_text="L1: 用户现实里的猫叫麻薯\nL3: User has a cat named 露露",
-            l3_contents=["User has a cat named 露露"],
+            case_name="cross-user-cat",
+            recalled_text="User has a cat named 麻薯",
+            all_recalled_text="L1: 另一个用户的猫叫奶盖\nL3: User has a cat named 麻薯",
+            l3_contents=["User has a cat named 麻薯"],
         ),
     ]
 
     report = build_quality_report(cases, results, active_memory_count=1, active_after_rebuild=1)
 
-    assert report["roleplay_real_mix_rate"] == 0.0
+    assert report["cross_user_leak_rate"] == 0.0
     assert report["failed_metrics"] == []
 
 
@@ -476,7 +374,11 @@ def test_quality_report_computes_delete_and_rebuild_rates_from_tagged_cases() ->
     ]
     results = [
         QueryResult(case_name="deleted-cat-after-delete", recalled_text="", l3_count=0),
-        QueryResult(case_name="deleted-cat-after-rebuild", recalled_text="User has a cat named 麻薯", l3_count=1),
+        QueryResult(
+            case_name="deleted-cat-after-rebuild",
+            recalled_text="User has a cat named 麻薯",
+            l3_count=1,
+        ),
     ]
 
     report = build_quality_report(cases, results, active_memory_count=10, active_after_rebuild=10)
@@ -487,56 +389,6 @@ def test_quality_report_computes_delete_and_rebuild_rates_from_tagged_cases() ->
         "metric": "rebuild_resurrection_rate",
         "actual": 1.0,
         "expected": "<= 0",
-    } in report["failed_metrics"]
-
-
-def test_quality_report_computes_session_all_delete_and_drift_gates() -> None:
-    cases = [
-        EvaluationCase(
-            name="session-drink-clean",
-            category="delete_session",
-            query="用户喜欢喝什么？",
-            expected_terms=[],
-            forbidden_terms=["茶"],
-            metric_tags=("delete_session_residue_rate",),
-        ),
-        EvaluationCase(
-            name="all-nickname-leak",
-            category="delete_all",
-            query="怎么称呼用户？",
-            expected_terms=[],
-            forbidden_terms=["小鹏"],
-            metric_tags=("delete_all_residue_rate",),
-        ),
-        EvaluationCase(
-            name="drift-cat-missing",
-            category="expression_drift",
-            query="What is the user's cat called?",
-            expected_terms=["麻薯"],
-            forbidden_terms=["团子"],
-            metric_tags=("known_drift_regression_pass_rate",),
-        ),
-    ]
-    results = [
-        QueryResult(case_name="session-drink-clean", recalled_text="", l3_count=0),
-        QueryResult(case_name="all-nickname-leak", recalled_text="User prefers 小鹏", l3_count=1),
-        QueryResult(case_name="drift-cat-missing", recalled_text="", l3_count=0),
-    ]
-
-    report = build_quality_report(cases, results, active_memory_count=0, active_after_rebuild=0)
-
-    assert report["delete_session_residue_rate"] == 0.0
-    assert report["delete_all_residue_rate"] == 1.0
-    assert report["known_drift_regression_pass_rate"] == 0.0
-    assert {
-        "metric": "delete_all_residue_rate",
-        "actual": 1.0,
-        "expected": "<= 0",
-    } in report["failed_metrics"]
-    assert {
-        "metric": "known_drift_regression_pass_rate",
-        "actual": 0.0,
-        "expected": ">= 0.95",
     } in report["failed_metrics"]
 
 
@@ -619,7 +471,8 @@ def test_real_quality_runner_writes_markdown_with_previous_comparison(tmp_path) 
         stdout="old",
         stderr="",
     )
-    (tmp_path / f"{QUALITY_REPORT_PREFIX}-real-quality-old.json").write_text(
+    previous["generated_at"] = "2026-05-11T00:00:00+00:00"
+    (tmp_path / f"{QUALITY_REPORT_PREFIX}-20260511-001.json").write_text(
         json.dumps(previous),
         encoding="utf-8",
     )
@@ -661,12 +514,13 @@ def test_real_quality_runner_writes_markdown_with_previous_comparison(tmp_path) 
         stdout="current",
         stderr="",
     )
-    current["generated_at"] = "2026-05-11T01:02:03+00:00"
+    current["generated_at"] = "2026-05-11T01:00:00+00:00"
 
     artifacts = write_quality_evaluation_report_artifacts(tmp_path, current)
     markdown = artifacts.markdown_path.read_text(encoding="utf-8")
 
-    assert artifacts.json_path.name == f"{QUALITY_REPORT_PREFIX}-20260511-001.json"
+    assert artifacts.json_path.name == f"{QUALITY_REPORT_PREFIX}-20260511-002.json"
+    assert artifacts.markdown_path.name == f"{QUALITY_REPORT_PREFIX}-20260511-002.md"
     assert f"# {QUALITY_REPORT_PREFIX}" in markdown
     assert "| 对比报告 | `real-quality-old` |" in markdown
     assert "| `recall_at_10` | 0.95 | 1.0 | +0.05 | 提升 |" in markdown
@@ -675,155 +529,97 @@ def test_real_quality_runner_writes_markdown_with_previous_comparison(tmp_path) 
     assert "| `irrelevant_l3_per_query` | 1.2 | 0.8 | -0.4 | 提升 |" in markdown
     assert "| `delete_memory` | 1 | 1 | 1.0 |" in markdown
     assert "| `rebuild` | 1 | 1 | 1.0 |" in markdown
-    assert "| `delete_session_residue_rate` | 硬门禁 | - |" in markdown
-    assert "| `delete_all_residue_rate` | 硬门禁 | - |" in markdown
-    assert "| `known_drift_regression_pass_rate` | 硬门禁 | - |" in markdown
 
 
-def test_real_quality_runner_uses_date_and_incrementing_sequence_for_report_suffix(tmp_path) -> None:
+def test_real_quality_runner_default_report_dir_is_memory_report() -> None:
+    from script.run_real_mem0_quality_evaluation import DEFAULT_DOCS_DIR
+
+    assert DEFAULT_DOCS_DIR.as_posix() == "docs/memory/report"
+
+
+def test_quality_report_entrypoints_use_memory_report_directory_and_current_docs() -> None:
+    runner = Path("script/run_real_mem0_quality_evaluation.py").read_text(encoding="utf-8")
+    operations = Path("docs/memory/Innies记忆服务部署与运维交付文档.md").read_text(encoding="utf-8")
+
+    assert 'DEFAULT_DOCS_DIR = Path("docs/memory/report")' in runner
+    assert "script/run_real_mem0_quality_evaluation.py" in operations
+    assert "script/real_mem0_quality_regression.py" in operations
+    assert "由 CI、发布流程或人工归档提供，路径写入发布准入记录" in operations
+    assert "默认写入 `docs/`" not in operations
+    assert "默认目录是 `docs/`" not in operations
+    assert "--docs-dir docs" not in runner
+    assert "--docs-dir docs/reports" not in runner
+    assert "docs/innies-memory首版主链路质量评测报告" not in runner
+
+
+def test_p0_pressure_defaults_and_docs_use_memory_report_directory() -> None:
+    scripts = "\n".join(
+        Path(path).read_text(encoding="utf-8")
+        for path in [
+            "script/real_mem0_p0_short_pressure.py",
+            "script/real_mem0_p0_preprod_pressure.py",
+            "script/real_mem0_p0_fault_injection.py",
+            "script/real_mem0_p0_representative_replay.py",
+        ]
+    )
+    operations = Path("docs/memory/Innies记忆服务部署与运维交付文档.md").read_text(encoding="utf-8")
+
+    assert 'default="docs/memory/report"' in scripts
+    assert 'default="docs/reports"' not in scripts
+    assert "script/real_mem0_stability_preprod.py" in operations
+
+
+def test_stability_preprod_compat_entrypoint_runs_as_script_help() -> None:
+    completed = subprocess.run(
+        [sys.executable, "script/real_mem0_stability_preprod.py", "--help"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 0
+    assert "Run P0 pre-production pressure phases." in completed.stdout
+    assert "ModuleNotFoundError" not in completed.stderr
+
+
+def test_real_quality_runner_report_suffix_uses_date_and_next_sequence(tmp_path) -> None:
     from script.run_real_mem0_quality_evaluation import (
         build_quality_evaluation_run_report,
         write_quality_evaluation_report_artifacts,
     )
 
-    (tmp_path / f"{QUALITY_REPORT_PREFIX}-20260511-001.json").write_text("{}", encoding="utf-8")
-    (tmp_path / f"{QUALITY_REPORT_PREFIX}-20260511-002.md").write_text("# old", encoding="utf-8")
-    (tmp_path / f"{QUALITY_REPORT_PREFIX}-real-quality-legacy.json").write_text("{}", encoding="utf-8")
-
-    current = build_quality_evaluation_run_report(
-        run_id="real-quality-new",
+    existing = build_quality_evaluation_run_report(
+        run_id="real-quality-existing",
         child_returncode=0,
-        quality_report={"passed": True, "case_count": 1, "case_pass_rate": 1.0},
-        post_delete_report={"passed": True, "case_count": 1},
-        stdout="current",
+        quality_report={"passed": True, "case_count": 1, "category_metrics": {}},
+        post_delete_report={"passed": True, "case_count": 1, "category_metrics": {}},
+        stdout="existing",
         stderr="",
     )
-    current["generated_at"] = "2026-05-11T01:02:03+00:00"
-
-    artifacts = write_quality_evaluation_report_artifacts(tmp_path, current)
-
-    assert artifacts.json_path.name == f"{QUALITY_REPORT_PREFIX}-20260511-003.json"
-    assert artifacts.markdown_path.name == f"{QUALITY_REPORT_PREFIX}-20260511-003.md"
-
-
-def test_real_quality_runner_markdown_explains_dataset_boundary_and_database(tmp_path) -> None:
-    from script.run_real_mem0_quality_evaluation import (
-        build_quality_evaluation_run_report,
-        write_quality_evaluation_report_artifacts,
+    existing["generated_at"] = "2026-05-11T00:00:00+00:00"
+    (tmp_path / f"{QUALITY_REPORT_PREFIX}-20260511-001.json").write_text(
+        json.dumps(existing),
+        encoding="utf-8",
+    )
+    (tmp_path / f"{QUALITY_REPORT_PREFIX}-20260510-009.json").write_text(
+        json.dumps(existing),
+        encoding="utf-8",
     )
 
     current = build_quality_evaluation_run_report(
-        run_id="real-quality-dataset-boundary",
+        run_id="real-quality-current",
         child_returncode=0,
-        quality_report={
-            "passed": True,
-            "case_count": 15,
-            "case_pass_rate": 1.0,
-            "recall_at_10": 1.0,
-            "precision_at_10": 1.0,
-            "conflict_pollution_rate": 0.0,
-            "false_positive_rate": 0.0,
-            "duplicate_active_rate": 0.0,
-            "cross_user_leak_rate": 0.0,
-            "cross_character_leak_rate": 0.0,
-            "roleplay_real_mix_rate": 0.0,
-            "failed_cases": [],
-            "failed_metrics": [],
-            "category_metrics": {
-                "slot_conflict": {"case_count": 10, "passed_count": 10, "pass_rate": 1.0},
-                "negative_control": {"case_count": 1, "passed_count": 1, "pass_rate": 1.0},
-                "isolation": {"case_count": 4, "passed_count": 4, "pass_rate": 1.0},
-            },
-            "metric_automation_status": {},
-        },
-        post_delete_report={
-            "passed": True,
-            "case_count": 3,
-            "delete_memory_residue_rate": 0.0,
-            "rebuild_resurrection_rate": 0.0,
-            "failed_cases": [],
-            "failed_metrics": [],
-            "category_metrics": {
-                "delete_memory": {"case_count": 1, "passed_count": 1, "pass_rate": 1.0},
-                "rebuild": {"case_count": 2, "passed_count": 2, "pass_rate": 1.0},
-            },
-        },
+        quality_report={"passed": True, "case_count": 1, "category_metrics": {}},
+        post_delete_report={"passed": True, "case_count": 1, "category_metrics": {}},
         stdout="current",
         stderr="",
-        postgres_database="liaoriver_memory",
     )
+    current["generated_at"] = "2026-05-11T01:00:00+00:00"
 
     artifacts = write_quality_evaluation_report_artifacts(tmp_path, current)
-    markdown = artifacts.markdown_path.read_text(encoding="utf-8")
 
-    assert "| PostgreSQL 数据库 | `liaoriver_memory` |" in markdown
-    assert "| 质量 case 总数 | 18 |" in markdown
-    assert "| 首版主链路质量门禁 | 足够支撑，当前报告已通过 |" in markdown
-    assert "不代表广义生产级泛化覆盖已经充分" in markdown
-    assert "按本轮要求，本报告不包含稳定性测试" in markdown
-
-
-def test_real_quality_runner_markdown_marks_production_quality_dataset_sufficient(tmp_path) -> None:
-    from script.run_real_mem0_quality_evaluation import (
-        build_quality_evaluation_run_report,
-        write_quality_evaluation_report_artifacts,
-    )
-
-    current = build_quality_evaluation_run_report(
-        run_id="real-quality-production-dataset",
-        child_returncode=0,
-        quality_report={
-            "passed": True,
-            "case_count": 31,
-            "case_pass_rate": 1.0,
-            "recall_at_10": 1.0,
-            "precision_at_10": 1.0,
-            "conflict_pollution_rate": 0.0,
-            "false_positive_rate": 0.0,
-            "duplicate_active_rate": 0.0,
-            "cross_user_leak_rate": 0.0,
-            "cross_character_leak_rate": 0.0,
-            "roleplay_real_mix_rate": 0.0,
-            "known_drift_regression_pass_rate": 1.0,
-            "failed_cases": [],
-            "failed_metrics": [],
-            "category_metrics": {
-                "slot_conflict": {"case_count": 12, "passed_count": 12, "pass_rate": 1.0},
-                "negative_control": {"case_count": 6, "passed_count": 6, "pass_rate": 1.0},
-                "isolation": {"case_count": 7, "passed_count": 7, "pass_rate": 1.0},
-                "expression_drift": {"case_count": 6, "passed_count": 6, "pass_rate": 1.0},
-            },
-            "metric_automation_status": {},
-        },
-        post_delete_report={
-            "passed": True,
-            "case_count": 9,
-            "delete_memory_residue_rate": 0.0,
-            "delete_session_residue_rate": 0.0,
-            "delete_all_residue_rate": 0.0,
-            "rebuild_resurrection_rate": 0.0,
-            "failed_cases": [],
-            "failed_metrics": [],
-            "category_metrics": {
-                "delete_memory": {"case_count": 1, "passed_count": 1, "pass_rate": 1.0},
-                "delete_session": {"case_count": 2, "passed_count": 2, "pass_rate": 1.0},
-                "delete_all": {"case_count": 2, "passed_count": 2, "pass_rate": 1.0},
-                "rebuild": {"case_count": 4, "passed_count": 4, "pass_rate": 1.0},
-            },
-        },
-        stdout="current",
-        stderr="",
-        postgres_database="liaoriver_memory",
-    )
-
-    artifacts = write_quality_evaluation_report_artifacts(tmp_path, current)
-    markdown = artifacts.markdown_path.read_text(encoding="utf-8")
-
-    assert "| 质量 case 总数 | 40 |" in markdown
-    assert "| 首版核心质量覆盖 | 达到 |" in markdown
-    assert "核心质量风险已达到首版门禁" in markdown
-    assert "不代表广义生产级泛化覆盖已经充分" in markdown
-    assert "已覆盖生产级质量风险" not in markdown
+    assert artifacts.json_path.name == f"{QUALITY_REPORT_PREFIX}-20260511-002.json"
+    assert artifacts.markdown_path.name == f"{QUALITY_REPORT_PREFIX}-20260511-002.md"
 
 
 def test_real_quality_runner_writes_failure_report_without_child_json(tmp_path) -> None:
@@ -838,7 +634,7 @@ def test_real_quality_runner_writes_failure_report_without_child_json(tmp_path) 
         quality_report=None,
         post_delete_report=None,
         stdout="",
-        stderr="RuntimeError: OPENAI_API_KEY and QDRANT_URL are required",
+        stderr="RuntimeError: OPENAI_API_KEY and MILVUS_URL are required",
     )
 
     artifacts = write_quality_evaluation_report_artifacts(tmp_path, current)
@@ -847,57 +643,44 @@ def test_real_quality_runner_writes_failure_report_without_child_json(tmp_path) 
     assert current["passed"] is False
     assert current["failure_phase"] == "environment_or_execution"
     assert "| 最终结论 | 未通过 |" in markdown
-    assert "OPENAI_API_KEY and QDRANT_URL are required" in markdown
+    assert "OPENAI_API_KEY and MILVUS_URL are required" in markdown
 
 
-def test_real_quality_runner_writes_failure_report_on_child_timeout(monkeypatch, tmp_path) -> None:
-    from script.run_real_mem0_quality_evaluation import run_real_quality_evaluation
+def test_real_quality_runner_cli_exits_nonzero_when_report_fails(monkeypatch, tmp_path) -> None:
+    from script import run_real_mem0_quality_evaluation
+    from script.run_real_mem0_quality_evaluation import build_quality_evaluation_run_report
 
-    def fake_run(*args, **kwargs):  # type: ignore[no-untyped-def]
-        raise subprocess.TimeoutExpired(
-            cmd=kwargs.get("args") or args[0],
-            timeout=12,
-            output="quality scope: run_id=real-quality-timeout\nappend started",
-            stderr="",
-        )
+    failing_report = build_quality_evaluation_run_report(
+        run_id="real-quality-failed",
+        child_returncode=1,
+        quality_report=None,
+        post_delete_report=None,
+        stdout="",
+        stderr="RuntimeError: OPENAI_API_KEY and MILVUS_URL are required",
+    )
+    artifacts = run_real_mem0_quality_evaluation.write_quality_evaluation_report_artifacts(
+        tmp_path, failing_report
+    )
 
-    monkeypatch.setattr("script.run_real_mem0_quality_evaluation.subprocess.run", fake_run)
+    monkeypatch.setattr(
+        run_real_mem0_quality_evaluation,
+        "run_real_quality_evaluation",
+        lambda _docs_dir: artifacts,
+    )
+    monkeypatch.setattr(sys, "argv", ["run_real_mem0_quality_evaluation.py"])
 
-    artifacts = run_real_quality_evaluation(tmp_path, timeout_seconds=12)
-    report = json.loads(artifacts.json_path.read_text(encoding="utf-8"))
-    markdown = artifacts.markdown_path.read_text(encoding="utf-8")
-
-    assert report["run_id"] == "real-quality-timeout"
-    assert report["passed"] is False
-    assert report["failure_phase"] == "environment_or_execution"
-    assert "timed out after 12s" in report["stderr_tail"]
-    assert "timed out after 12s" in markdown
-
-
-def test_real_quality_runner_default_timeout_allows_slow_real_model_calls(monkeypatch) -> None:
-    from script.run_real_mem0_quality_evaluation import _quality_timeout_seconds_from_environment
-
-    monkeypatch.delenv("QUALITY_EVALUATION_TIMEOUT_SECONDS", raising=False)
-
-    assert _quality_timeout_seconds_from_environment() == 1800
+    try:
+        run_real_mem0_quality_evaluation.main()
+    except SystemExit as exc:
+        assert exc.code == 1
+    else:
+        raise AssertionError("main() should exit non-zero when the generated report failed")
 
 
-def test_quality_report_does_not_count_duplicate_slots_across_context_partitions() -> None:
+def test_quality_report_counts_duplicate_slots_without_role_partitions() -> None:
     active_memories = [
-        MemorySnapshot(
-            memory_text="User has a cat named 麻薯",
-            memory_status="active",
-            context_type="real_user",
-            fact_subject="user",
-            roleplay_mode="off",
-        ),
-        MemorySnapshot(
-            memory_text="In the story world, the user has a cat named 露露",
-            memory_status="active",
-            context_type="roleplay",
-            fact_subject="story_world",
-            roleplay_mode="on",
-        ),
+        MemorySnapshot(memory_text="User has a cat named 麻薯", memory_status="active"),
+        MemorySnapshot(memory_text="User has a cat named 露露", memory_status="active"),
     ]
 
     report = build_quality_report(
@@ -908,7 +691,7 @@ def test_quality_report_does_not_count_duplicate_slots_across_context_partitions
         active_memory_snapshots=active_memories,
     )
 
-    assert report["duplicate_active_rate"] == 0.0
+    assert report["duplicate_active_rate"] == 0.5
 
 
 def test_quality_report_lists_failed_metrics_when_gate_fails_without_failed_cases() -> None:
@@ -997,18 +780,6 @@ def test_http_502_timeout_is_transient_for_quality_runner() -> None:
     assert _is_transient_http_failure(exc) is True
 
 
-def test_http_502_bad_gateway_reason_is_transient_for_quality_runner() -> None:
-    exc = HTTPError(
-        url="http://127.0.0.1:18082/memory/recall",
-        code=502,
-        msg="Bad Gateway",
-        hdrs={},
-        fp=BytesIO(b'{"detail":"mem0 library search failed"}'),
-    )
-
-    assert _is_transient_http_failure(exc) is True
-
-
 def test_post_json_retries_transient_http_failure(monkeypatch) -> None:
     attempts = 0
 
@@ -1092,47 +863,9 @@ def test_post_json_retries_transient_network_timeout(monkeypatch) -> None:
     assert metrics.transient_failure_count == 1
 
 
-def test_post_json_retries_connection_refused_during_quality_run(monkeypatch) -> None:
-    attempts = 0
-
-    class Response:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *args) -> None:  # type: ignore[no-untyped-def]
-            return None
-
-        def read(self) -> bytes:
-            return b'{"status":"completed"}'
-
-    def fake_urlopen(*args, **kwargs):  # type: ignore[no-untyped-def]
-        nonlocal attempts
-        attempts += 1
-        if attempts == 1:
-            raise URLError(ConnectionRefusedError(61, "Connection refused"))
-        return Response()
-
-    metrics = RequestMetrics()
-    monkeypatch.setattr(real_mem0_quality_regression, "urlopen", fake_urlopen)
-
-    response = _post_json(
-        "http://127.0.0.1:18082",
-        "/memory/append",
-        {"hello": "world"},
-        request_metrics=metrics,
-        max_attempts=2,
-        sleep_seconds=0,
-    )
-
-    assert response == {"status": "completed"}
-    assert attempts == 2
-    assert metrics.retry_count == 1
-    assert metrics.transient_failure_count == 1
-
-
 def test_post_json_records_non_transient_network_failure(monkeypatch) -> None:
     def fake_urlopen(*args, **kwargs):  # type: ignore[no-untyped-def]
-        raise URLError("name or service not known")
+        raise URLError("connection refused")
 
     metrics = RequestMetrics()
     monkeypatch.setattr(real_mem0_quality_regression, "urlopen", fake_urlopen)
@@ -1156,8 +889,7 @@ def test_post_json_records_non_transient_network_failure(monkeypatch) -> None:
 def test_network_timeout_is_transient_for_quality_runner() -> None:
     assert _is_transient_network_failure(TimeoutError("timed out")) is True
     assert _is_transient_network_failure(URLError("timed out")) is True
-    assert _is_transient_network_failure(URLError(ConnectionRefusedError(61, "Connection refused"))) is True
-    assert _is_transient_network_failure(URLError("name or service not known")) is False
+    assert _is_transient_network_failure(URLError("connection refused")) is False
 
 
 def test_pressure_suite_report_fails_when_any_gate_fails() -> None:
@@ -1307,9 +1039,19 @@ def test_render_pressure_suite_markdown_includes_gates_and_limitations() -> None
 
     markdown = render_pressure_suite_markdown(report)
 
-    assert "# Thinkback P0 压测报告" in markdown
+    assert "# innies-memory P0 压测报告" in markdown
     assert "| 整体结论 | 通过 |" in markdown
     assert "未执行 10 分钟 P0 soak test" in markdown
+
+
+def test_p0_short_pressure_cases_cover_representative_replay_categories() -> None:
+    categories = {case.category for case in real_mem0_p0_short_pressure._p0_cases()}
+
+    assert categories >= {
+        "slot_conflict",
+        "negative_control",
+        "isolation",
+    }
 
 
 def test_final_pressure_report_keeps_stress_latency_failure_visible(tmp_path) -> None:
@@ -1453,8 +1195,34 @@ def test_final_pressure_report_uses_latest_passing_50_concurrency_after_old_fail
     assert "`precision_at_10=1.0`" in content
     assert "`recall p95=888ms`" in content
     assert "P0 召回主链路在当前代表性并发下未退化" in content
-    assert "| 50 并发 recall / 100 请求 | `case_pass_rate=1.0`, `recall_at_10=1.0` | `p95=888ms`, `p99=971ms` | 通过，未观察到召回质量退化。 |" in content
+    assert (
+        "| 50 并发 recall / 100 请求 | `case_pass_rate=1.0`, `recall_at_10=1.0` | `p95=888ms`, `p99=971ms` | 通过，未观察到召回质量退化。 |"
+        in content
+    )
     assert "50 并发 recall p95 超门禁" not in content
+
+
+def test_final_pressure_report_uses_latest_pass_by_timestamp_not_input_order(
+    tmp_path,
+) -> None:
+    older_pass = _final_report_fixture("p0-short-older-pass", passed=True)
+    older_pass["ended_at"] = "2026-05-21T10:00:00+00:00"
+    older_pass["started_at"] = "2026-05-21T09:55:00+00:00"
+
+    newer_pass = _final_report_fixture("p0-short-newer-pass", passed=True)
+    newer_pass["ended_at"] = "2026-05-21T11:00:00+00:00"
+    newer_pass["started_at"] = "2026-05-21T10:55:00+00:00"
+
+    paths = []
+    for report in (newer_pass, older_pass):
+        path = tmp_path / f"{report['suite_id']}.json"
+        path.write_text(json.dumps(report), encoding="utf-8")
+        paths.append(path)
+    output_path = tmp_path / "final.md"
+
+    content = build_final_report(paths, output_path=output_path)
+
+    assert "| 最新通过报告 | `p0-short-newer-pass` |" in content
 
 
 def test_final_pressure_report_can_reference_preprod_summary(tmp_path) -> None:
@@ -1563,12 +1331,24 @@ def test_final_pressure_report_renders_partial_preprod_gaps_precisely(tmp_path) 
     content = build_final_report(paths, output_path=output_path, preprod_summary=preprod_summary)
 
     assert "`recall p95=795ms`" in content
-    assert "| Mem0/Qdrant/Postgres/Redis 故障注入 | 部分执行 | 已有故障注入报告，但仍有场景未通过或未覆盖。 |" in content
-    assert "| 资源饱和观测 | 未执行 | CPU、内存、连接池、队列等待、Qdrant 请求耗时和外部限流尚未形成固定报告。 |" in content
-    assert "| 10-15 分钟 baseline | 已执行短探针 | 已验证短时 10 并发 recall；尚未覆盖持续 10-15 分钟。 |" in content
+    assert (
+        "| Mem0/Milvus/Postgres/Redis 故障注入 | 部分执行 | 已有故障注入报告，但仍有场景未通过或未覆盖。 |"
+        in content
+    )
+    assert (
+        "| 资源饱和观测 | 未执行 | CPU、内存、连接池、队列等待、Milvus 请求耗时和外部限流尚未形成固定报告。 |"
+        in content
+    )
+    assert (
+        "| 10-15 分钟 baseline | 已执行短探针 | 已验证短时 10 并发 recall；尚未覆盖持续 10-15 分钟。 |"
+        in content
+    )
     assert "不能替代 15-30 分钟 stress、100 并发 spike" not in content
     assert "补齐10-15 分钟持续 baseline" in content
-    assert "10 分钟 P0 soak、代表性样本回放、Mem0/Qdrant/Postgres/Redis 故障注入、资源饱和观测" in content
+    assert (
+        "10 分钟 P0 soak、代表性样本回放、Mem0/Milvus/Postgres/Redis 故障注入、资源饱和观测"
+        in content
+    )
 
 
 def test_final_pressure_report_distinguishes_official_duration_from_probe(tmp_path) -> None:
@@ -1599,10 +1379,15 @@ def test_final_pressure_report_distinguishes_official_duration_from_probe(tmp_pa
         },
     }
 
-    content = build_final_report([report_path], output_path=output_path, preprod_summary=preprod_summary)
+    content = build_final_report(
+        [report_path], output_path=output_path, preprod_summary=preprod_summary
+    )
 
     assert "| stress | p95=795ms, p99=823ms | 未通过 |" in content
-    assert "| 15-30 分钟 50 并发 stress | 已执行短探针 | 已验证短时 50 并发 recall；尚未覆盖持续 15-30 分钟。 |" in content
+    assert (
+        "| 15-30 分钟 50 并发 stress | 已执行短探针 | 已验证短时 50 并发 recall；尚未覆盖持续 15-30 分钟。 |"
+        in content
+    )
     assert "| 100 并发 spike | 已执行完整恢复曲线 | 已验证 10 -> 100 -> 10 恢复曲线。 |" in content
     assert "不能替代 15-30 分钟 stress、100 并发 spike" not in content
     assert "完整 10 -> 100 -> 10 spike 恢复曲线" not in content
@@ -1636,18 +1421,19 @@ def test_final_pressure_report_marks_fault_and_replay_as_executed_when_preprod_p
         },
     }
 
-    content = build_final_report([report_path], output_path=output_path, preprod_summary=preprod_summary)
+    content = build_final_report(
+        [report_path], output_path=output_path, preprod_summary=preprod_summary
+    )
 
     assert (
-        "| Mem0/Qdrant/Postgres/Redis 故障注入 | 已执行 | "
+        "| Mem0/Milvus/Postgres/Redis 故障注入 | 已执行 | "
         "已验证外部依赖异常下的可观测失败和恢复。 |"
     ) in content
     assert (
-        "| 代表性样本回放 | 已执行 | "
-        "已覆盖当前 P0 工程构造代表性样本；后续继续接入线上样本分布。 |"
+        "| 代表性样本回放 | 已执行 | 已覆盖当前 P0 工程构造代表性样本；后续继续接入线上样本分布。 |"
     ) in content
     assert "| 资源饱和观测 | 未执行 |" in content
-    assert "代表性样本回放、Mem0/Qdrant/Postgres/Redis 故障注入" not in content
+    assert "代表性样本回放、Mem0/Milvus/Postgres/Redis 故障注入" not in content
 
 
 def test_final_pressure_report_distinguishes_failed_soak_from_missing_soak(tmp_path) -> None:
@@ -1671,7 +1457,9 @@ def test_final_pressure_report_distinguishes_failed_soak_from_missing_soak(tmp_p
         },
     }
 
-    content = build_final_report([report_path], output_path=output_path, preprod_summary=preprod_summary)
+    content = build_final_report(
+        [report_path], output_path=output_path, preprod_summary=preprod_summary
+    )
 
     assert (
         "| 10 分钟 P0 soak test | 已执行但未通过 | "
@@ -1701,7 +1489,14 @@ def test_preprod_report_requires_all_production_precheck_phases() -> None:
         started_at="2026-05-08T00:00:00+00:00",
         ended_at="2026-05-08T00:10:00+00:00",
         phase_reports={"baseline": [baseline]},
-        required_phases=["baseline", "stress", "spike", "soak", "fault_injection", "representative_replay"],
+        required_phases=[
+            "baseline",
+            "stress",
+            "spike",
+            "soak",
+            "fault_injection",
+            "representative_replay",
+        ],
     )
 
     assert report["requested_phases_passed"] is True
@@ -1756,13 +1551,26 @@ def test_preprod_report_accepts_short_stress_as_requested_probe_not_full_prechec
         started_at="2026-05-08T00:00:00+00:00",
         ended_at="2026-05-08T00:20:00+00:00",
         phase_reports={"stress": [stress]},
-        required_phases=["baseline", "stress", "spike", "soak", "fault_injection", "representative_replay"],
+        required_phases=[
+            "baseline",
+            "stress",
+            "spike",
+            "soak",
+            "fault_injection",
+            "representative_replay",
+        ],
     )
 
     assert report["requested_phases_passed"] is True
     assert report["production_precheck_passed"] is False
     assert report["failed_phases"] == []
-    assert report["missing_phases"] == ["baseline", "spike", "soak", "fault_injection", "representative_replay"]
+    assert report["missing_phases"] == [
+        "baseline",
+        "spike",
+        "soak",
+        "fault_injection",
+        "representative_replay",
+    ]
     assert report["phase_results"]["stress"]["representative_probe_passed"] is True
     assert report["phase_results"]["stress"]["duration_gate_passed"] is False
     assert report["phase_results"]["stress"]["worst_recall_p95_ms"] == 925
@@ -1818,6 +1626,42 @@ def test_preprod_report_marks_short_probe_as_requested_pass_but_not_official_pre
     assert report["failed_production_phases"] == ["stress", "spike"]
     assert report["phase_results"]["stress"]["duration_gate_passed"] is False
     assert report["phase_results"]["spike"]["recovery_gate_passed"] is False
+
+
+def test_preprod_cli_exits_nonzero_when_full_precheck_is_not_passed(monkeypatch, tmp_path) -> None:
+    from script import real_mem0_p0_preprod_pressure
+
+    stress_probe = _final_report_fixture("p0-short-stress", passed=True)
+    stress_probe["config"]["recall_concurrency"] = 50
+    phase_report_path = tmp_path / "stress-probe.json"
+    phase_report_path.write_text(json.dumps(stress_probe), encoding="utf-8")
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "real_mem0_p0_preprod_pressure.py",
+            "--phase-report",
+            f"stress={phase_report_path}",
+            "--output-dir",
+            str(tmp_path),
+        ],
+    )
+
+    try:
+        real_mem0_p0_preprod_pressure.main()
+    except SystemExit as exc:
+        assert exc.code == 1
+    else:
+        raise AssertionError("main() should exit non-zero when production_precheck_passed is false")
+
+    reports = [
+        json.loads(path.read_text(encoding="utf-8"))
+        for path in tmp_path.glob("p0-preprod-summary-*.json")
+    ]
+    assert len(reports) == 1
+    assert reports[0]["requested_phases_passed"] is True
+    assert reports[0]["production_precheck_passed"] is False
 
 
 def test_preprod_phase_command_maps_p0_metric_document_scenarios() -> None:
@@ -2030,8 +1874,16 @@ def test_spike_phase_commands_model_recovery_curve() -> None:
         script_path="script/real_mem0_p0_short_pressure.py",
     )
 
-    assert [command[command.index("--recall-concurrency") + 1] for command in commands] == ["10", "100", "10"]
-    assert [command[command.index("--recall-requests") + 1] for command in commands] == ["100", "100", "100"]
+    assert [command[command.index("--recall-concurrency") + 1] for command in commands] == [
+        "10",
+        "100",
+        "10",
+    ]
+    assert [command[command.index("--recall-requests") + 1] for command in commands] == [
+        "100",
+        "100",
+        "100",
+    ]
 
 
 def test_spike_phase_report_requires_recovery_leg_to_pass() -> None:
@@ -2132,7 +1984,7 @@ def test_representative_replay_report_requires_quality_coverage_and_passed_suite
     suite["quality"]["case_results"] = [
         {"name": "nickname-current", "category": "slot_conflict", "status": "passed"},
         {"name": "negative-bird", "category": "negative_control", "status": "passed"},
-        {"name": "roleplay-cat", "category": "isolation", "status": "passed"},
+        {"name": "negative-cross-user-cat", "category": "isolation", "status": "passed"},
     ]
     suite["post_delete"]["case_results"] = [
         {"name": "deleted-cat-not-recalled", "category": "delete_rebuild", "status": "passed"},
@@ -2220,7 +2072,7 @@ def test_fault_injection_report_requires_injected_failure_and_recovery() -> None
                 "recovery_detail": "readiness returned 200",
             },
             {
-                "name": "qdrant_unavailable",
+                "name": "milvus_unavailable",
                 "injected": True,
                 "failure_observed": False,
                 "recovered": True,
@@ -2232,27 +2084,26 @@ def test_fault_injection_report_requires_injected_failure_and_recovery() -> None
     )
 
     assert report["passed"] is False
-    assert report["failed_scenarios"] == ["qdrant_unavailable"]
+    assert report["failed_scenarios"] == ["milvus_unavailable"]
     assert report["scenario_results"][0]["passed"] is True
     assert report["scenario_results"][1]["passed"] is False
 
     markdown = render_fault_injection_markdown(report)
-    assert "qdrant_unavailable" in markdown
+    assert "milvus_unavailable" in markdown
     assert "readiness stayed ready" in markdown
 
 
 def test_fault_injection_evaluates_target_dependency_and_recovery() -> None:
     scenario = evaluate_readiness_fault_scenario(
-        name="qdrant_unavailable",
-        expected_dependency="qdrant",
+        name="milvus_unavailable",
+        expected_dependency="milvus",
         failure_status_code=503,
         failure_payload={
             "status": "not_ready",
             "dependencies": {
                 "database": {"status": "ready", "detail": "ok"},
-                "redis": {"status": "ready", "detail": "ok"},
-                "qdrant": {"status": "not_ready", "detail": "connection refused"},
-                "mem0": {"status": "not_ready", "detail": "qdrant unavailable"},
+                "milvus": {"status": "not_ready", "detail": "connection refused"},
+                "mem0": {"status": "not_ready", "detail": "milvus unavailable"},
             },
         },
         recovery_status_code=200,
@@ -2260,8 +2111,7 @@ def test_fault_injection_evaluates_target_dependency_and_recovery() -> None:
             "status": "ready",
             "dependencies": {
                 "database": {"status": "ready", "detail": "ok"},
-                "redis": {"status": "ready", "detail": "ok"},
-                "qdrant": {"status": "ready", "detail": "ok"},
+                "milvus": {"status": "ready", "detail": "ok"},
                 "mem0": {"status": "ready", "detail": "ok"},
             },
         },
@@ -2271,7 +2121,33 @@ def test_fault_injection_evaluates_target_dependency_and_recovery() -> None:
     assert scenario["failure_observed"] is True
     assert scenario["recovered"] is True
     assert scenario["recovery_verified"] is True
-    assert "qdrant not_ready" in scenario["failure_detail"]
+    assert "milvus not_ready" in scenario["failure_detail"]
+
+
+def test_fault_injection_treats_probe_timeout_as_observed_dependency_failure() -> None:
+    scenario = evaluate_readiness_fault_scenario(
+        name="milvus_unavailable",
+        expected_dependency="milvus",
+        failure_status_code=0,
+        failure_payload={
+            "status": "not_ready",
+            "dependencies": {},
+            "error": "timed out while probing readiness",
+        },
+        recovery_status_code=200,
+        recovery_payload={
+            "status": "ready",
+            "dependencies": {
+                "database": {"status": "ready", "detail": "ok"},
+                "milvus": {"status": "ready", "detail": "ok"},
+                "mem0": {"status": "ready", "detail": "ok"},
+            },
+        },
+    )
+
+    assert scenario["failure_observed"] is True
+    assert "readiness probe failed" in scenario["failure_detail"]
+    assert "timed out" in scenario["failure_detail"]
 
 
 def test_fault_injection_scenario_specs_cover_mem0_library_dependencies() -> None:
@@ -2279,12 +2155,22 @@ def test_fault_injection_scenario_specs_cover_mem0_library_dependencies() -> Non
 
     assert [spec.name for spec in specs] == [
         "mem0_library_model_unavailable",
-        "qdrant_unavailable",
+        "milvus_unavailable",
         "postgres_unavailable",
-        "redis_unavailable",
     ]
-    assert {spec.expected_dependency for spec in specs} == {"mem0", "qdrant", "database", "redis"}
-    assert specs[0].env_overrides["MEMORY_OPENAI_BASE_URL"].startswith("http://127.0.0.1:")
+    assert {spec.expected_dependency for spec in specs} == {"mem0", "milvus", "database"}
+    assert specs[0].env_overrides["MEMORY_LLM_BASE_URL"].startswith("http://127.0.0.1:")
+
+
+def test_fault_injection_scenario_specs_do_not_require_socket_bind(monkeypatch) -> None:
+    def denied_socket(*args, **kwargs):  # type: ignore[no-untyped-def]
+        raise PermissionError("socket bind denied")
+
+    monkeypatch.setattr(socket, "socket", denied_socket)
+
+    specs = build_library_fault_scenario_specs()
+
+    assert specs[1].env_overrides["MILVUS_URL"].startswith("http://127.0.0.1:")
 
 
 def test_fault_injection_wait_for_readiness_uses_probe_timeout(monkeypatch) -> None:
@@ -2306,47 +2192,6 @@ def test_fault_injection_wait_for_readiness_uses_probe_timeout(monkeypatch) -> N
     assert status_code == 200
     assert payload["status"] == "ready"
     assert observed_probe_timeouts == [12]
-
-
-def test_fault_injection_api_process_keeps_explicit_environment_over_dotenv(
-    monkeypatch,
-    tmp_path,
-) -> None:
-    captured: dict[str, object] = {}
-
-    def fake_popen(command, *, stdout, stderr, text, env):  # type: ignore[no-untyped-def]
-        captured["command"] = command
-        captured["env"] = env
-        return object()
-
-    monkeypatch.setenv("POSTGRES_DATABASE", "liaoriver_memory")
-    monkeypatch.setenv("POSTGRES_PORT", "5432")
-    monkeypatch.setenv("REDIS_PORT", "6379")
-    monkeypatch.setenv("REDIS_PASSWORD", "redis-secret")
-    monkeypatch.setattr(
-        "script.real_mem0_p0_fault_injection.dotenv_values",
-        lambda path: {
-            "POSTGRES_DATABASE": "thinkback_real",
-            "POSTGRES_PORT": "55432",
-            "REDIS_PORT": "56379",
-            "REDIS_PASSWORD": "",
-            "QDRANT_URL": "http://qdrant-from-dotenv",
-        },
-    )
-    monkeypatch.setattr("script.real_mem0_p0_fault_injection.subprocess.Popen", fake_popen)
-
-    _start_api_process(
-        port=18082,
-        env_overrides={"QDRANT_URL": "http://127.0.0.1:1"},
-        log_path=tmp_path / "api.log",
-    )
-
-    env = captured["env"]
-    assert env["POSTGRES_DATABASE"] == "liaoriver_memory"  # type: ignore[index]
-    assert env["POSTGRES_PORT"] == "5432"  # type: ignore[index]
-    assert env["REDIS_PORT"] == "6379"  # type: ignore[index]
-    assert env["REDIS_PASSWORD"] == "redis-secret"  # type: ignore[index]
-    assert env["QDRANT_URL"] == "http://127.0.0.1:1"  # type: ignore[index]
 
 
 def _final_report_fixture(suite_id: str, *, passed: bool) -> dict[str, object]:

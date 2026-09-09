@@ -1,11 +1,24 @@
+"""Alembic environment configuration.
+
+Pattern reference: ``innies-biz`` runs ``migration::Migrator::up()`` at app
+startup. This ``env.py`` provides the same behaviour for SQLAlchemy +
+asyncpg, sourcing the database URL from the application ``Settings`` so the
+Alembic URL and the runtime engine URL never drift.
+"""
+
+from __future__ import annotations
+
+import asyncio
 from logging.config import fileConfig
 
 from sqlalchemy import pool
+from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
 from alembic import context
-from infra.config import settings
-from infra.database.base import Base
+from innies_memory.infra.config import settings
+from innies_memory.infra.database import models  # noqa: F401  (side-effect import for metadata)
+from innies_memory.infra.database.base import Base
 
 config = context.config
 config.set_main_option("sqlalchemy.url", settings.database_url)
@@ -17,6 +30,7 @@ target_metadata = Base.metadata
 
 
 def run_migrations_offline() -> None:
+    """Run migrations in 'offline' mode (emit SQL to stdout)."""
     url = config.get_main_option("sqlalchemy.url")
     context.configure(
         url=url,
@@ -29,7 +43,7 @@ def run_migrations_offline() -> None:
         context.run_migrations()
 
 
-def do_run_migrations(connection) -> None:
+def do_run_migrations(connection: Connection) -> None:
     context.configure(connection=connection, target_metadata=target_metadata)
 
     with context.begin_transaction():
@@ -37,6 +51,7 @@ def do_run_migrations(connection) -> None:
 
 
 async def run_async_migrations() -> None:
+    """Run migrations in 'online' mode using an async engine."""
     connectable = async_engine_from_config(
         config.get_section(config.config_ini_section, {}),
         prefix="sqlalchemy.",
@@ -50,8 +65,6 @@ async def run_async_migrations() -> None:
 
 
 def run_migrations_online() -> None:
-    import asyncio
-
     asyncio.run(run_async_migrations())
 
 

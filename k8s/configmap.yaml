@@ -1,58 +1,68 @@
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: thinkback-config
+  name: innies-memory-config
 data:
-  # 中文注释：应用名称，只用于日志和服务标识。
-  APP_NAME: Thinkback
-  # 中文注释：应用版本，用于发布识别和排障。
+  # 应用基础配置
+  # 应用名称，日志、健康检查和部署识别使用。
+  APP_NAME: innies-memory
+  # 应用版本，应与镜像版本或发布版本保持一致。
   APP_VERSION: "0.1.0"
-  # 中文注释：运行环境标识；生产 K8s 固定为 production。
+  # 运行环境，生产必须为 production，用于禁用本地 .env 读取。
   ENVIRONMENT: production
-  # 中文注释：日志级别；生产默认 INFO，避免 DEBUG 泄漏过多细节。
+  # 是否开启调试模式，生产必须关闭。
+  DEBUG: "false"
+  # 日志级别，生产默认 INFO。
   LOG_LEVEL: INFO
 
-  # 中文注释：PostgreSQL 主机名，生产应指向数据库 Service 或平台地址。
+  # PostgreSQL 数据库配置
+  # PostgreSQL 主机地址，生产应替换为真实数据库地址。
   POSTGRES_HOST: postgres
-  # 中文注释：PostgreSQL 端口。
+  # PostgreSQL 端口。
   POSTGRES_PORT: "5432"
-  # 中文注释：PostgreSQL 用户名；密码放在 Secret。
+  # PostgreSQL 用户名。
   POSTGRES_USER: postgres
-  # 中文注释：业务数据库名统一为 liaoriver_memory，避免与旧库混用。
-  POSTGRES_DATABASE: liaoriver_memory
+  # PostgreSQL 数据库名，当前固定为 innies-memory。
+  POSTGRES_DATABASE: innies-memory
 
-  # 中文注释：Redis 主机名，用于 readiness 和运行时缓存。
-  REDIS_HOST: redis
-  # 中文注释：Redis 端口。
-  REDIS_PORT: "6379"
-  # 中文注释：Redis DB 编号；首版默认使用 0。
-  REDIS_DB: "0"
+  # Milvus 向量库配置
+  # Milvus 服务地址，生产不要使用 localhost。
+  MILVUS_URL: http://milvus.example.internal:19530
+  # Milvus database 名称。
+  MILVUS_DATABASE: default
 
-  # 中文注释：Qdrant 是平台提供的独立向量库；生产不要写成本机 localhost。
-  QDRANT_URL: https://qdrant.example.internal
-
-  # 中文注释：OpenAI-compatible endpoint 的 base URL；直接用官方 endpoint 时可留空。
-  MEMORY_OPENAI_BASE_URL: ""
-  # 中文注释：Mem0 写入 Qdrant 的集合名；向量维度变化时应换集合。
-  MEMORY_QDRANT_COLLECTION: memories_qwen_1024
-  # 中文注释：Embedding 向量维度，必须与模型实际输出一致。
+  # LLM 和 Embedding 配置
+  # OpenAI-compatible LLM endpoint 地址。
+  MEMORY_LLM_BASE_URL: https://dashscope.aliyuncs.com/compatible-mode/v1
+  # OpenAI-compatible Embedding endpoint 地址。
+  MEMORY_EMBEDDING_BASE_URL: http://embedding.example.internal:7345/v1
+  # Mem0 写入 Milvus 的 collection 名称。
+  MEMORY_MILVUS_COLLECTION: innies_memory
+  # Embedding 向量维度，必须与 embedding 服务输出一致。
   MEMORY_EMBEDDING_DIMS: "1024"
-  # 中文注释：Mem0 抽取记忆使用的 LLM 模型名。
-  MEMORY_LLM_MODEL: qwen3.5-flash
-  # 中文注释：Mem0 生成向量使用的 Embedding 模型名。
-  MEMORY_EMBEDDING_MODEL: text-embedding-v4
-  # 中文注释：Mem0 Library 的本地历史数据库路径，Pod 内挂载到可写临时卷。
-  MEM0_HISTORY_DB_PATH: .mem0/history.db
+  # LLM 模型名称。
+  MEMORY_LLM_MODEL: qwen-plus-latest
+  # Embedding 模型名称。
+  MEMORY_EMBEDDING_MODEL: zhiman-embedding
 
-  # 中文注释：L3 写入模式；生产默认 async，避免外部模型抖动拖慢 append。
+  # 记忆服务运行参数
+  # Mem0 Library 本地历史数据库路径，需要挂载可写目录。
+  MEM0_HISTORY_DB_PATH: /tmp/innies-memory/mem0/history.db
+  # L3 写入模式，async 表示后台抽取长期记忆。
   MEMORY_L3_WRITE_MODE: async
-  # 中文注释：API 同步路由进入线程池的并发上限。
+  # API 同步工作线程并发上限。
   MEMORY_API_WORKER_LIMIT: "8"
-  # 中文注释：L3 后台抽取线程数，影响 Mem0 写入并发。
+  # API 同步工作进入 worker 并等待返回的总时间窗口，单位秒。
+  MEMORY_API_WORKER_WAIT_SECONDS: "5"
+  # L3 后台抽取线程数。
   MEMORY_L3_EXECUTOR_WORKERS: "16"
-  # 中文注释：L3 后台写入队列容量，队列满时触发背压。
+  # L3 后台写入队列容量。
   MEMORY_L3_MAX_PENDING_TASKS: "256"
-  # 中文注释：队列接近满时最多等待秒数，超过后返回明确错误。
+  # L3 队列满前的最长等待秒数。
   MEMORY_L3_QUEUE_WAIT_SECONDS: "5"
-  # 中文注释：/health/ready 单项依赖检查超时时间，单位秒。
-  READINESS_TIMEOUT_SECONDS: "30"
+  # Mem0 Library 后端调用并发上限。
+  MEMORY_BACKEND_MAX_CONCURRENT_CALLS: "4"
+
+  # 就绪检查配置
+  # 单个依赖 readiness 检查超时时间，单位秒。
+  READINESS_TIMEOUT_SECONDS: "3"

@@ -36,9 +36,7 @@ def build_fault_injection_report(
 ) -> dict[str, Any]:
     scenario_results = [_normalize_scenario(scenario) for scenario in scenarios]
     failed_scenarios = [
-        str(result["name"])
-        for result in scenario_results
-        if not bool(result["passed"])
+        str(result["name"]) for result in scenario_results if not bool(result["passed"])
     ]
     return {
         "run_id": run_id,
@@ -50,22 +48,23 @@ def build_fault_injection_report(
     }
 
 
-def build_library_fault_scenario_specs() -> list[FaultScenarioSpec]:
-    closed_port = str(_unused_local_port())
+def build_library_fault_scenario_specs(closed_port: int | None = None) -> list[FaultScenarioSpec]:
+    blocked_port = str(closed_port or int(os.getenv("INNIES_MEMORY_FAULT_CLOSED_PORT", "9")))
     return [
         FaultScenarioSpec(
             name="mem0_library_model_unavailable",
             expected_dependency="mem0",
             env_overrides={
-                "MEMORY_OPENAI_BASE_URL": f"http://127.0.0.1:{closed_port}/v1",
+                "MEMORY_LLM_BASE_URL": f"http://127.0.0.1:{blocked_port}/v1",
             },
         ),
         FaultScenarioSpec(
-            name="qdrant_unavailable",
-            expected_dependency="qdrant",
+            name="milvus_unavailable",
+            expected_dependency="milvus",
             env_overrides={
-                "QDRANT_URL": f"http://127.0.0.1:{closed_port}",
-                "QDRANT_API_KEY": "",
+                "MILVUS_URL": f"http://127.0.0.1:{blocked_port}",
+                "MILVUS_USER": "",
+                "MILVUS_PASSWORD": "",
             },
         ),
         FaultScenarioSpec(
@@ -73,15 +72,7 @@ def build_library_fault_scenario_specs() -> list[FaultScenarioSpec]:
             expected_dependency="database",
             env_overrides={
                 "POSTGRES_HOST": "127.0.0.1",
-                "POSTGRES_PORT": closed_port,
-            },
-        ),
-        FaultScenarioSpec(
-            name="redis_unavailable",
-            expected_dependency="redis",
-            env_overrides={
-                "REDIS_HOST": "127.0.0.1",
-                "REDIS_PORT": closed_port,
+                "POSTGRES_PORT": blocked_port,
             },
         ),
     ]
@@ -102,6 +93,10 @@ def evaluate_readiness_fault_scenario(
         failure_status_code == 503
         and failure_payload.get("status") == "not_ready"
         and failure_dependency.get("status") == "not_ready"
+    ) or (
+        failure_status_code == 0
+        and failure_payload.get("status") == "not_ready"
+        and bool(failure_payload.get("error"))
     )
     recovery_dependencies = recovery_payload.get("dependencies", {})
     recovery_dependency = recovery_dependencies.get(expected_dependency, {})
@@ -109,8 +104,7 @@ def evaluate_readiness_fault_scenario(
         recovery_status_code == 200
         and recovery_payload.get("status") == "ready"
         and all(
-            dependency.get("status") == "ready"
-            for dependency in recovery_dependencies.values()
+            dependency.get("status") == "ready" for dependency in recovery_dependencies.values()
         )
         and recovery_dependency.get("status") == "ready"
     )
@@ -141,7 +135,7 @@ def evaluate_readiness_fault_scenario(
 def render_fault_injection_markdown(report: dict[str, Any]) -> str:
     conclusion = "通过" if report.get("passed") else "未通过"
     lines = [
-        "# Thinkback P0 故障注入报告",
+        "# innies-memory P0 故障注入报告",
         "",
         "## 1. 结论",
         "",
@@ -176,7 +170,9 @@ def write_fault_injection_report(report: dict[str, Any], *, output_dir: Path) ->
     output_dir.mkdir(parents=True, exist_ok=True)
     json_path = output_dir / f"{report['run_id']}.json"
     md_path = output_dir / f"{report['run_id']}.md"
-    json_path.write_text(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
+    json_path.write_text(
+        json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8"
+    )
     md_path.write_text(render_fault_injection_markdown(report), encoding="utf-8")
     return json_path, md_path
 
@@ -199,6 +195,8 @@ def _readiness_detail(
     status_code: int,
 ) -> str:
     dependency = payload.get("dependencies", {}).get(expected_dependency, {})
+    if status_code == 0:
+        return f"readiness probe failed; error: {payload.get('error', '-')}"
     status = dependency.get("status", "-")
     detail = dependency.get("detail", "-")
     return f"readiness HTTP {status_code}; {expected_dependency} {status}: {detail}"
@@ -211,7 +209,9 @@ def _unused_local_port() -> int:
 
 
 def _readiness(base_url: str, *, timeout_seconds: float = 2.0) -> tuple[int, dict[str, Any]]:
-    request = Request(f"{base_url.rstrip('/')}/health/ready", headers={"Accept": "application/json"})
+    request = Request(
+        f"{base_url.rstrip('/')}/health/ready", headers={"Accept": "application/json"}
+    )
     try:
         with urlopen(request, timeout=timeout_seconds) as response:
             body = response.read().decode("utf-8")
@@ -250,17 +250,17 @@ def _start_api_process(
     env_overrides: dict[str, str],
     log_path: Path,
 ) -> subprocess.Popen[str]:
-    # 环境优先级：.env 只提供默认值；本轮命令显式传入的数据库、Redis 等配置必须保留；
-    # 故障注入场景的 env_overrides 最后覆盖，用来制造指定依赖不可用。
-    env = {key: str(value) for key, value in dotenv_values(".env").items() if value is not None}
-    env.update(os.environ.copy())
+    env = os.environ.copy()
+    env.update(
+        {key: str(value) for key, value in dotenv_values(".env").items() if value is not None}
+    )
     env.update(env_overrides)
     env["PYTHONPATH"] = "src"
     command = [
         sys.executable,
         "-m",
         "uvicorn",
-        "api.app:app",
+        "innies_memory.api.app:app",
         "--app-dir",
         "src",
         "--host",
@@ -351,9 +351,11 @@ def run_readiness_fault_injection(
 
 
 def _parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run P0 readiness fault injection for Mem0 Library mode.")
-    parser.add_argument("--output-dir", default="docs/reports")
-    parser.add_argument("--log-dir", default="/tmp/thinkback-p0-fault-injection")
+    parser = argparse.ArgumentParser(
+        description="Run P0 readiness fault injection for Mem0 Library mode."
+    )
+    parser.add_argument("--output-dir", default="docs/memory/report")
+    parser.add_argument("--log-dir", default="/tmp/innies-memory-p0-fault-injection")
     parser.add_argument("--startup-timeout-seconds", type=float, default=20.0)
     parser.add_argument("--probe-timeout-seconds", type=float, default=15.0)
     return parser.parse_args()

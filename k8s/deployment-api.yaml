@@ -1,12 +1,11 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: thinkback-api
+  name: innies-memory-api
   labels:
-    app: thinkback
+    app: innies-memory
     component: api
 spec:
-  # 中文注释：API 至少保留 2 个副本，配合 PDB 降低滚动发布中断风险。
   replicas: 2
   strategy:
     type: RollingUpdate
@@ -15,56 +14,42 @@ spec:
       maxSurge: 1
   selector:
     matchLabels:
-      app: thinkback
+      app: innies-memory
       component: api
   template:
     metadata:
       labels:
-        app: thinkback
+        app: innies-memory
         component: api
     spec:
-      serviceAccountName: thinkback
       securityContext:
         runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
       containers:
-        - name: thinkback-api
-          image: thinkback:0.1.0
+        - name: innies-memory-api
+          image: innies-memory:0.1.0
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8000
+            - containerPort: 50051
+          env:
+            - name: PYTHONPATH
+              value: /app/src
+            - name: TMPDIR
+              value: /tmp/innies-memory
+          envFrom:
+            - configMapRef:
+                name: innies-memory-config
+            - secretRef:
+                name: innies-memory-secret
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
             capabilities:
               drop:
                 - ALL
-          env:
-            # 中文注释：镜像内源码位于 /app/src，显式设置便于 uvicorn 和 Alembic 共用。
-            - name: PYTHONPATH
-              value: /app/src
-          envFrom:
-            - configMapRef:
-                name: thinkback-config
-            - secretRef:
-                name: thinkback-secret
-          volumeMounts:
-            # 中文注释：Mem0 本地 history 只是进程辅助文件，核心业务状态在 PostgreSQL 和 Qdrant。
-            - name: mem0-history
-              mountPath: /app/.mem0
-          readinessProbe:
-            httpGet:
-              path: /health/ready
-              port: 8000
-            initialDelaySeconds: 5
-            periodSeconds: 10
-            timeoutSeconds: 3
-          livenessProbe:
-            httpGet:
-              path: /health/live
-              port: 8000
-            initialDelaySeconds: 15
-            periodSeconds: 20
-            timeoutSeconds: 3
           resources:
             requests:
               cpu: 250m
@@ -72,6 +57,23 @@ spec:
             limits:
               cpu: "1"
               memory: 1Gi
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp/innies-memory
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: 8000
+            initialDelaySeconds: 15
+            periodSeconds: 20
+            timeoutSeconds: 3
       volumes:
-        - name: mem0-history
+        - name: tmp
           emptyDir: {}

@@ -1,15 +1,18 @@
 apiVersion: v1
 kind: Service
 metadata:
-  name: thinkback
+  name: innies-memory
   labels:
-    app: thinkback
+    app: innies-memory
 spec:
   type: ClusterIP
   selector:
-    app: thinkback
+    app: innies-memory
     component: api
   ports:
     - name: http
       port: 8000
       targetPort: 8000
+    - name: grpc
+      port: 50051
+      targetPort: 50051

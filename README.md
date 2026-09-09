@@ -1,35 +1,43 @@
-# Thinkback
+# innies-memory
 
-Thinkback is the memory service for the AI virtual social stack. It owns the
-three-layer memory business workflow and uses Mem0 Library for L3 long-term
-memory.
+innies-memory is the memory service for innies, a conversation assistant.
+It stores per-session short-term context in PostgreSQL, maintains a
+session summary for each conversation, and extracts user-level long-term memory
+that can be recalled across newly created sessions. The service has no Redis or
+Celery dependency: short-term memory lives in PostgreSQL only.
 
 ## Scope
+
+innies-memory is an internal service deployed inside the Innies VPC. It does
+not perform caller authentication, API-key gating or `X-Authenticated-User-Id`
+matching in-process. Public ingress, cross-domain auth and rate limiting are
+handled upstream by the gateway, mTLS, service identity or network ACL. The
+service still needs credentials for the external models, vector store and
+database it calls (`OPENAI_API_KEY`, `MEMORY_EMBEDDING_API_KEY`, `MILVUS_USER`
+/ `MILVUS_PASSWORD`, `POSTGRES_PASSWORD`). See
+[Innies记忆三层架构](docs/memory/Innies记忆三层架构.md) section 0.1 for the
+authoritative boundary.
 
 Included:
 
 - FastAPI service shell
 - Health, liveness, and readiness probes
 - PostgreSQL configuration and Alembic scaffold
-- Redis configuration
-- P0 memory workflows aligned with the three-layer memory architecture
+- P0 memory workflows aligned with the short-term summary and long-term memory architecture
 - Mem0 Library long-term memory adapter
-- Docker Compose local debug stack
-- Kubernetes production manifests
+- Minimal long-term memory management APIs for list, get, update and delete
+- Docker Compose local stack
+- Kubernetes API manifests
 
 Not included in P0:
 
-- P2 write fences, semantic suppression, tombstones, dead-letter governance, and decay jobs
-- Relationship scoring
-- RAG, document parsing, object storage, and user-facing evaluation products
-
-The repository does include engineering quality-evaluation scripts for the
-memory main path; those are operational gates, not product-facing evaluation
-features.
+- Strong write fences, CAS tombstones, semantic suppression, dead-letter governance, and decay jobs
+- Domain-specific memory scoring beyond P0 heuristics
+- RAG, document parsing, object storage, safety, and evaluation features
 
 ## Requirements
 
-- Python `>=3.11,<3.14`
+- Python `>=3.12,<3.14`
 - Poetry
 - Docker and Docker Compose for local infrastructure
 
@@ -42,141 +50,124 @@ make test
 make run
 ```
 
-启动本地依赖。这里的 Docker Compose 只用于本地控制台调试或本地容器调试，不作为生产入口：
+Start local dependencies:
 
 ```bash
 make docker-up
 ```
 
-## Local Debug
-
-本地真实链路调试使用当前工程约定的数据库和本机中间件，先从唯一模板生成 `.env`：
-
-```bash
-cp .env.example .env
-```
-
-在 `.env` 中填入 `OPENAI_API_KEY`，然后启动本地 API：
-
-```bash
-make debug-api
-make debug-ready
-```
-
-`make debug-api` 监听 `127.0.0.1:18082`，使用
-`POSTGRES_DATABASE=liaoriver_memory`、`localhost:6379` Redis、
-`http://localhost:6333` Qdrant，并启用同步 L3 写入，方便 append 后立刻
-recall 排查问题。
-`.env.example` 的本地默认值与 Docker Compose 对齐：PostgreSQL 示例密码为
-`postgres`，Redis 默认不带密码；如果本机中间件已有不同账号或密码，只改
-`.env`，不要改模板。
-
-如果改用 Compose 的 `app` 容器调试，容器访问 PostgreSQL/Redis 会使用
-Compose 内部服务名和内部端口 `postgres:5432`、`redis:6379`。Qdrant 不在
-当前 Compose 里，默认通过 `http://host.docker.internal:6333` 访问宿主机；
-如需连接远端 Qdrant，设置 `DOCKER_QDRANT_URL`。
-
-运行真实质量主链路评测：
-
-```bash
-make quality-real
-```
-
-提交前运行本地工程门禁：
-
-```bash
-make verify-local
-```
-
-Thinkback embeds Mem0 Library. Mem0 uses OpenAI for extraction/embeddings and
-an independently deployed Qdrant for L3 vector storage:
-
-常用环境变量说明：
-
-| 变量 | 中文说明 |
-| --- | --- |
-| `OPENAI_API_KEY` | 模型服务密钥；OpenAI 和兼容 OpenAI 协议的服务都统一使用它。 |
-| `QDRANT_URL` | Qdrant 向量库地址；生产应使用平台内网或受控 HTTPS 地址。 |
-| `QDRANT_API_KEY` | Qdrant 鉴权密钥；本地无鉴权可留空，生产远端 Qdrant 应配置。 |
-| `DOCKER_QDRANT_URL` | Compose app 容器访问 Qdrant 的覆盖地址，默认访问宿主机本地 Qdrant。 |
-| `POSTGRES_DATABASE` | PostgreSQL 数据库名；本工程统一使用 `liaoriver_memory`。 |
-| `THINKBACK_API_URL` | 脚本访问 Thinkback API 的地址，本地默认 `http://127.0.0.1:18082`。 |
-| `PYTHONPATH` | 本地脚本导入路径，设置为 `src` 后才能直接导入工程模块。 |
-| `MEMORY_QDRANT_COLLECTION` | Mem0 写入 Qdrant 的集合名；向量维度变化时应换集合。 |
-| `MEMORY_LLM_MODEL` | Mem0 抽取记忆使用的 LLM 模型名。 |
-| `MEMORY_EMBEDDING_MODEL` | Mem0 生成向量使用的 Embedding 模型名。 |
-| `MEM0_HISTORY_DB_PATH` | Mem0 Library 本地历史数据库路径，容器里要挂到可写目录。 |
-| `MEMORY_L3_WRITE_MODE` | L3 写入模式；本地可用 `sync`，生产推荐 `async`。 |
-| `MEMORY_API_WORKER_LIMIT` | `/memory/*` 同步路由线程池并发上限。 |
-| `MEMORY_L3_EXECUTOR_WORKERS` | L3 后台抽取线程数。 |
-| `MEMORY_L3_MAX_PENDING_TASKS` | L3 后台写入队列容量。 |
-| `MEMORY_L3_QUEUE_WAIT_SECONDS` | L3 队列接近满时的最长等待秒数。 |
-| `READINESS_TIMEOUT_SECONDS` | `/health/ready` 检查依赖的单项超时时间。 |
-| `QUALITY_EVALUATION_TIMEOUT_SECONDS` | 真实质量评测包装脚本的总超时，不是 API 运行时配置。 |
+innies-memory embeds Mem0 Library. Mem0 uses an OpenAI-compatible LLM for
+extraction, a separate OpenAI-compatible embedding service for embeddings, and
+an independently deployed Milvus for L3 vector storage:
 
 ```bash
 OPENAI_API_KEY=<secret>
-QDRANT_URL=https://qdrant.example.internal
-QDRANT_API_KEY=<secret>
-MEMORY_QDRANT_COLLECTION=memories_qwen_1024
-MEMORY_LLM_MODEL=qwen3.5-flash
-MEMORY_EMBEDDING_MODEL=text-embedding-v4
+MEMORY_LLM_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
+MEMORY_EMBEDDING_BASE_URL=http://embedding.example.internal:7345/v1
+MEMORY_EMBEDDING_API_KEY=
+MILVUS_URL=http://localhost:19530
+MILVUS_DATABASE=default
+MILVUS_USER=
+MILVUS_PASSWORD=
+MEMORY_MILVUS_COLLECTION=innies_memory
+MEMORY_LLM_MODEL=qwen-plus-latest
+MEMORY_EMBEDDING_MODEL=zhiman-embedding
 MEM0_HISTORY_DB_PATH=.mem0/history.db
 MEMORY_L3_WRITE_MODE=async
 MEMORY_API_WORKER_LIMIT=8
+MEMORY_API_WORKER_WAIT_SECONDS=5
 MEMORY_L3_EXECUTOR_WORKERS=16
 MEMORY_L3_MAX_PENDING_TASKS=256
 MEMORY_L3_QUEUE_WAIT_SECONDS=5
-READINESS_TIMEOUT_SECONDS=30
-QUALITY_EVALUATION_TIMEOUT_SECONDS=1800
+MEMORY_BACKEND_MAX_CONCURRENT_CALLS=4
+READINESS_TIMEOUT_SECONDS=3
 ```
 
-Thinkback and Qdrant can run on different hosts. The service must not bypass
-Mem0 Library and write Qdrant directly.
+Environment variable notes:
+
+| Variable | 中文解释 |
+| --- | --- |
+| `APP_NAME` | 应用名称，日志、健康检查和部署识别使用。 |
+| `APP_VERSION` | 应用版本，应与镜像版本或发布版本保持一致。 |
+| `ENVIRONMENT` | 运行环境；本地为 `development`，生产为 `production`。 |
+| `DEBUG` | 是否开启调试模式；生产必须关闭。 |
+| `LOG_LEVEL` | 日志级别；生产默认 `INFO`。 |
+| `POSTGRES_HOST` | PostgreSQL 主机地址。 |
+| `POSTGRES_PORT` | PostgreSQL 端口。 |
+| `POSTGRES_USER` | PostgreSQL 用户名。 |
+| `POSTGRES_PASSWORD` | PostgreSQL 密码；生产必须通过 Secret 注入。 |
+| `POSTGRES_DATABASE` | PostgreSQL 数据库名，当前为 `innies-memory`。 |
+| `MILVUS_URL` | Milvus 服务地址；生产不要使用 `localhost`。 |
+| `MILVUS_DATABASE` | Milvus database 名称。 |
+| `MILVUS_USER` | Milvus 用户名；无鉴权时留空。 |
+| `MILVUS_PASSWORD` | Milvus 密码；无鉴权时留空。 |
+| `OPENAI_API_KEY` | LLM API key；生产必须通过 Secret 注入。 |
+| `MEMORY_LLM_BASE_URL` | OpenAI-compatible LLM endpoint 地址。 |
+| `MEMORY_EMBEDDING_BASE_URL` | OpenAI-compatible Embedding endpoint 地址。 |
+| `MEMORY_EMBEDDING_API_KEY` | Embedding API key；当前 endpoint 不需要鉴权时留空。 |
+| `MEMORY_MILVUS_COLLECTION` | Mem0 写入 Milvus 的 collection 名称。注意：mem0 v2 的 BM25 混合检索要求 v3 schema（含 `text`/`sparse` 字段）的**新建** collection；在旧 schema collection 上自动退回纯语义检索（启动日志有 warning）。启用混合检索请切换到新 collection 名称并迁移存量数据，见 `docs/DEBUG_REPORT.md` W-3。 |
+| `MEMORY_EMBEDDING_DIMS` | Embedding 向量维度，必须与服务端输出一致。 |
+| `MEMORY_LLM_MODEL` | LLM 模型名称。 |
+| `MEMORY_EMBEDDING_MODEL` | Embedding 模型名称。 |
+| `MEM0_HISTORY_DB_PATH` | Mem0 Library 本地历史数据库路径，需要进程可写。 |
+| `MEMORY_L3_WRITE_MODE` | L3 写入模式；`async` 表示后台抽取长期记忆。 |
+| `MEMORY_L2_LLM_ENABLED` | L2 是否启用 LLM 综合摘要（P0）。关闭则保持拼接式降级实现（V1 行为）。 |
+| `MEMORY_L2_REFRESH_INTERVAL_ROUNDS` | L2 去抖间隔：每会话累计 N 个 append 触发一次后台 LLM 刷新（首轮立即）。 |
+| `MEMORY_L2_LLM_TIMEOUT_SECONDS` | L2 单次 LLM 调用超时。 |
+| `MEMORY_L2_LLM_MAX_TOKENS` | L2 摘要输出 token 上限。 |
+| `MEMORY_DECAY_ENABLED` | 遗忘 decay（P2#7）：老且久未召回的长尾记忆置 SUPPRESSED（不可达而非删除，数据保留）。默认关闭。槽位关键事实与墓碑行受保护；被召回即强化。 |
+| `MEMORY_DECAY_MIN_AGE_DAYS` | decay 事实年龄下限（默认 90 天）。 |
+| `MEMORY_DECAY_UNRECALLED_DAYS` | decay 久未召回阈值（默认 60 天）。 |
+| `MEMORY_DECAY_SWEEP_INTERVAL_SECONDS` | decay 全局清扫最小间隔（默认 3600 秒，append 触发时间门控）。 |
+| `MEMORY_API_WORKER_LIMIT` | API 读池和写池各自的同步工作线程并发上限。 |
+| `MEMORY_API_WORKER_WAIT_SECONDS` | API 同步工作进入 worker 并等待返回的总时间窗口。超过后返回 503，worker 线程可能仍在继续执行；重试必须复用原 `round_id` 或 `operation_id`。 |
+| `MEMORY_L3_EXECUTOR_WORKERS` | L3 后台抽取线程数。 |
+| `MEMORY_L3_MAX_PENDING_TASKS` | L3 后台写入队列容量。 |
+| `MEMORY_L3_QUEUE_WAIT_SECONDS` | L3 队列满前的最长等待秒数。 |
+| `MEMORY_BACKEND_MAX_CONCURRENT_CALLS` | 单进程内 Mem0 Library 后端调用并发上限，用于限制 LLM、Embedding 和 Milvus 压力。 |
+| `READINESS_TIMEOUT_SECONDS` | 单个依赖 readiness 检查超时时间，单位秒。 |
+| `TASK_ORPHAN_RUNNING_SECONDS` | 启动时孤儿 running 任务回收阈值（秒）：超过该时长无更新的 running 任务在服务启动时被回收为 failed（进程被硬杀留下的任务，否则 GetTask 永远返回 running）；必须显著大于最长后台任务时长，最小 60。 |
+
+innies-memory and Milvus can run on different hosts. The service must not bypass
+Mem0 Library and write Milvus directly.
+
+The L3 background extraction runs in the API process. There is no separate
+worker process anymore.
 
 Run deterministic tests:
 
 ```bash
-PYTHONPATH=src .venv/bin/pytest
+make test
 ```
 
-Run the real Mem0 5-round pressure scenario locally:
+Run the real Mem0 5-round pressure scenario:
 
 ```bash
 make docker-up
-PYTHONPATH=src .venv/bin/python script/real_mem0_pressure.py
+make real-test
 ```
 
-The real pressure script requires `OPENAI_API_KEY` and `QDRANT_URL`. Mem0
+The real pressure script requires `OPENAI_API_KEY` and `MILVUS_URL`. Mem0
 Library owns LLM extraction, embedding, L3 vector writes, semantic search,
 update, and delete.
 
-## Production Scaffold
-
-生产部署入口是 `k8s/` 下的 Kubernetes 配置。Docker Compose 只保留给本地依赖和本地容器调试，不作为生产部署路径。
+Full-chain real tests (real service process + PG + Milvus + LLM/embedding
+endpoints, covering append/idempotency/L3 extraction/items/recall/update/
+delete/sensitive fail-closed on both HTTP and gRPC):
 
 ```bash
-docker build -t thinkback:0.1.0 .
-kubectl apply -k k8s
-kubectl wait --for=condition=complete job/thinkback-migrate --timeout=120s
-kubectl rollout status deployment/thinkback-api
+# service must run without proxy env (loopback LLM endpoints get hijacked
+# by macOS system proxies otherwise): no_proxy='*'
+.venv/bin/python script/realchain/fullchain_http.py
+.venv/bin/python script/realchain/fullchain_grpc.py   # needs gRPC server on :50052
 ```
 
-生产数据库名统一为 `liaoriver_memory`。上线前需要替换 K8s Secret、外部
-PostgreSQL/Redis/Qdrant 地址、镜像 tag 和资源限制。
+Chinese recall-quality replay eval (scenario appends → recall assertions,
+reports pass rate paired with latency/injection cost; exit 1 on failure, CI-able):
 
-当前仓库补齐了以下生产工程基线：
-
-- GitHub Actions CI in `.github/workflows/ci.yml` for Ruff, Mypy, Pytest, and
-  Docker image build.
-- Docker multi-stage runtime image with a non-root user.
-- Kubernetes API deployment with probes, resource requests/limits,
-  `ServiceAccount`, `PodDisruptionBudget`, `NetworkPolicy`, writable Mem0
-  history `emptyDir` mounts, and a migration `job-migrate.yaml`.
-- `script/README.md` documenting quality and pre-production validation
-  boundaries.
-
-K8s manifest 是可落地的基线模板，但不是最终容量承诺。真实上线前仍要按集群、流量、外部模型限流和网络策略重新校准。稳定性压测不包含在本次质量门禁结论内。
+```bash
+.venv/bin/python script/eval/zh_replay_eval.py
+```
 
 ## Health
 
@@ -186,12 +177,29 @@ curl http://localhost:8000/health/live
 curl http://localhost:8000/health/ready
 ```
 
+Architecture details (layers, components, data flow, API design, DB schema,
+scalability path) live in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+
 ## Project Layout
 
 ```text
-src/api      HTTP application and routes
-src/infra    runtime integrations
-src/memory   memory-service boundaries
-test         scaffold tests
-k8s          Kubernetes deployment assets
+src/innies_memory/domain       纯领域层：枚举/实体/端口协议/指纹键
+                               ├─ safety         内容安全准入词表
+                               ├─ recall_policy  召回去重与预算裁剪
+                               ├─ summarization  L2 摘要策略
+                               └─ slots/         P0 槽位抽取引擎（正则 NLP）
+src/innies_memory/memory       应用层：编排与用例
+                               ├─ service.py     MemoryService 编排器
+                               ├─ schemas.py     API DTO（Pydantic）
+                               ├─ caches.py      进程内 TTL 读缓存
+                               ├─ repositories/  仓储实现（in_memory / sqlalchemy）
+                               └─ backends/      L3 后端适配（fake / mem0_library）
+src/innies_memory/infra        基础设施：config / database / readiness / logging
+src/innies_memory/api          HTTP 入口（FastAPI）
+src/innies_memory/rpc          gRPC 入口
+test                           scaffold and behavior tests
+k8s                            Kubernetes deployment assets
 ```
+
+依赖方向只允许向内：`api/rpc -> memory -> infra -> domain`，
+`domain` 不依赖任何其他层。

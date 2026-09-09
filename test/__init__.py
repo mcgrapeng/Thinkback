@@ -1,1 +1,1 @@
-"""Thinkback test package."""
+"""innies-memory test package."""

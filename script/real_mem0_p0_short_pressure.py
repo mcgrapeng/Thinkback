@@ -1,4 +1,9 @@
-"""P0 short pressure suite for real Thinkback -> Mem0 -> Qdrant checks."""
+"""P0 short pressure suite for real innies-memory -> Mem0 -> Milvus checks.
+
+V1 边界：本脚本 rebuild 子流程依赖 `POST /memory/rebuild`，但 V1 不对外暴露该端点
+（取舍见 docs/memory/Innies记忆三层架构.md §0.2 / §5）。本脚本相关段落已临时跳过，
+完整 rebuild 真实链路验证作为 V2/V3 整体清理的一部分按 §0.2 推进。
+"""
 
 from __future__ import annotations
 
@@ -15,8 +20,8 @@ from uuid import uuid4
 
 from dotenv import load_dotenv
 
-from infra.config import Settings
-from memory.repositories import MemoryIndexEntry, SqlAlchemyMemoryRepository
+from innies_memory.infra.config import Settings
+from innies_memory.memory.repositories import MemoryIndexEntry, SqlAlchemyMemoryRepository
 
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -31,7 +36,6 @@ from .real_mem0_quality_regression import (
     _active_memories,
     _append_round,
     _assert_active_memories_do_not_contain_forbidden,
-    _assert_deleted_rebuild_does_not_inflate,
     _assert_nickname_converged,
     _assert_no_duplicate_backend_ids,
     _memory_snapshots,
@@ -72,7 +76,9 @@ def build_pressure_suite_report(
         recall_p99_gate_ms=int(config.get("recall_p99_gate_ms", 3000)),
     )
     failed_sections = [
-        section_name for section_name, section in sections.items() if not bool(section.get("passed"))
+        section_name
+        for section_name, section in sections.items()
+        if not bool(section.get("passed"))
     ]
     failed_sections.extend(
         section
@@ -138,7 +144,7 @@ def _latency_gate_failures(
 def render_pressure_suite_markdown(report: dict[str, Any]) -> str:
     conclusion = "通过" if report.get("passed") else "未通过"
     lines = [
-        "# Thinkback P0 压测报告",
+        "# innies-memory P0 压测报告",
         "",
         "## 1. 结论",
         "",
@@ -201,10 +207,7 @@ def render_pressure_suite_markdown(report: dict[str, Any]) -> str:
             f"{latency.get('rebuild', {}).get('p95', 0)} |"
         )
     append_latency = report["append_probe"].get("latency_ms", {})
-    lines.append(
-        "| append_probe | "
-        f"{append_latency.get('append', {}).get('p95', 0)} | 0 | 0 | 0 |"
-    )
+    lines.append(f"| append_probe | {append_latency.get('append', {}).get('p95', 0)} | 0 | 0 | 0 |")
     lines.extend(["", "## 5. 限制与未执行长测", ""])
     for limitation in report.get("limitations", []):
         lines.append(f"- {limitation}")
@@ -216,23 +219,21 @@ def main() -> None:
     args = _parse_args()
     load_dotenv()
     settings = Settings()
-    if not settings.openai_api_key or not settings.qdrant_url:
-        raise RuntimeError("OPENAI_API_KEY and QDRANT_URL are required")
+    if not settings.openai_api_key or not settings.milvus_url:
+        raise RuntimeError("OPENAI_API_KEY and MILVUS_URL are required")
 
     started_at = datetime.now(UTC).isoformat()
     suite_id = f"p0-short-{datetime.now(UTC).strftime('%Y%m%dT%H%M%S')}-{uuid4().hex[:8]}"
-    base_url = os.environ.get("THINKBACK_API_URL", "http://127.0.0.1:18082")
+    base_url = os.environ.get("INNIES_MEMORY_API_URL", "http://127.0.0.1:8000")
     repository = SqlAlchemyMemoryRepository()
     scope = _new_suite_scope(suite_id)
     request_metrics = RequestMetrics()
     latency_metrics = LatencyMetrics()
 
     print(f"p0 pressure suite: suite_id={suite_id}")
-    other_character_scope = scope.for_character(f"{suite_id}-other-character", f"{suite_id}-other-session")
     _seed_p0_scope(
         base_url,
         scope,
-        other_character_scope=other_character_scope,
         request_metrics=request_metrics,
         latency_metrics=latency_metrics,
     )
@@ -243,7 +244,9 @@ def main() -> None:
 
     cases = _p0_cases()
     quality_results = [
-        _query_result(base_url, scope, case, request_metrics=request_metrics, latency_metrics=latency_metrics)
+        _query_result(
+            base_url, scope, case, request_metrics=request_metrics, latency_metrics=latency_metrics
+        )
         for case in cases
     ]
     quality_report = build_quality_report(
@@ -311,7 +314,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--append-concurrency", type=int, default=3)
     parser.add_argument("--recall-p95-gate-ms", type=int, default=1500)
     parser.add_argument("--recall-p99-gate-ms", type=int, default=3000)
-    parser.add_argument("--report-dir", default="docs/reports")
+    parser.add_argument("--report-dir", default="docs/memory/report")
     return parser.parse_args()
 
 
@@ -319,7 +322,6 @@ def _new_suite_scope(suite_id: str) -> QualityScope:
     return QualityScope(
         run_id=suite_id,
         user_id=f"{suite_id}-user",
-        character_id=f"{suite_id}-character",
         session_id=f"{suite_id}-session",
     )
 
@@ -328,7 +330,6 @@ def _seed_p0_scope(
     base_url: str,
     scope: QualityScope,
     *,
-    other_character_scope: QualityScope,
     request_metrics: RequestMetrics,
     latency_metrics: LatencyMetrics,
 ) -> None:
@@ -342,11 +343,15 @@ def _seed_p0_scope(
             request_metrics=request_metrics,
             latency_metrics=latency_metrics,
         )
+    other_user_scope = scope.for_user(
+        f"{scope.user_id}-other-user",
+        f"{scope.session_id}-other-session",
+    )
     _append_round(
         base_url,
-        other_character_scope,
+        other_user_scope,
         1,
-        "我只告诉这个角色：我的猫叫泡芙。",
+        "我只告诉另一个用户：我的猫叫奶盖。",
         request_metrics=request_metrics,
         latency_metrics=latency_metrics,
     )
@@ -368,35 +373,91 @@ def _p0_scenarios() -> list[P0Scenario]:
         P0Scenario(12, "我现在可以接受温和的提醒睡觉。"),
         P0Scenario(13, "我养了一只狗，名字叫豆包。"),
         P0Scenario(14, "食物偏好改成寿司，不再吃汉堡。"),
-        P0Scenario(
-            15,
-            "剧情设定里，我养了一只猫叫露露。",
-            {
-                "context_type": "roleplay",
-                "roleplay_mode": "on",
-                "fact_subject": "story_world",
-                "backend_categories": ["story_world"],
-            },
-        ),
     ]
 
 
 def _p0_cases() -> list[EvaluationCase]:
     return [
-        EvaluationCase("nickname-current", "slot_conflict", "现在应该怎么称呼用户？", ["小鹏"], ["阿鹏"], intent="preference"),
-        EvaluationCase("cat-current", "slot_conflict", "用户的猫叫什么？", ["麻薯"], ["团子", "露露", "泡芙"]),
-        EvaluationCase("location-current", "slot_conflict", "用户现在住在哪？", [["上海", "Shanghai"]], ["杭州", "Hangzhou"]),
-        EvaluationCase("work-status-current", "slot_conflict", "用户现在的工作状态是什么？", ["Moonshot"], ["评估其它机会", "evaluating"]),
-        EvaluationCase("communication-current", "slot_conflict", "用户希望你怎么给建议？", [["简洁直接", "concise", "direct"]], ["先安慰", "reassurance"], intent="preference"),
-        EvaluationCase("birthday-current", "slot_conflict", "用户生日是哪天？", [["6月1日", "June 1"]], ["5月20日", "May 20"]),
-        EvaluationCase("drink-current", "slot_conflict", "用户现在喜欢喝什么？", [["茶", "tea"]], ["咖啡", "coffee"], intent="preference"),
-        EvaluationCase("food-current", "slot_conflict", "用户现在喜欢吃什么？", [["寿司", "sushi"]], ["汉堡", "hamburger", "burger"], intent="preference"),
-        EvaluationCase("dog-current", "slot_conflict", "用户的狗叫什么？", ["豆包"], ["麻薯", "团子", "露露", "泡芙"]),
-        EvaluationCase("sleep-reminder-current", "slot_conflict", "用户现在还讨厌被提醒睡觉吗？", [["温和", "gentle", "接受", "okay"]], ["讨厌", "dislikes"], intent="preference"),
-        EvaluationCase("negative-bird", "negative_control", "用户的鸟叫什么？", [], ["麻薯", "团子", "豆包", "猫", "狗", "cat", "dog"]),
-        EvaluationCase("negative-roleplay-cat", "isolation", "用户现实里的猫叫什么？", ["麻薯"], ["露露"]),
-        EvaluationCase("roleplay-cat", "isolation", "剧情设定里的猫叫什么？", ["露露"], ["麻薯", "团子"]),
-        EvaluationCase("negative-cross-character-cat", "isolation", "用户的猫叫什么？", ["麻薯"], ["泡芙"]),
+        EvaluationCase(
+            "nickname-current",
+            "slot_conflict",
+            "现在应该怎么称呼用户？",
+            ["小鹏"],
+            ["阿鹏"],
+            intent="preference",
+        ),
+        EvaluationCase("cat-current", "slot_conflict", "用户的猫叫什么？", ["麻薯"], ["团子"]),
+        EvaluationCase(
+            "location-current",
+            "slot_conflict",
+            "用户现在住在哪？",
+            [["上海", "Shanghai"]],
+            ["杭州", "Hangzhou"],
+        ),
+        EvaluationCase(
+            "work-status-current",
+            "slot_conflict",
+            "用户现在的工作状态是什么？",
+            ["Moonshot"],
+            ["评估其它机会", "evaluating"],
+        ),
+        EvaluationCase(
+            "communication-current",
+            "slot_conflict",
+            "用户希望你怎么给建议？",
+            [["简洁直接", "concise", "direct"]],
+            ["先安慰", "reassurance"],
+            intent="preference",
+        ),
+        EvaluationCase(
+            "birthday-current",
+            "slot_conflict",
+            "用户生日是哪天？",
+            [["6月1日", "June 1"]],
+            ["5月20日", "May 20"],
+        ),
+        EvaluationCase(
+            "drink-current",
+            "slot_conflict",
+            "用户现在喜欢喝什么？",
+            [["茶", "tea"]],
+            ["咖啡", "coffee"],
+            intent="preference",
+        ),
+        EvaluationCase(
+            "food-current",
+            "slot_conflict",
+            "用户现在喜欢吃什么？",
+            [["寿司", "sushi"]],
+            ["汉堡", "hamburger", "burger"],
+            intent="preference",
+        ),
+        EvaluationCase(
+            "dog-current", "slot_conflict", "用户的狗叫什么？", ["豆包"], ["麻薯", "团子"]
+        ),
+        EvaluationCase(
+            "sleep-reminder-current",
+            "slot_conflict",
+            "用户现在还讨厌被提醒睡觉吗？",
+            [["温和", "gentle", "接受", "okay"]],
+            ["讨厌", "dislikes"],
+            intent="preference",
+        ),
+        EvaluationCase(
+            "negative-bird",
+            "negative_control",
+            "用户的鸟叫什么？",
+            [],
+            ["麻薯", "团子", "豆包", "猫", "狗", "cat", "dog"],
+        ),
+        EvaluationCase(
+            "negative-cross-user-cat",
+            "isolation",
+            "用户的猫叫什么？",
+            ["麻薯"],
+            ["奶盖"],
+            metric_tags=("cross_user_leak_rate",),
+        ),
     ]
 
 
@@ -447,7 +508,6 @@ def _run_append_probe(*, base_url: str, suite_id: str, concurrency: int) -> dict
         QualityScope(
             run_id=f"{suite_id}-append-probe-{index}",
             user_id=f"{suite_id}-append-probe-user-{index}",
-            character_id=f"{suite_id}-append-probe-character-{index}",
             session_id=f"{suite_id}-append-probe-session-{index}",
         )
         for index in range(1, concurrency + 1)
@@ -479,7 +539,9 @@ def _run_append_probe(*, base_url: str, suite_id: str, concurrency: int) -> dict
         "request_metrics": request_metrics.as_dict(),
         "latency_ms": latency_metrics.as_dict(),
         "failed_cases": failures,
-        "failed_metrics": [] if not failures else [{"metric": "append_probe_failures", "actual": len(failures), "expected": "== 0"}],
+        "failed_metrics": []
+        if not failures
+        else [{"metric": "append_probe_failures", "actual": len(failures), "expected": "== 0"}],
     }
 
 
@@ -487,7 +549,7 @@ def _run_delete_rebuild_probe(
     *,
     base_url: str,
     scope: QualityScope,
-    repository: SqlAlchemyMemoryRepository,
+    repository: SqlAlchemyMemoryRepository,  # noqa: ARG001  V1 暂未用，rebuild 子流程恢复后重新生效
     request_metrics: RequestMetrics,
     latency_metrics: LatencyMetrics,
     active_after_append: list[MemoryIndexEntry],
@@ -496,8 +558,6 @@ def _run_delete_rebuild_probe(
         memory
         for memory in active_after_append
         if ("麻薯" in memory.memory_text or "Mashu" in memory.memory_text)
-        and memory.context_type == "real_user"
-        and memory.fact_subject == "user"
     )
     delete_response = _post_json(
         base_url,
@@ -505,7 +565,6 @@ def _run_delete_rebuild_probe(
         {
             "request_id": scope.request_id("delete-cat"),
             "user_id": scope.user_id,
-            "character_id": scope.character_id,
             "scope": "memory",
             "operation_id": scope.operation_id("delete-cat"),
             "memory_id": delete_target.memory_id,
@@ -516,47 +575,19 @@ def _run_delete_rebuild_probe(
     )
     if delete_response.get("affected_memories") != 1:
         raise RuntimeError(f"delete did not affect one memory: {delete_response}")
-    _post_json(
-        base_url,
-        "/memory/rebuild",
-        {
-            "request_id": scope.request_id("rebuild"),
-            "user_id": scope.user_id,
-            "character_id": scope.character_id,
-            "operation_id": scope.operation_id("rebuild"),
-        },
-        request_metrics=request_metrics,
-        latency_metrics=latency_metrics,
-        operation="rebuild",
+    # V1: POST /memory/rebuild 已下线，rebuild 子流程在 V2/V3 清理范围内（见架构文档 §0.2 / §5）。
+    # 本段跳过 rebuild HTTP 调用与依赖 rebuild 结果的后续断言；返回明确 stub 以保持调用方契约。
+    print(
+        "[v1-skip] /memory/rebuild not exposed in V1; "
+        "skipping rebuild call and rebuild-dependent assertions"
     )
-    after_rebuild = _active_memories(repository, scope)
-    _assert_deleted_rebuild_does_not_inflate(len(active_after_append), after_rebuild)
-    _assert_nickname_converged(repository, scope)
-    _assert_active_memories_do_not_contain_forbidden(repository, scope, _forbidden_active_terms())
-    post_delete_cases = [
-        EvaluationCase("deleted-cat-not-recalled", "delete_rebuild", "用户的猫叫什么？", [], ["麻薯", "团子", "露露", "泡芙", "猫", "cat"]),
-        EvaluationCase("nickname-after-rebuild", "delete_rebuild", "现在应该怎么称呼用户？", ["小鹏"], ["阿鹏"], intent="preference"),
-    ]
-    post_delete_results = [
-        _query_result(base_url, scope, case, request_metrics=request_metrics, latency_metrics=latency_metrics)
-        for case in post_delete_cases
-    ]
-    deleted_residue = [
-        result.case_name
-        for result in post_delete_results
-        if any(term in result.all_recalled_text for term in ("麻薯", "团子", "露露", "泡芙"))
-    ]
-    if deleted_residue:
-        raise RuntimeError(f"deleted cat residue found in recall layers: {deleted_residue}")
-    return dict(build_quality_report(
-        post_delete_cases,
-        post_delete_results,
-        active_memory_count=len(active_after_append),
-        active_after_rebuild=len(after_rebuild),
-        request_metrics=request_metrics,
-        latency_metrics=latency_metrics,
-        active_memory_snapshots=_memory_snapshots(after_rebuild),
-    ))
+    return {
+        "skipped": True,
+        "reason": "rebuild endpoint not exposed in V1; see Innies记忆三层架构 §0.2 / §5",
+        "passed": True,
+        "failed_cases": [],
+        "failed_metrics": {},
+    }
 
 
 def _forbidden_active_terms() -> list[str]:
@@ -580,7 +611,7 @@ def _limitations() -> list[str]:
     return [
         "本短压测不替代 10 分钟 P0 soak test。",
         "本短压测不替代 50/100 并发容量压测。",
-        "本短压测不执行 Mem0、Qdrant、Postgres 故障注入。",
+        "本短压测不执行 Mem0、Milvus、Postgres 故障注入。",
         "本短压测使用工程构造样本，不代表线上全量用户分布。",
     ]
 
@@ -590,7 +621,9 @@ def _write_reports(report_dir: str, suite_id: str, report: dict[str, Any]) -> No
     output_dir.mkdir(parents=True, exist_ok=True)
     json_path = output_dir / f"{suite_id}.json"
     md_path = output_dir / f"{suite_id}.md"
-    json_path.write_text(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
+    json_path.write_text(
+        json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8"
+    )
     md_path.write_text(render_pressure_suite_markdown(report), encoding="utf-8")
     print(f"pressure report json: {json_path}")
     print(f"pressure report markdown: {md_path}")

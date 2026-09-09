@@ -1,44 +1,42 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: thinkback-migrate
+  name: innies-memory-migrate
   labels:
-    app: thinkback
+    app: innies-memory
     component: migrate
 spec:
-  # 中文注释：迁移失败最多重试 2 次；持续失败应人工排查迁移和数据库状态。
-  backoffLimit: 2
+  backoffLimit: 1
   template:
     metadata:
       labels:
-        app: thinkback
+        app: innies-memory
         component: migrate
     spec:
       restartPolicy: Never
-      serviceAccountName: thinkback
       securityContext:
         runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
       containers:
-        - name: alembic-upgrade
-          image: thinkback:0.1.0
+        - name: innies-memory-migrate
+          image: innies-memory:0.1.0
           imagePullPolicy: IfNotPresent
           command:
-            # 中文注释：生产发布先跑 Alembic 到 head，再滚动 API Deployment。
             - alembic
             - upgrade
             - head
           env:
-            # 中文注释：保持迁移 Job 与 API 使用同一套源码路径和运行时配置。
             - name: PYTHONPATH
               value: /app/src
+            - name: TMPDIR
+              value: /tmp/innies-memory
           envFrom:
             - configMapRef:
-                name: thinkback-config
+                name: innies-memory-config
             - secretRef:
-                name: thinkback-secret
-          volumeMounts:
-            - name: mem0-history
-              mountPath: /app/.mem0
+                name: innies-memory-secret
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
@@ -52,6 +50,9 @@ spec:
             limits:
               cpu: 500m
               memory: 512Mi
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp/innies-memory
       volumes:
-        - name: mem0-history
+        - name: tmp
           emptyDir: {}

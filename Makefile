@@ -1,92 +1,79 @@
-.PHONY: help install dev test lint format run debug-api debug-ready quality-real verify-local docker-build docker-up docker-down db-upgrade db-downgrade db-status db-history db-revision clean
+# 常用工程命令入口；生产部署以 Kubernetes 为准，Compose 只用于本地调试。
+# IMAGE：本地或生产镜像仓库名称，发布时可覆盖为完整 registry/repository。
+IMAGE ?= innies-memory
+# VERSION：镜像标签，生产建议覆盖为 git SHA、语义版本或不可变构建号。
+VERSION ?= 0.1.0
+# K8S_DIR：Kustomize 部署目录，环境 overlay 可覆盖为其他目录。
+K8S_DIR ?= k8s
+.PHONY: fmt format-check lint typecheck test coverage check hooks-install hooks-run dev-up dev-down image-build k8s-apply k8s-delete proto-gen migration-up migration-downgrade-1 migration-status migration-history migration-revision
 
--include .env
-export
+proto-gen:
+	uv run --extra dev python -m grpc_tools.protoc \
+		-I proto \
+		--python_out=src/innies_memory/rpc \
+		--grpc_python_out=src/innies_memory/rpc \
+		--pyi_out=src/innies_memory/rpc \
+		proto/memory.proto
+	sed -i '' 's/^import memory_pb2 as memory__pb2$$/from innies_memory.rpc import memory_pb2 as memory__pb2/' \
+		src/innies_memory/rpc/memory_pb2_grpc.py
 
-help:
-	@echo "Thinkback - memory service"
-	@echo "  make install     - install runtime dependencies"
-	@echo "  make dev         - install dev dependencies and pre-commit"
-	@echo "  make run         - run FastAPI app"
-	@echo "  make debug-api   - run local API on 127.0.0.1:18082"
-	@echo "  make debug-ready - check local readiness on 127.0.0.1:18082"
-	@echo "  make quality-real - run real quality evaluation into docs/report"
-	@echo "  make verify-local - run lint, mypy, tests, and compose config"
-	@echo "  make test        - run tests"
-	@echo "  make lint        - run Ruff and mypy"
-	@echo "  make format      - format Python code"
-	@echo "  make docker-up   - start local runtime stack"
-	@echo "  make docker-down - stop local runtime stack"
+fmt:
+	uv run --extra dev ruff format .
 
-install:
-	poetry install --without dev
-
-dev:
-	poetry install
-	poetry run pre-commit install
-
-test:
-	PYTHONPATH=src poetry run pytest
+format-check:
+	uv run --extra dev ruff format --check .
 
 lint:
-	poetry run ruff check src test script
-	poetry run mypy src
+	uv run --extra dev ruff check .
 
-format:
-	poetry run ruff check --fix src test
-	poetry run ruff format src test
+typecheck:
+	uv run --extra dev mypy .
 
-run:
-	poetry run uvicorn --app-dir src api.app:app --reload --host 0.0.0.0 --port 8000
+test:
+	uv run --extra dev pytest -v
 
-# 中文注释：debug-api/quality-real 只在命令前临时覆盖本地调试变量；变量含义见 .env.example 和部署指南。
-debug-api:
-	POSTGRES_HOST=localhost POSTGRES_PORT=5432 POSTGRES_USER=postgres POSTGRES_PASSWORD=$${POSTGRES_PASSWORD:-postgres} POSTGRES_DATABASE=liaoriver_memory REDIS_HOST=localhost REDIS_PORT=6379 REDIS_DB=0 REDIS_PASSWORD=$${REDIS_PASSWORD:-} QDRANT_URL=http://localhost:6333 QDRANT_API_KEY= MEMORY_QDRANT_COLLECTION=memories_qwen_1024 MEMORY_EMBEDDING_DIMS=1024 MEMORY_L3_WRITE_MODE=sync PYTHONPATH=src poetry run uvicorn --app-dir src api.app:app --reload --host 127.0.0.1 --port 18082
+coverage:
+	uv run --extra dev pytest --cov=innies_memory --cov-report=term-missing --cov-report=xml -v
 
-debug-ready:
-	curl -sS http://127.0.0.1:18082/health/ready
+check: format-check lint typecheck coverage
 
-quality-real:
-	POSTGRES_HOST=localhost POSTGRES_PORT=5432 POSTGRES_USER=postgres POSTGRES_PASSWORD=$${POSTGRES_PASSWORD:-postgres} POSTGRES_DATABASE=liaoriver_memory REDIS_HOST=localhost REDIS_PORT=6379 REDIS_DB=0 REDIS_PASSWORD=$${REDIS_PASSWORD:-} QDRANT_URL=http://localhost:6333 QDRANT_API_KEY= MEMORY_QDRANT_COLLECTION=memories_qwen_1024 MEMORY_EMBEDDING_DIMS=1024 MEMORY_L3_WRITE_MODE=sync THINKBACK_API_URL=http://127.0.0.1:18082 PYTHONPATH=src poetry run python script/run_real_mem0_quality_evaluation.py --docs-dir docs/report
+hooks-install:
+	uv run --extra dev pre-commit install
 
-verify-local:
-	poetry run ruff check src test script
-	poetry run mypy src
-	PYTHONPATH=src poetry run pytest
-	docker compose config >/tmp/thinkback-compose.yml
+hooks-run:
+	uv run --extra dev pre-commit run --all-files
 
-docker-build:
-	docker build -t thinkback:latest -f Dockerfile .
+dev-up:
+	docker compose up
 
-docker-up:
-	docker compose up -d
-
-docker-down:
+dev-down:
 	docker compose down
 
-db-upgrade:
-	PYTHONPATH=src poetry run alembic upgrade head
+image-build:
+	docker build -t $(IMAGE):$(VERSION) .
 
-db-downgrade:
-	PYTHONPATH=src poetry run alembic downgrade -1
+k8s-apply:
+	kubectl apply -k $(K8S_DIR)
 
-db-status:
-	PYTHONPATH=src poetry run alembic current -v
+k8s-delete:
+	kubectl delete -k $(K8S_DIR)
 
-db-history:
-	PYTHONPATH=src poetry run alembic history --verbose
+# 应用最新迁移（与启动时 lifespan 内自动迁移等价，便于手动/部署前使用）
+migration-up:
+	PYTHONPATH=src uv run alembic upgrade head
 
-db-revision:
-ifndef MSG
-	@echo "Usage: make db-revision MSG='create baseline'"
-	@exit 1
-endif
-	PYTHONPATH=src poetry run alembic revision --autogenerate -m "$(MSG)"
+# 回退一个版本（默认回退 1 个 revision）
+migration-downgrade-1:
+	PYTHONPATH=src uv run alembic downgrade -1
 
-clean:
-	find . -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
-	find . -type f -name "*.pyc" -delete
-	find . -type d -name ".pytest_cache" -exec rm -rf {} + 2>/dev/null || true
-	find . -type d -name ".ruff_cache" -exec rm -rf {} + 2>/dev/null || true
-	find . -type d -name ".mypy_cache" -exec rm -rf {} + 2>/dev/null || true
-	rm -rf dist build htmlcov .coverage
+# 查看当前 head 与 applied revision
+migration-status:
+	PYTHONPATH=src uv run alembic current
+
+# 查看迁移历史
+migration-history:
+	PYTHONPATH=src uv run alembic history --verbose
+
+# 生成新迁移：make migration-revision m="add xxx"
+migration-revision:
+	PYTHONPATH=src uv run alembic revision -m "$(m)"

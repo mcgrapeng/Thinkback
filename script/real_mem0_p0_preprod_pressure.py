@@ -71,8 +71,7 @@ def build_preprod_report(
     required_phases: list[str],
 ) -> dict[str, Any]:
     phase_results = {
-        phase: _summarize_phase(phase, reports)
-        for phase, reports in sorted(phase_reports.items())
+        phase: _summarize_phase(phase, reports) for phase, reports in sorted(phase_reports.items())
     }
     missing_phases = [phase for phase in required_phases if phase not in phase_reports]
     failed_phases = [
@@ -83,10 +82,13 @@ def build_preprod_report(
     failed_production_phases = [
         phase
         for phase in required_phases
-        if phase in phase_results and not bool(phase_results[phase].get("production_phase_passed", True))
+        if phase in phase_results
+        and not bool(phase_results[phase].get("production_phase_passed", True))
     ]
     requested_phases_passed = not failed_phases
-    production_precheck_passed = requested_phases_passed and not missing_phases and not failed_production_phases
+    production_precheck_passed = (
+        requested_phases_passed and not missing_phases and not failed_production_phases
+    )
     return {
         "run_id": run_id,
         "started_at": started_at,
@@ -126,7 +128,7 @@ def render_preprod_report_markdown(report: dict[str, Any]) -> str:
     failed = ", ".join(report.get("failed_phases", [])) or "-"
     failed_production = ", ".join(report.get("failed_production_phases", [])) or "-"
     lines = [
-        "# Thinkback P0 生产前压测汇总报告",
+        "# innies-memory P0 生产前压测汇总报告",
         "",
         "## 1. 结论",
         "",
@@ -167,7 +169,9 @@ def write_preprod_report(report: dict[str, Any], *, output_dir: Path) -> tuple[P
     output_dir.mkdir(parents=True, exist_ok=True)
     json_path = output_dir / f"{report['run_id']}.json"
     md_path = output_dir / f"{report['run_id']}.md"
-    json_path.write_text(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
+    json_path.write_text(
+        json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8"
+    )
     md_path.write_text(render_preprod_report_markdown(report), encoding="utf-8")
     return json_path, md_path
 
@@ -187,7 +191,9 @@ def build_duration_phase_report(
         for report in child_reports
         if not bool(report.get("passed"))
     ]
-    official_min_duration_seconds = _DURATION_PHASE_TARGET_SECONDS.get(phase, target_duration_seconds)
+    official_min_duration_seconds = _DURATION_PHASE_TARGET_SECONDS.get(
+        phase, target_duration_seconds
+    )
     required_duration_seconds = max(target_duration_seconds, official_min_duration_seconds)
     duration_gate_passed = actual_duration_seconds >= required_duration_seconds
     child_gate_passed = not failed_child_reports
@@ -206,7 +212,9 @@ def build_duration_phase_report(
         "child_gate_passed": child_gate_passed,
         "report_count": len(child_reports),
         "failed_child_reports": failed_child_reports,
-        "suite_ids": [str(report.get("suite_id", report.get("run_id", "-"))) for report in child_reports],
+        "suite_ids": [
+            str(report.get("suite_id", report.get("run_id", "-"))) for report in child_reports
+        ],
         "worst_recall_p95_ms": _worst_recall_latency(child_reports, "p95"),
         "worst_recall_p99_ms": _worst_recall_latency(child_reports, "p99"),
         "child_reports": child_reports,
@@ -218,7 +226,7 @@ def render_duration_phase_markdown(report: dict[str, Any]) -> str:
     duration = "通过" if report.get("duration_gate_passed") else "未满足，按短探针记录"
     child_gate = "通过" if report.get("child_gate_passed", report.get("passed")) else "未通过"
     lines = [
-        "# Thinkback P0 持续压测阶段报告",
+        "# innies-memory P0 持续压测阶段报告",
         "",
         "## 1. 结论",
         "",
@@ -264,7 +272,9 @@ def write_duration_phase_report(report: dict[str, Any], *, output_dir: Path) -> 
     output_dir.mkdir(parents=True, exist_ok=True)
     json_path = output_dir / f"{report['run_id']}.json"
     md_path = output_dir / f"{report['run_id']}.md"
-    json_path.write_text(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
+    json_path.write_text(
+        json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8"
+    )
     md_path.write_text(render_duration_phase_markdown(report), encoding="utf-8")
     return json_path, md_path
 
@@ -277,9 +287,7 @@ def build_spike_phase_report(
     leg_reports: dict[str, dict[str, Any]],
 ) -> dict[str, Any]:
     failed_legs = [
-        leg_name
-        for leg_name, report in leg_reports.items()
-        if not bool(report.get("passed"))
+        leg_name for leg_name, report in leg_reports.items() if not bool(report.get("passed"))
     ]
     recovery_gate_passed = bool(leg_reports.get("recovery_10", {}).get("passed"))
     child_reports = list(leg_reports.values())
@@ -292,7 +300,9 @@ def build_spike_phase_report(
         "failed_legs": failed_legs,
         "recovery_gate_passed": recovery_gate_passed,
         "report_count": len(child_reports),
-        "suite_ids": [str(report.get("suite_id", report.get("run_id", "-"))) for report in child_reports],
+        "suite_ids": [
+            str(report.get("suite_id", report.get("run_id", "-"))) for report in child_reports
+        ],
         "worst_recall_p95_ms": _worst_recall_latency(child_reports, "p95"),
         "worst_recall_p99_ms": _worst_recall_latency(child_reports, "p99"),
         "leg_reports": leg_reports,
@@ -301,7 +311,7 @@ def build_spike_phase_report(
 
 def render_spike_phase_markdown(report: dict[str, Any]) -> str:
     lines = [
-        "# Thinkback P0 Spike 恢复曲线报告",
+        "# innies-memory P0 Spike 恢复曲线报告",
         "",
         "## 1. 结论",
         "",
@@ -341,7 +351,9 @@ def write_spike_phase_report(report: dict[str, Any], *, output_dir: Path) -> tup
     output_dir.mkdir(parents=True, exist_ok=True)
     json_path = output_dir / f"{report['run_id']}.json"
     md_path = output_dir / f"{report['run_id']}.md"
-    json_path.write_text(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
+    json_path.write_text(
+        json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8"
+    )
     md_path.write_text(render_spike_phase_markdown(report), encoding="utf-8")
     return json_path, md_path
 
@@ -606,8 +618,8 @@ def _parse_args() -> argparse.Namespace:
         choices=["baseline", "stress", "spike", "soak_probe"],
         help="Executable phase to run. Repeat for multiple phases.",
     )
-    parser.add_argument("--report-dir", default="docs/reports")
-    parser.add_argument("--output-dir", default="docs/reports")
+    parser.add_argument("--report-dir", default="docs/memory/report")
+    parser.add_argument("--output-dir", default="docs/memory/report")
     parser.add_argument("--python-executable", default=sys.executable)
     parser.add_argument("--short-pressure-script", default="script/real_mem0_p0_short_pressure.py")
     parser.add_argument("--duration-phase", choices=["baseline", "stress", "soak"])
@@ -678,8 +690,7 @@ def main() -> None:
         print(f"preprod report json: {json_path}")
         print(f"preprod report markdown: {md_path}")
         print(_render_cli_summary(report))
-        if not report["requested_phases_passed"]:
-            raise RuntimeError(f"P0 preprod requested phases failed: {report['failed_phases']}")
+        _raise_if_preprod_report_failed(report)
         return
     if not args.phase:
         raise RuntimeError("--phase or --phase-report is required unless --duration-phase is set")
@@ -710,25 +721,25 @@ def main() -> None:
     print(f"preprod report json: {json_path}")
     print(f"preprod report markdown: {md_path}")
     print(_render_cli_summary(report))
-    if not report["requested_phases_passed"]:
-        raise RuntimeError(f"P0 preprod requested phases failed: {report['failed_phases']}")
+    _raise_if_preprod_report_failed(report)
+
+
+def _raise_if_preprod_report_failed(report: dict[str, Any]) -> None:
+    if bool(report["production_precheck_passed"]):
+        return
+    if not bool(report["requested_phases_passed"]):
+        raise SystemExit(1)
+    raise SystemExit(1)
 
 
 def _summarize_phase(phase: str, reports: list[dict[str, Any]]) -> dict[str, Any]:
     failed_child_reports = [
-        _report_id(report)
-        for report in reports
-        if not bool(report.get("passed"))
+        _report_id(report) for report in reports if not bool(report.get("passed"))
     ]
-    duration_reports = [
-        report
-        for report in reports
-        if "duration_gate_passed" in report
-    ]
+    duration_reports = [report for report in reports if "duration_gate_passed" in report]
     duration_required = phase in {"baseline", "stress", "soak"}
     duration_gate_passed = bool(duration_reports) and all(
-        _duration_report_meets_current_gate(phase, report)
-        for report in duration_reports
+        _duration_report_meets_current_gate(phase, report) for report in duration_reports
     )
     if not duration_required and not duration_reports:
         duration_gate_passed = True
@@ -737,15 +748,10 @@ def _summarize_phase(phase: str, reports: list[dict[str, Any]]) -> dict[str, Any
         for report in duration_reports
         if not _duration_report_meets_current_gate(phase, report)
     ]
-    spike_reports = [
-        report
-        for report in reports
-        if "recovery_gate_passed" in report
-    ]
+    spike_reports = [report for report in reports if "recovery_gate_passed" in report]
     spike_required = phase == "spike"
     recovery_gate_passed = bool(spike_reports) and all(
-        bool(report.get("recovery_gate_passed"))
-        for report in spike_reports
+        bool(report.get("recovery_gate_passed")) for report in spike_reports
     )
     if not spike_required and not spike_reports:
         recovery_gate_passed = True
@@ -760,14 +766,9 @@ def _summarize_phase(phase: str, reports: list[dict[str, Any]]) -> dict[str, Any
         if "duration_gate_passed" not in report and "recovery_gate_passed" not in report
     ]
     representative_probe_passed = bool(representative_reports) and all(
-        bool(report.get("passed"))
-        for report in representative_reports
+        bool(report.get("passed")) for report in representative_reports
     )
-    passed = (
-        not failed_child_reports
-        and not failed_duration_reports
-        and not failed_spike_reports
-    )
+    passed = not failed_child_reports and not failed_duration_reports and not failed_spike_reports
     production_phase_passed = not failed_child_reports
     if duration_required:
         production_phase_passed = production_phase_passed and duration_gate_passed
@@ -814,15 +815,14 @@ def _load_phase_report_args(phase_report_args: list[str]) -> dict[str, list[dict
 
 
 def _worst_recall_latency(reports: list[dict[str, Any]], percentile: str) -> int:
-    values = [
-        _recall_latency(report, percentile)
-        for report in reports
-    ]
+    values = [_recall_latency(report, percentile) for report in reports]
     return max(values, default=0)
 
 
 def _recall_latency(report: dict[str, Any], percentile: str) -> int:
-    legacy_value = report.get("concurrent_recall", {}).get("latency_ms", {}).get("recall", {}).get(percentile)
+    legacy_value = (
+        report.get("concurrent_recall", {}).get("latency_ms", {}).get("recall", {}).get(percentile)
+    )
     if legacy_value is not None:
         return int(legacy_value)
     return int(report.get(f"worst_recall_{percentile}_ms", 0))

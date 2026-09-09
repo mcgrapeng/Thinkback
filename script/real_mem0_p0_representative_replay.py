@@ -30,11 +30,13 @@ def build_representative_replay_report(
         for report in suite_reports
         if not bool(report.get("passed"))
     ]
-    failed_categories = sorted([
-        category
-        for category in REQUIRED_REPRESENTATIVE_CATEGORIES
-        if coverage.get(category, 0) <= 0
-    ])
+    failed_categories = sorted(
+        [
+            category
+            for category in REQUIRED_REPRESENTATIVE_CATEGORIES
+            if coverage.get(category, 0) <= 0
+        ]
+    )
     representative_probe_passed = not failed_suites and not failed_categories
     return {
         "run_id": run_id,
@@ -44,7 +46,9 @@ def build_representative_replay_report(
         "passed": representative_probe_passed,
         "representative_probe_passed": representative_probe_passed,
         "suite_count": len(suite_reports),
-        "suite_ids": [str(report.get("suite_id", report.get("run_id", "-"))) for report in suite_reports],
+        "suite_ids": [
+            str(report.get("suite_id", report.get("run_id", "-"))) for report in suite_reports
+        ],
         "failed_suites": failed_suites,
         "required_categories": list(REQUIRED_REPRESENTATIVE_CATEGORIES),
         "coverage": coverage,
@@ -58,7 +62,7 @@ def build_representative_replay_report(
 def render_representative_replay_markdown(report: dict[str, Any]) -> str:
     conclusion = "通过" if report.get("passed") else "未通过"
     lines = [
-        "# Thinkback P0 代表性样本回放报告",
+        "# innies-memory P0 代表性样本回放报告",
         "",
         "## 1. 结论",
         "",
@@ -92,13 +96,15 @@ def write_representative_replay_report(
     output_dir.mkdir(parents=True, exist_ok=True)
     json_path = output_dir / f"{report['run_id']}.json"
     md_path = output_dir / f"{report['run_id']}.md"
-    json_path.write_text(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
+    json_path.write_text(
+        json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8"
+    )
     md_path.write_text(render_representative_replay_markdown(report), encoding="utf-8")
     return json_path, md_path
 
 
 def _coverage_by_category(suite_reports: list[dict[str, Any]]) -> dict[str, int]:
-    coverage = {category: 0 for category in REQUIRED_REPRESENTATIVE_CATEGORIES}
+    coverage = dict.fromkeys(REQUIRED_REPRESENTATIVE_CATEGORIES, 0)
     for report in suite_reports:
         for section_name in ("quality", "concurrent_recall", "post_delete"):
             section = report.get(section_name, {})
@@ -131,7 +137,7 @@ def _load_report(path: Path) -> dict[str, Any]:
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Build a P0 representative replay report.")
-    parser.add_argument("--output-dir", default="docs/reports")
+    parser.add_argument("--output-dir", default="docs/memory/report")
     parser.add_argument("reports", nargs="+")
     return parser.parse_args()
 
@@ -146,7 +152,9 @@ def main() -> None:
         ended_at=datetime.now(UTC).isoformat(),
         suite_reports=suite_reports,
     )
-    json_path, md_path = write_representative_replay_report(report, output_dir=Path(args.output_dir))
+    json_path, md_path = write_representative_replay_report(
+        report, output_dir=Path(args.output_dir)
+    )
     print(f"representative replay report json: {json_path}")
     print(f"representative replay report markdown: {md_path}")
     print(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True))

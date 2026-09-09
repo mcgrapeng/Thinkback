@@ -21,32 +21,31 @@ def build_final_report(
         _validate_short_pressure_report(path, report)
     fixed_issues = observed_fixed_issues or []
     lines = [
-        "# Thinkback P0 压测最终报告",
+        "# innies-memory P0 压测最终报告",
         "",
         "## 1. 结论",
         "",
     ]
     passed_count = sum(1 for report in reports if bool(report["passed"]))
     failed_reports = [report for report in reports if not bool(report["passed"])]
-    latest_pass = next((report for report in reversed(reports) if bool(report["passed"])), None)
-    latest_dev_pass = next(
-        (
-            report
-            for report in reversed(reports)
-            if bool(report["passed"])
-            and int(report.get("config", {}).get("recall_concurrency", 0)) <= 10
-        ),
-        None,
+    passed_reports = [report for report in reports if bool(report["passed"])]
+    latest_pass = _select_latest_report(passed_reports) if passed_reports else None
+    latest_dev_pass_reports = [
+        report
+        for report in reports
+        if bool(report["passed"])
+        and int(report.get("config", {}).get("recall_concurrency", 0)) <= 10
+    ]
+    latest_dev_pass = (
+        _select_latest_report(latest_dev_pass_reports) if latest_dev_pass_reports else None
     )
     stress_reports = [
-        report for report in reports
+        report
+        for report in reports
         if int(report.get("config", {}).get("recall_concurrency", 0)) == 50
     ]
     latest_stress = _select_latest_report(stress_reports) if stress_reports else None
-    semantic_failures = [
-        report for report in failed_reports
-        if _has_quality_failure(report)
-    ]
+    semantic_failures = [report for report in failed_reports if _has_quality_failure(report)]
     preprod_phase_results = preprod_summary.get("phase_results", {}) if preprod_summary else {}
     preprod_executed_phases = (
         set(preprod_summary.get("executed_phases", [])) if preprod_summary else set()
@@ -149,7 +148,9 @@ def build_final_report(
     )
     if fixed_issues:
         for issue in fixed_issues:
-            lines.append(f"| 已观察真实压测故障 | {issue} | 已补回归测试并修复，修复后真实短压测通过。 |")
+            lines.append(
+                f"| 已观察真实压测故障 | {issue} | 已补回归测试并修复，修复后真实短压测通过。 |"
+            )
     elif semantic_failures:
         lines.append(
             "| 睡眠提醒表达漂移导致漏召回 | 失败报告中 `sleep-reminder-current` 未命中，active L3 为 `User now accepts gentle reminders about going to sleep`。 | 已加入归一化 pattern 和单测，修复后真实短压测通过。 |"
@@ -306,7 +307,23 @@ def _validate_short_pressure_report(path: Path, report: dict[str, Any]) -> None:
 
 
 def _select_latest_report(reports: list[dict[str, Any]]) -> dict[str, Any]:
-    return reports[-1]
+    if not reports:
+        raise ValueError("reports must not be empty")
+    return max(
+        enumerate(reports),
+        key=lambda item: (_report_timestamp(item[1]), item[0]),
+    )[1]
+
+
+def _report_timestamp(report: dict[str, Any]) -> datetime:
+    for field_name in ("ended_at", "started_at"):
+        raw_timestamp = report.get(field_name)
+        if isinstance(raw_timestamp, str):
+            try:
+                return datetime.fromisoformat(raw_timestamp)
+            except ValueError:
+                continue
+    return datetime.min.replace(tzinfo=UTC)
 
 
 def _render_open_item_rows(executed_phases: set[str], phase_results: dict[str, Any]) -> list[str]:
@@ -324,7 +341,9 @@ def _render_open_item_rows(executed_phases: set[str], phase_results: dict[str, A
         baseline_status = "未执行"
         baseline_detail = "尚未执行持续 10-15 分钟的 baseline。"
     stress_result = phase_results.get("stress", {})
-    stress_duration_passed = bool(stress_result.get("duration_gate_passed")) if stress_result else False
+    stress_duration_passed = (
+        bool(stress_result.get("duration_gate_passed")) if stress_result else False
+    )
     if stress_duration_passed:
         stress_status = "已执行正式长测"
         stress_detail = "已覆盖持续 15-30 分钟 50 并发 stress。"
@@ -335,7 +354,9 @@ def _render_open_item_rows(executed_phases: set[str], phase_results: dict[str, A
         stress_status = "未执行"
         stress_detail = "尚未执行持续 15-30 分钟的 50 并发 stress。"
     spike_result = phase_results.get("spike", {})
-    spike_recovery_passed = bool(spike_result.get("recovery_gate_passed")) if spike_result else False
+    spike_recovery_passed = (
+        bool(spike_result.get("recovery_gate_passed")) if spike_result else False
+    )
     if spike_recovery_passed:
         spike_status = "已执行完整恢复曲线"
         spike_detail = "已验证 10 -> 100 -> 10 恢复曲线。"
@@ -391,15 +412,17 @@ def _render_open_item_rows(executed_phases: set[str], phase_results: dict[str, A
         replay_detail = "已有代表性样本回放报告，但仍有场景未通过或覆盖不足。"
     else:
         replay_status = "未执行"
-        replay_detail = "当前仍是 P0 工程构造集；样本量按槽位、冲突、负样本、隔离和删除覆盖清单扩展。"
+        replay_detail = (
+            "当前仍是 P0 工程构造集；样本量按槽位、冲突、负样本、隔离和删除覆盖清单扩展。"
+        )
     return [
         f"| 10-15 分钟 baseline | {baseline_status} | {baseline_detail} |",
         f"| 10 分钟 P0 soak test | {soak_status} | {soak_detail} |",
         f"| 15-30 分钟 50 并发 stress | {stress_status} | {stress_detail} |",
         f"| 100 并发 spike | {spike_status} | {spike_detail} |",
-        f"| Mem0/Qdrant/Postgres/Redis 故障注入 | {fault_status} | {fault_detail} |",
+        f"| Mem0/Milvus/Postgres/Redis 故障注入 | {fault_status} | {fault_detail} |",
         f"| 代表性样本回放 | {replay_status} | {replay_detail} |",
-        "| 资源饱和观测 | 未执行 | CPU、内存、连接池、队列等待、Qdrant 请求耗时和外部限流尚未形成固定报告。 |",
+        "| 资源饱和观测 | 未执行 | CPU、内存、连接池、队列等待、Milvus 请求耗时和外部限流尚未形成固定报告。 |",
     ]
 
 
@@ -430,7 +453,9 @@ def _render_non_replaced_preprod_sentence(remaining_preprod_evidence: str) -> st
     return f"{prefix}它不能替代 {remaining_preprod_evidence}。"
 
 
-def _recommend_remaining_preprod_work(executed_phases: set[str], phase_results: dict[str, Any]) -> str:
+def _recommend_remaining_preprod_work(
+    executed_phases: set[str], phase_results: dict[str, Any]
+) -> str:
     remaining = []
     if not bool(phase_results.get("baseline", {}).get("duration_gate_passed")):
         remaining.append("10-15 分钟持续 baseline")
@@ -439,13 +464,19 @@ def _recommend_remaining_preprod_work(executed_phases: set[str], phase_results: 
     if not bool(phase_results.get("representative_replay", {}).get("passed")):
         remaining.append("代表性样本回放")
     if not bool(phase_results.get("fault_injection", {}).get("passed")):
-        remaining.append("Mem0/Qdrant/Postgres/Redis 故障注入")
+        remaining.append("Mem0/Milvus/Postgres/Redis 故障注入")
     remaining.append("资源饱和观测")
-    if not bool(phase_results.get("stress", {}).get("duration_gate_passed")) and "stress" not in executed_phases:
+    if (
+        not bool(phase_results.get("stress", {}).get("duration_gate_passed"))
+        and "stress" not in executed_phases
+    ):
         remaining.append("15-30 分钟 stress")
     elif not bool(phase_results.get("stress", {}).get("duration_gate_passed")):
         remaining.append("15-30 分钟持续 stress")
-    if not bool(phase_results.get("spike", {}).get("recovery_gate_passed")) and "spike" not in executed_phases:
+    if (
+        not bool(phase_results.get("spike", {}).get("recovery_gate_passed"))
+        and "spike" not in executed_phases
+    ):
         remaining.append("100 并发 spike")
     elif not bool(phase_results.get("spike", {}).get("recovery_gate_passed")):
         remaining.append("完整 10 -> 100 -> 10 spike 恢复曲线")
