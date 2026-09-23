@@ -1,0 +1,177 @@
+@import "@fontsource/geist-sans/400.css";
+@import "@fontsource/geist-sans/500.css";
+@import "@fontsource/geist-sans/600.css";
+@import "@fontsource/geist-mono/400.css";
+@import "@fontsource/geist-mono/500.css";
+@import "tailwindcss";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* appica.dev 语义 token（2026-09 从线上 CSS 提取）：
+   纯中性灰阶基调 + 黑白主色，彩色只承担状态语义。
+   前景 / 背景 / 边框各 5 档构成层次系统（appica 质感的核心）。
+   状态色三用途分档：默认 = 徽章/正文文字色（AA ≥4.5:1），
+   soft = 徽章底色（低透明度同色相），strong = 条形/圆点等非文字图形。 */
+:root {
+  /* 背景 */
+  --background: #ffffff;
+  --background-subtle: #f9fafb;
+  --background-muted: #f3f4f6;
+  --background-strong: #e5e7eb;
+  --background-inverse: #101828;
+  /* 前景（intense → soft 五档） */
+  --foreground-intense: #101828;
+  --foreground-emphasis: #1e2939;
+  --foreground: #364153;
+  --foreground-muted: #6a7282;
+  --foreground-soft: #99a1af;
+  /* 边框（muted → intense 五档） */
+  --border-muted: #f3f4f6;
+  --border: #e5e7eb;
+  --border-strong: #d1d5dc;
+  --border-emphasis: #99a1af;
+  --border-intense: #6a7282;
+  /* 主色（黑白）与控件 */
+  --primary: #101828;
+  --primary-foreground: #ffffff;
+  --secondary: #f3f4f6;
+  --secondary-foreground: #1e2939;
+  --accent: #f3f4f6;
+  --accent-foreground: #101828;
+  --destructive: #d92d20;
+  --destructive-foreground: #ffffff;
+  --ring: #101828;
+  --input: #d1d5dc;
+  --card: #ffffff;
+  --card-foreground: #101828;
+  --popover: #ffffff;
+  --popover-foreground: #101828;
+  /* 状态 6 档（text 色对白底 ≥4.5:1） */
+  --success: #067647;  --success-soft: #00bb7f1f;  --success-strong: #00bb7f;
+  --error: #d92d20;    --error-soft: #fb2c361f;    --error-strong: #fb2c36;
+  --info: #0084cc;     --info-soft: #00a5ef1f;     --info-strong: #00a5ef;
+  --warning: #c2410c;  --warning-soft: #fe6e001f;  --warning-strong: #fe6e00;
+  --neutral: #364153;  --neutral-soft: #98a2b31f;  --neutral-strong: #98a2b3;
+  --violet: #6d28d9;   --violet-soft: #8d54ff1f;   --violet-strong: #8d54ff;
+}
+
+.dark {
+  --background: #030712;
+  --background-subtle: #0a0d18;
+  --background-muted: #101828;
+  --background-strong: #1e2939;
+  --background-inverse: #f3f4f6;
+  --foreground-intense: #ffffff;
+  --foreground-emphasis: #f3f4f6;
+  --foreground: #d0d5dd;
+  --foreground-muted: #99a1af;
+  --foreground-soft: #6a7282;
+  --border-muted: #101828;
+  --border: #1e2939;
+  --border-strong: #364153;
+  --border-emphasis: #4a5565;
+  --border-intense: #6a7282;
+  --primary: #f3f4f6;
+  --primary-foreground: #101828;
+  --secondary: #1e2939;
+  --secondary-foreground: #f3f4f6;
+  --accent: #1e2939;
+  --accent-foreground: #f3f4f6;
+  --destructive: #ff8a80;
+  --destructive-foreground: #030712;
+  --ring: #99a1af;
+  --input: #364153;
+  --card: #0a0d18;
+  --card-foreground: #f3f4f6;
+  --popover: #0a0d18;
+  --popover-foreground: #f3f4f6;
+  /* 状态 6 档（text 色对 #0a0d18 卡面 ≥4.5:1） */
+  --success: #30cf9a;  --success-soft: #00bb7f2e;  --success-strong: #00bb7f;
+  --error: #ff8a80;    --error-soft: #fb2c362e;    --error-strong: #ff6568;
+  --info: #6ecbff;     --info-soft: #00a5ef2e;     --info-strong: #00bcfe;
+  --warning: #ff9350;  --warning-soft: #fe6e002e;  --warning-strong: #ff8524;
+  --neutral: #99a1af;  --neutral-soft: #98a2b32e;  --neutral-strong: #99a1af;
+  --violet: #b39aff;   --violet-soft: #8d54ff2e;   --violet-strong: #9e7bff;
+}
+
+@theme inline {
+  /* 背景 / 前景 / 边框（appica 多级层次） */
+  --color-background: var(--background);
+  --color-background-subtle: var(--background-subtle);
+  --color-background-muted: var(--background-muted);
+  --color-background-strong: var(--background-strong);
+  --color-background-inverse: var(--background-inverse);
+  --color-foreground: var(--foreground);
+  --color-foreground-intense: var(--foreground-intense);
+  --color-foreground-emphasis: var(--foreground-emphasis);
+  --color-foreground-muted: var(--foreground-muted);
+  --color-foreground-soft: var(--foreground-soft);
+  --color-border: var(--border);
+  --color-border-muted: var(--border-muted);
+  --color-border-strong: var(--border-strong);
+  --color-border-emphasis: var(--border-emphasis);
+  --color-border-intense: var(--border-intense);
+  /* 控件语义 */
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  /* 状态 6 档 × 3 用途 */
+  --color-success: var(--success);
+  --color-success-soft: var(--success-soft);
+  --color-success-strong: var(--success-strong);
+  --color-error: var(--error);
+  --color-error-soft: var(--error-soft);
+  --color-error-strong: var(--error-strong);
+  --color-info: var(--info);
+  --color-info-soft: var(--info-soft);
+  --color-info-strong: var(--info-strong);
+  --color-warning: var(--warning);
+  --color-warning-soft: var(--warning-soft);
+  --color-warning-strong: var(--warning-strong);
+  --color-neutral: var(--neutral);
+  --color-neutral-soft: var(--neutral-soft);
+  --color-neutral-strong: var(--neutral-strong);
+  --color-violet: var(--violet);
+  --color-violet-soft: var(--violet-soft);
+  --color-violet-strong: var(--violet-strong);
+  /* 兼容别名：旧类名指向新灰阶，避免全量改写 */
+  --color-muted: var(--background-muted);
+  --color-muted-foreground: var(--foreground-muted);
+  /* 字体与圆角 */
+  --font-sans: "Geist Sans", -apple-system, "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif;
+  --font-mono: "Geist Mono", ui-monospace, "SF Mono", "JetBrains Mono", monospace;
+  /* 阴影（appica 规格：subtle 上浮感，暗色加深一档边框代替） */
+  --shadow-xs: 0 1px 2px rgb(16 24 40 / 0.05);
+  --shadow-sm: 0 2px 8px -2px rgb(16 24 40 / 0.08);
+  --shadow-md: 0 4px 12px -2px rgb(16 24 40 / 0.1);
+}
+
+@layer base {
+  * {
+    border-color: var(--border);
+  }
+  body {
+    background-color: var(--background);
+    color: var(--foreground);
+    font-family: var(--font-sans);
+    font-size: 1rem;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+  }
+  /* WCAG 2.4.7：全局可见焦点环 */
+  :focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+  }
+}

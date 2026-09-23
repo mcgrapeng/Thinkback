@@ -1,0 +1,25 @@
+# 仅用于本地隔离验证或 CI 类临时环境的依赖栈。
+# 本地开发优先连接共享 liaohe-postgresql；选择 compose 时必须确认 .env 指向 compose 暴露端口。
+# 向量库、LLM endpoint、embedding endpoint 由独立基础设施提供，不在本文件管理范围内。
+# 短期记忆（L1/L2）只落 PostgreSQL；服务不依赖 Redis。
+services:
+  postgres:
+    image: postgres:18.3
+    container_name: thinkback-postgres
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DATABASE:-thinkback}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks:
+      - thinkback-network
+
+volumes:
+  postgres-data:
+
+networks:
+  thinkback-network:
+    driver: bridge
