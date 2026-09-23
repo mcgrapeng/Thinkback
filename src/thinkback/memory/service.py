@@ -926,28 +926,44 @@ L2 更新 (缓存失效)
                 request_metadata=request_metadata,
             )
         except Exception as exc:
+            # 关机竞态下 repository 可能已关闭：终态写丢失不能让回调抛异常
+            # （异常会被线程池吞掉），显式记录损失，任务由读路径自愈兜底。
+            try:
+                with self._task_status_lock:
+                    task = self.repository.get_task(task_id)
+                    if task is None:
+                        async_log.warning("memory l3 async write task missing")
+                        return
+                    task.status = TaskStatus.FAILED
+                    task.last_error = str(exc)
+                    self.repository.save_task(task)
+            except Exception:  # noqa: BLE001
+                async_log.bind(error_type=type(exc).__name__).error(
+                    "memory l3 async write failed; task final state not persisted "
+                    "(repository unavailable, task stays RUNNING until reclaimed)"
+                )
+                return
+            async_log.bind(error_type=type(exc).__name__).warning("memory l3 async write failed")
+            return
+        try:
             with self._task_status_lock:
                 task = self.repository.get_task(task_id)
                 if task is None:
                     async_log.warning("memory l3 async write task missing")
                     return
-                task.status = TaskStatus.FAILED
-                task.last_error = str(exc)
+                task.status = TaskStatus.COMPLETED
+                task.last_error = None
+                task.result = {
+                    "round_id": source_refs[0].get("round_id") if source_refs else None,
+                    "l3_events": [self._redact_event(event) for event in l3_events],
+                }
                 self.repository.save_task(task)
-            async_log.bind(error_type=type(exc).__name__).warning("memory l3 async write failed")
+        except Exception:  # noqa: BLE001
+            async_log.error(
+                "memory l3 async write completed; task final state not persisted "
+                "(repository unavailable, task stays RUNNING until reclaimed)"
+            )
             return
-        with self._task_status_lock:
-            task = self.repository.get_task(task_id)
-            if task is None:
-                async_log.warning("memory l3 async write task missing")
-                return
-            task.status = TaskStatus.COMPLETED
-            task.last_error = None
-            task.result = {
-                "round_id": source_refs[0].get("round_id") if source_refs else None,
-                "l3_events": [self._redact_event(event) for event in l3_events],
-            }
-            self.repository.save_task(task)
         async_log.bind(l3_event_count=len(l3_events)).info("memory l3 async write completed")
 
     def _run_l3_write(
@@ -2062,6 +2078,12 @@ L2 更新 (缓存失效)
         task = self.repository.get_task(task_id)
         if not task:
             return None
+        # 读路径自愈：关机竞态 / SIGKILL 遗留的幽灵 RUNNING 在被读取时惰性
+        # 回收（原子条件更新，健康任务 no-op），不依赖下一次进程启动。
+        if task.status is TaskStatus.RUNNING and self._reclaim_stale_running_task(task_id):
+            task = self.repository.get_task(task_id)
+            if not task:
+                return None
         return TaskResponse(
             task_id=task.task_id,
             request_id=task.request_id,
@@ -2071,6 +2093,21 @@ L2 更新 (缓存失效)
             last_error=task.last_error,
             result=task.result,
         )
+
+    def _reclaim_stale_running_task(self, task_id: str) -> bool:
+        """读路径惰性回收；失败（DB 抖动等）不阻塞读，按原状态返回。"""
+
+        from thinkback.infra.config import settings
+
+        try:
+            return self.repository.reclaim_stale_running_task(
+                task_id, max_age_seconds=settings.task_orphan_running_seconds
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.opt(exception=exc).warning(
+                "memory stale running task read-path reclaim failed"
+            )
+            return False
 
     def reclaim_orphan_running_tasks(self) -> list[str]:
         """启动恢复：把无人推进的超龄 running 任务回收为 failed。

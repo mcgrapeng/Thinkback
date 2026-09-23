@@ -169,3 +169,18 @@ def get_memory_service() -> MemoryService:
                 )
                 service_log.info("memory service initialized")
     return _memory_service
+
+
+def reset_memory_service() -> None:
+    """lifespan 退出时重置 ``MemoryService`` 单例。
+
+    shutdown 已把旧单例的 repository 事件循环关闭、L3 executor 释放；
+    若单例残留，同进程的下一次生命周期（测试逐用例的 app、开发期
+    reload）会在 startup 复用已关闭的仓储 —— reclaim 等首次调用拿到
+    "event loop is closed" 而静默失效。旧对象引用（如 gRPC servicer
+    持有的）行为不变：关闭后调用本就应 fail-fast。
+    """
+
+    global _memory_service
+    with _memory_service_lock:
+        _memory_service = None

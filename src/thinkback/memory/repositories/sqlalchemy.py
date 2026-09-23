@@ -70,6 +70,9 @@ class SqlAlchemyMemoryRepository(L1CacheMixin):
             else self.OPERATION_TIMEOUT_SECONDS
         )
         self.l1_cache: dict[str, list[JournalEntry]] = {}
+        # close() 一经调用即置位：_run 据此 fail-fast，覆盖 join 超时窗口
+        # （loop 已 stop 未 close、worker 线程仍 alive 的竞态）。
+        self._closed = False
         # N-5: 给 L1CacheMixin 注入锁，串行化 update_l1/clear_l1/get_l1。
         self.init_l1_lock()
         self._loop = asyncio.new_event_loop()
@@ -103,6 +106,7 @@ class SqlAlchemyMemoryRepository(L1CacheMixin):
         Idempotent: re-invoking after a previous close is a no-op (loop already
         stopped, thread already exited).
         """
+        self._closed = True
         if not self._loop_thread.is_alive():
             logger.debug("sqlalchemy repository close skipped: worker thread already exited")
             return
@@ -140,12 +144,28 @@ class SqlAlchemyMemoryRepository(L1CacheMixin):
             inner_task[0] = asyncio.current_task()
             return await awaitable
 
+        def _reject() -> RuntimeError:
+            # 拒绝路径必须显式关闭协程：它们从未被事件循环消费，否则
+            # GC 时触发 "coroutine was never awaited"（2026-09 生产排查
+            # 在关机竞态的 L3 straggler save_task 路径上复现过）。
+            wrapped.close()
+            awaitable.close()
+            return RuntimeError("memory repository event loop is closed")
+
+        wrapped = _wrapped()
         # 快速失败：仓储已关闭（关机顺序中 L3 executor 的残留任务可能晚于
         # repository.close 到达）时，run_coroutine_threadsafe 永不解析，
         # 调用线程会白等满 operation_timeout 秒才报一个误导性的超时。
-        if self._loop.is_closed() or not self._loop_thread.is_alive():
-            raise RuntimeError("memory repository event loop is closed")
-        future = asyncio.run_coroutine_threadsafe(_wrapped(), self._loop)
+        # ``_closed`` 覆盖 close() 的 join 超时窗口（loop 已 stop 未 close、
+        # worker 线程仍 alive）：该窗口下 is_closed/is_alive 检查都会放行，
+        # 提交到已停止的 loop 只会白等满超时。
+        if self._closed or self._loop.is_closed() or not self._loop_thread.is_alive():
+            raise _reject()
+        try:
+            future = asyncio.run_coroutine_threadsafe(wrapped, self._loop)
+        except RuntimeError:
+            # 竞态：守卫检查通过后、提交前 loop 被关闭 —— 协程未被消费。
+            raise _reject() from None
         try:
             return future.result(timeout=self.operation_timeout_seconds)
         except TimeoutError:
@@ -1056,6 +1076,47 @@ class SqlAlchemyMemoryRepository(L1CacheMixin):
                 max_age_seconds=max_age_seconds,
                 task_ids=reclaimed[:20],
             ).warning("memory stale running tasks reclaimed")
+        return reclaimed
+
+    def reclaim_stale_running_task(self, task_id: str, *, max_age_seconds: float) -> bool:
+        return self._run(
+            self._reclaim_stale_running_task(task_id, max_age_seconds=max_age_seconds)
+        )
+
+    async def _reclaim_stale_running_task(self, task_id: str, *, max_age_seconds: float) -> bool:
+        """get_task 读路径自愈：单任务原子条件回收，WHERE 未命中即 no-op。
+
+        关机竞态 / SIGKILL 会让后台线程的终态写丢失，任务停留 RUNNING；
+        启动回收只在启动时跑一次，快速重启后幽灵可能长期存活。本方法
+        在被读取的那一刻惰性回收：健康任务（updated_at 新鲜）的 WHERE
+        不命中，零影响；多副本并发时后到者不命中，天然幂等。
+        """
+        cutoff = datetime.now(UTC) - timedelta(seconds=max_age_seconds)
+        async with self.session_factory() as session:
+            result = await session.execute(
+                update(MemoryTaskRecord)
+                .where(
+                    MemoryTaskRecord.task_id == task_id,
+                    MemoryTaskRecord.status == TaskStatus.RUNNING.value,
+                    MemoryTaskRecord.updated_at < cutoff,
+                )
+                .values(
+                    status=TaskStatus.FAILED.value,
+                    last_error=(
+                        f"reclaimed: orphaned running task with no update for "
+                        f"{max_age_seconds:g}s (stale read recovery)"
+                    ),
+                    row_version=MemoryTaskRecord.row_version + 1,
+                    updated_at=func.now(),
+                )
+                .returning(MemoryTaskRecord.task_id)
+            )
+            reclaimed = result.fetchone() is not None
+            await session.commit()
+        if reclaimed:
+            logger.bind(task_id=task_id, max_age_seconds=max_age_seconds).warning(
+                "memory stale running task reclaimed on read"
+            )
         return reclaimed
 
     @staticmethod

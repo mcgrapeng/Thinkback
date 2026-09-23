@@ -314,3 +314,88 @@ def test_service_reclaim_orphan_running_tasks_swallows_repository_failure() -> N
     )
 
     assert service.reclaim_orphan_running_tasks() == []
+
+
+# ── 幽灵 running 任务读路径自愈（2026-09 关机竞态残留堵死） ───────────
+
+
+def test_reclaim_stale_running_task_single_task_semantics(monkeypatch: pytest.MonkeyPatch) -> None:
+    """单任务惰性回收：超龄 running 命中；新近 / 非 running / 不存在 / 二次调用 no-op。"""
+
+    import time as time_module
+
+    repository = InMemoryMemoryRepository()
+    repository.claim_task(make_task("orphan-task", status=TaskStatus.RUNNING))
+    repository.claim_task(make_task("fresh-task", status=TaskStatus.RUNNING))
+    repository.claim_task(make_task("done-task", status=TaskStatus.COMPLETED))
+    repository.task_updated_at["orphan-task"] = time_module.time() - 7200
+
+    assert repository.reclaim_stale_running_task("orphan-task", max_age_seconds=1800.0) is True
+    # 幂等：status 已非 running，二次回收（多副本并发）不命中
+    assert repository.reclaim_stale_running_task("orphan-task", max_age_seconds=1800.0) is False
+    assert repository.reclaim_stale_running_task("fresh-task", max_age_seconds=1800.0) is False
+    assert repository.reclaim_stale_running_task("done-task", max_age_seconds=1800.0) is False
+    assert repository.reclaim_stale_running_task("missing-task", max_age_seconds=1800.0) is False
+
+    orphan_after = repository.get_task("orphan-task")
+    assert orphan_after is not None and orphan_after.status is TaskStatus.FAILED
+    assert orphan_after.last_error is not None and "reclaimed" in orphan_after.last_error
+
+
+def test_get_task_heals_stale_running_task(monkeypatch: pytest.MonkeyPatch) -> None:
+    """get_task 读到超龄幽灵 running 就地回收返回 failed；健康 running 原样返回。"""
+
+    import time as time_module
+
+    from thinkback.infra import config
+
+    monkeypatch.setattr(config.settings, "task_orphan_running_seconds", 1800.0)
+    repository = InMemoryMemoryRepository()
+    repository.claim_task(make_task("orphan-task", status=TaskStatus.RUNNING))
+    repository.claim_task(make_task("fresh-task", status=TaskStatus.RUNNING))
+    repository.task_updated_at["orphan-task"] = time_module.time() - 7200
+
+    service = MemoryService(repository=repository, backend=FakeMemoryBackend())
+
+    healed = service.get_task("orphan-task")
+    assert healed is not None and healed.status is TaskStatus.FAILED
+    assert healed.last_error is not None and "reclaimed" in healed.last_error
+
+    fresh = service.get_task("fresh-task")
+    assert fresh is not None and fresh.status is TaskStatus.RUNNING
+
+
+def test_get_task_heal_failure_returns_original_task() -> None:
+    """读路径回收抛错不阻塞读：按原状态返回，不向上传播。"""
+
+    class ExplodingRepository(InMemoryMemoryRepository):
+        def reclaim_stale_running_task(self, task_id: str, *, max_age_seconds: float) -> bool:
+            raise RuntimeError("db unavailable")
+
+    repository = ExplodingRepository()
+    repository.claim_task(make_task("task-1", status=TaskStatus.RUNNING))
+    service = MemoryService(repository=repository, backend=FakeMemoryBackend())
+
+    result = service.get_task("task-1")
+    assert result is not None and result.status is TaskStatus.RUNNING
+
+
+def test_complete_async_l3_write_survives_repository_shutdown(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """关机竞态：终态写落库失败时后台回调不抛异常（损失显式记录，由读路径自愈兜底）。"""
+
+    repository = InMemoryMemoryRepository()
+    repository.claim_task(make_task("task-straggler", status=TaskStatus.RUNNING))
+    service = MemoryService(
+        repository=repository, backend=FakeMemoryBackend(), l3_write_mode="async"
+    )
+
+    def explode(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError("memory repository event loop is closed")
+
+    monkeypatch.setattr(repository, "get_task", explode)
+
+    # 契约：不抛异常（终态丢失被记录成日志；任务保持 RUNNING，由 get_task
+    # 自愈 / 启动回收收敛为 FAILED）
+    service._complete_async_l3_write("task-straggler", [], "user-1", "innies", [], {})

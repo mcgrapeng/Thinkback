@@ -108,7 +108,7 @@ async def _lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: ARG001
     # so async-mode append/delete/rebuild tasks don't get stuck in RUNNING.
     # Then explicitly shutdown the L3 executor (for owned executors) so
     # SIGTERM exits promptly instead of hanging on idle workers.
-    from thinkback.api.dependencies import _memory_service
+    from thinkback.api.dependencies import _memory_service, reset_memory_service
 
     if _memory_service is not None:
         _memory_service.drain_l3_background_tasks(timeout=30)
@@ -134,6 +134,12 @@ async def _lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: ARG001
         logger.info("database engine connection pool disposed")
     except Exception as exc:  # noqa: BLE001
         logger.warning(f"database engine dispose failed: {exc}")
+
+    # 最后一步：重置服务单例。旧单例的 repository/executor 均已关闭，
+    # 残留会让同进程的下一次生命周期（测试逐用例 app、开发期 reload）
+    # 在 startup 复用已关闭仓储而静默失效。
+    reset_memory_service()
+    logger.info("memory service singleton reset")
 
 
 def _register_request_middleware(app: FastAPI) -> None:

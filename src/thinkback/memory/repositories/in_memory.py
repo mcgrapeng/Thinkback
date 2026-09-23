@@ -428,3 +428,22 @@ class InMemoryMemoryRepository(L1CacheMixin):
                 self.task_updated_at[task_id] = time.time()
                 reclaimed.append(task_id)
         return reclaimed
+
+    def reclaim_stale_running_task(self, task_id: str, *, max_age_seconds: float) -> bool:
+        """与 SQL 版同语义：单任务惰性回收（get_task 读路径自愈用）。"""
+
+        cutoff = time.time() - max_age_seconds
+        with self.task_lock:
+            task = self.tasks.get(task_id)
+            if task is None or task.status != TaskStatus.RUNNING:
+                return False
+            if self.task_updated_at.get(task_id, 0.0) >= cutoff:
+                return False
+            task.status = TaskStatus.FAILED
+            task.last_error = (
+                f"reclaimed: orphaned running task with no update for "
+                f"{max_age_seconds:g}s (stale read recovery)"
+            )
+            task.row_version += 1
+            self.task_updated_at[task_id] = time.time()
+            return True

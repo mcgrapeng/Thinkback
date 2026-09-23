@@ -267,6 +267,14 @@ L3 向量数据在 Milvus（collection=innies_memory，COSINE，1024 维），
   `_mutate_task_with_retry` 重读重放收敛（进程内锁 + 跨副本 CAS 双保险）。
   残留：前台用例路径（append 预算/delete/update/rebuild 终态写）遇冲突
   以 409 上抛、由客户端幂等重试收敛，未做自动重放。
+- 孤儿 RUNNING 任务双层回收（2026-09 关机竞态堵死）：关机竞态 / SIGKILL
+  会让 L3 后台线程的终态写丢失，任务停留 RUNNING。①启动回收
+  （`reclaim_orphan_running_tasks`，set 级条件更新）；②读路径自愈
+  （`get_task` 读到超龄 RUNNING 时单任务原子回收，健康任务 no-op）——
+  幽灵任务的存活期从「依赖下一次启动」收敛为「≤ task_orphan_running_seconds
+  （默认 1800s）且被读取即自愈」，两层共用同一阈值与幂等语义。
+  已知边界：终态写丢失本身仍会发生（进程死亡时无从写库），仅保证
+  客户端可见状态收敛；跨重启续跑未完成的工作属 DB 任务队列范畴，未做。
 - L1 读路径为 "进程缓存优先，miss 回源 PG journal"（`get_l1` 回源最近
   10 个 active 轮次）：跨副本 append/recall 与进程重启场景已正确。
   残留边界：**删除操作只失效本副本缓存**，其他副本若曾缓存过该会话，
