@@ -94,7 +94,7 @@ src/thinkback/
 ├── memory/                    # 应用层
 │   ├── service.py             # MemoryService（用例编排器：append/recall/delete/rebuild 状态机、锁与缓存边界）
 │   ├── schemas.py             # API DTO + 校验器（re-export domain.enums）
-│   ├── caches.py              # BoundedTTLCache(dict 子类：TTL + 容量淘汰)
+│   ├── caches.py              # BoundedTTLCache（cachetools.TTLCache 适配层：TTL + 容量淘汰）
 │   ├── l3.py                  # L3WriteExecutor（后台写基础设施：线程池生命周期/容量背压/future 记账）
 │   ├── l2_refresh.py          # L2BackgroundRefresher（LLM 综合摘要后台去抖刷新）
 │   ├── decay.py               # MemoryDecaySweeper（遗忘 decay 清扫，默认关）

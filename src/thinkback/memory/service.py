@@ -14,7 +14,6 @@ from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from hashlib import sha256
 from threading import Lock, RLock
-from time import monotonic
 from typing import Any, Literal
 
 from loguru import logger
@@ -2843,12 +2842,13 @@ L2 更新 (缓存失效)
 
     def _active_memories(self, user_id: str, memory_scope_id: str) -> list[Any]:
         cache_key = (user_id, memory_scope_id)
-        now = monotonic()
-        cached = self._active_memory_cache.get_if_fresh(cache_key, now)
-        if cached is not None:
-            return list(cached)
+        # TTLCache 读到过期项时会删除它（内部可变），读路径同样必须持锁。
+        with self._read_cache_lock:
+            cached = self._active_memory_cache_synced().get_if_fresh(cache_key)
+            if cached is not None:
+                return list(cached)
         memories = list(self.repository.active_memories(user_id, memory_scope_id))
-        self._read_cache_put(self._active_memory_cache, cache_key, list(memories), now)
+        self._read_cache_put(self._active_memory_cache, cache_key, list(memories))
         return memories
 
     def _read_cache_put(
@@ -2856,17 +2856,32 @@ L2 更新 (缓存失效)
         cache: BoundedTTLCache,
         cache_key: tuple[str, str],
         value: Any,
-        now: float,
     ) -> None:
-        """写入读缓存并保持条目数有界（策略在 ``memory.caches``）。
-
-        每次写入前同步 ``max_entries``，保持 "构造后修改
-        ``READ_CACHE_MAX_ENTRIES`` 立即生效" 的既有语义。
-        """
+        """写入读缓存（策略在 ``memory.caches``，cachetools TTLCache）。"""
 
         with self._read_cache_lock:
-            cache.max_entries = self.READ_CACHE_MAX_ENTRIES
-            cache.put(cache_key, value, now)
+            cache.put(cache_key, value)
+
+    def _active_memory_cache_synced(self) -> BoundedTTLCache:
+        """须在 ``_read_cache_lock`` 内调用：上限变化时重建（cachetools 的
+        ``maxsize`` 只读，重建是唯一改界方式；生产中上限恒定，零重建）。"""
+
+        if self._active_memory_cache.maxsize != self.READ_CACHE_MAX_ENTRIES:
+            self._active_memory_cache = BoundedTTLCache(
+                ttl_seconds=self.active_memory_cache_ttl_seconds,
+                max_entries=self.READ_CACHE_MAX_ENTRIES,
+            )
+        return self._active_memory_cache
+
+    def _summary_cache_synced(self) -> BoundedTTLCache:
+        """同 ``_active_memory_cache_synced``，L2 摘要缓存版。"""
+
+        if self._summary_cache.maxsize != self.READ_CACHE_MAX_ENTRIES:
+            self._summary_cache = BoundedTTLCache(
+                ttl_seconds=self.active_memory_cache_ttl_seconds,
+                max_entries=self.READ_CACHE_MAX_ENTRIES,
+            )
+        return self._summary_cache
 
     def _invalidate_active_memory_cache(self, user_id: str, memory_scope_id: str) -> None:
         with self._read_cache_lock:
@@ -2874,12 +2889,13 @@ L2 更新 (缓存失效)
 
     def _summary(self, user_id: str, memory_scope_id: str) -> Any | None:
         cache_key = (user_id, memory_scope_id)
-        now = monotonic()
-        cached = self._summary_cache.get_if_fresh(cache_key, now)
-        if cached is not None:
-            return cached
+        # 同 _active_memories：TTLCache 的读会删除过期项，须持锁。
+        with self._read_cache_lock:
+            cached = self._summary_cache_synced().get_if_fresh(cache_key)
+            if cached is not None:
+                return cached
         summary = self.repository.get_summary(user_id, memory_scope_id)
-        self._read_cache_put(self._summary_cache, cache_key, summary, now)
+        self._read_cache_put(self._summary_cache, cache_key, summary)
         return summary
 
     def _invalidate_summary_cache(self, user_id: str, memory_scope_id: str) -> None:
