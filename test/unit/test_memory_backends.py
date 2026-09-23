@@ -6,7 +6,7 @@ from typing import Any
 import pytest
 from loguru import logger
 
-from innies_memory.memory.backends import FakeMemoryBackend
+from thinkback.memory.backends import FakeMemoryBackend
 
 
 def test_fake_backend_add_search_delete_all_are_scoped() -> None:
@@ -31,7 +31,7 @@ def test_fake_backend_add_search_delete_all_are_scoped() -> None:
 
 
 def test_mem0_library_config_builder_targets_milvus_and_openai() -> None:
-    from innies_memory.memory.backends import build_mem0_library_config
+    from thinkback.memory.backends import build_mem0_library_config
 
     config = build_mem0_library_config(
         llm_api_key="openai-secret",
@@ -83,7 +83,7 @@ def test_mem0_library_config_builder_targets_milvus_and_openai() -> None:
 
 
 def test_mem0_library_config_builder_supports_unauthenticated_milvus() -> None:
-    from innies_memory.memory.backends import build_mem0_library_config
+    from thinkback.memory.backends import build_mem0_library_config
 
     config = build_mem0_library_config(
         llm_api_key="openai-secret",
@@ -113,8 +113,8 @@ def test_mem0_library_config_builder_supports_unauthenticated_milvus() -> None:
 def test_openai_compatible_embedding_omits_dimensions_and_uses_dummy_key(monkeypatch) -> None:
     from mem0.configs.embeddings.base import BaseEmbedderConfig
 
-    from innies_memory.memory import embeddings
-    from innies_memory.memory.embeddings import OpenAICompatibleEmbeddingNoDimensions
+    from thinkback.memory import embeddings
+    from thinkback.memory.embeddings import OpenAICompatibleEmbeddingNoDimensions
 
     observed: dict[str, Any] = {}
 
@@ -163,7 +163,7 @@ def test_openai_compatible_embedding_omits_dimensions_and_uses_dummy_key(monkeyp
 def test_mem0_library_backend_registers_custom_embedder_provider(monkeypatch, tmp_path) -> None:
     from mem0.utils.factory import EmbedderFactory
 
-    from innies_memory.memory.backends import Mem0LibraryMemoryBackend
+    from thinkback.memory.backends import Mem0LibraryMemoryBackend
 
     observed: dict[str, Any] = {}
     original_mapping = dict(EmbedderFactory.provider_to_class)
@@ -189,7 +189,7 @@ def test_mem0_library_backend_registers_custom_embedder_provider(monkeypatch, tm
 
         assert isinstance(backend.memory_client, FakeMemory)
         assert observed["provider_path"] == (
-            "innies_memory.memory.embeddings.OpenAICompatibleEmbeddingNoDimensions"
+            "thinkback.memory.embeddings.OpenAICompatibleEmbeddingNoDimensions"
         )
         assert observed["config"]["embedder"]["provider"] == "openai"
     finally:
@@ -198,7 +198,7 @@ def test_mem0_library_backend_registers_custom_embedder_provider(monkeypatch, tm
 
 
 def test_mem0_library_backend_logs_english_call_summaries_without_content() -> None:
-    from innies_memory.memory.backends import Mem0LibraryMemoryBackend
+    from thinkback.memory.backends import Mem0LibraryMemoryBackend
 
     class FakeMemoryClient:
         def add(self, messages, **kwargs):  # type: ignore[no-untyped-def]
@@ -247,7 +247,7 @@ def test_mem0_library_backend_disables_mem0_telemetry_capture(monkeypatch) -> No
     import mem0.memory.main as mem0_main
     import mem0.memory.telemetry as mem0_telemetry
 
-    from innies_memory.memory.backends import Mem0LibraryMemoryBackend
+    from thinkback.memory.backends import Mem0LibraryMemoryBackend
 
     calls: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
 
@@ -277,7 +277,7 @@ def test_disable_mem0_telemetry_is_thread_stable() -> None:
 
     import mem0.memory.telemetry as mem0_telemetry
 
-    from innies_memory.memory.backends import disable_mem0_telemetry
+    from thinkback.memory.backends import disable_mem0_telemetry
 
     disable_mem0_telemetry()
     before = len(threading.enumerate())
@@ -291,7 +291,7 @@ def test_disable_mem0_telemetry_is_thread_stable() -> None:
 def test_mem0_library_backend_maps_add_search_update_delete_and_scoped_delete_all_with_limit() -> (
     None
 ):
-    from innies_memory.memory.backends import Mem0LibraryMemoryBackend
+    from thinkback.memory.backends import Mem0LibraryMemoryBackend
 
     class FakeMemoryClient:
         def __init__(self) -> None:
@@ -389,7 +389,7 @@ def test_mem0_library_backend_maps_add_search_update_delete_and_scoped_delete_al
 
 
 def test_mem0_library_backend_delete_ignores_missing_milvus_vector() -> None:
-    from innies_memory.memory.backends import Mem0LibraryMemoryBackend
+    from thinkback.memory.backends import Mem0LibraryMemoryBackend
 
     class FakeMemoryClient:
         def delete(self, memory_id):  # type: ignore[no-untyped-def]
@@ -405,7 +405,7 @@ def test_mem0_library_backend_delete_ignores_missing_milvus_vector() -> None:
 
 
 def test_mem0_library_backend_delete_still_raises_unexpected_errors() -> None:
-    from innies_memory.memory.backends import Mem0LibraryMemoryBackend
+    from thinkback.memory.backends import Mem0LibraryMemoryBackend
 
     class FakeMemoryClient:
         def delete(self, memory_id):  # type: ignore[no-untyped-def]
@@ -426,7 +426,7 @@ def test_mem0_library_backend_update_retries_not_found_visibility_window(
 ) -> None:
     """add 后紧邻 update 的 pk 点查不可见窗口：not found 应退避重试后成功。"""
 
-    from innies_memory.memory.backends import Mem0LibraryMemoryBackend
+    from thinkback.memory.backends import Mem0LibraryMemoryBackend
 
     class FlakyMemoryClient:
         def __init__(self) -> None:
@@ -441,7 +441,7 @@ def test_mem0_library_backend_update_retries_not_found_visibility_window(
             return {"message": "Memory updated successfully!"}
 
     sleeps: list[float] = []
-    monkeypatch.setattr("innies_memory.memory.backends.mem0_library.time.sleep", sleeps.append)
+    monkeypatch.setattr("thinkback.memory.backends.mem0_library.time.sleep", sleeps.append)
 
     client = FlakyMemoryClient()
     backend = Mem0LibraryMemoryBackend(
@@ -459,14 +459,14 @@ def test_mem0_library_backend_update_does_not_retry_unrelated_valueerrors(
 ) -> None:
     """not found 之外的 ValueError（真实缺失/配置错误）不重试，直接上抛。"""
 
-    from innies_memory.memory.backends import Mem0LibraryMemoryBackend
+    from thinkback.memory.backends import Mem0LibraryMemoryBackend
 
     class FakeMemoryClient:
         def update(self, memory_id, data):  # type: ignore[no-untyped-def]
             raise ValueError("expiration_date must be YYYY-MM-DD")
 
     sleeps: list[float] = []
-    monkeypatch.setattr("innies_memory.memory.backends.mem0_library.time.sleep", sleeps.append)
+    monkeypatch.setattr("thinkback.memory.backends.mem0_library.time.sleep", sleeps.append)
 
     backend = Mem0LibraryMemoryBackend(
         config={"history_db_path": ".mem0/history.db"}, memory_client=FakeMemoryClient()
@@ -482,14 +482,14 @@ def test_mem0_library_backend_update_gives_up_after_bounded_retries(
 ) -> None:
     """持续 not found 时按退避序列重试满后上抛，不无限循环。"""
 
-    from innies_memory.memory.backends import Mem0LibraryMemoryBackend
+    from thinkback.memory.backends import Mem0LibraryMemoryBackend
 
     class AlwaysMissingClient:
         def update(self, memory_id, data):  # type: ignore[no-untyped-def]
             raise ValueError(f"Memory with id {memory_id} not found")
 
     sleeps: list[float] = []
-    monkeypatch.setattr("innies_memory.memory.backends.mem0_library.time.sleep", sleeps.append)
+    monkeypatch.setattr("thinkback.memory.backends.mem0_library.time.sleep", sleeps.append)
 
     client = AlwaysMissingClient()
     backend = Mem0LibraryMemoryBackend(
@@ -502,7 +502,7 @@ def test_mem0_library_backend_update_gives_up_after_bounded_retries(
 
 
 def test_mem0_library_backend_supports_legacy_entity_scope_kwargs() -> None:
-    from innies_memory.memory.backends import Mem0LibraryMemoryBackend
+    from thinkback.memory.backends import Mem0LibraryMemoryBackend
 
     class FakeLegacyMemoryClient:
         def __init__(self) -> None:
@@ -559,7 +559,7 @@ def test_mem0_library_backend_supports_legacy_entity_scope_kwargs() -> None:
 
 
 def test_mem0_library_backend_supports_top_k_mem0_versions() -> None:
-    from innies_memory.memory.backends import Mem0LibraryMemoryBackend
+    from thinkback.memory.backends import Mem0LibraryMemoryBackend
 
     class FakeTopKMemoryClient:
         def __init__(self) -> None:
@@ -608,7 +608,7 @@ def test_mem0_library_backend_supports_top_k_mem0_versions() -> None:
 
 
 def test_mem0_library_backend_health_check_runs_library_add_and_cleanup_probe() -> None:
-    from innies_memory.memory.backends import Mem0LibraryMemoryBackend
+    from thinkback.memory.backends import Mem0LibraryMemoryBackend
 
     class FakeMemoryClient:
         def __init__(self) -> None:
@@ -639,7 +639,7 @@ def test_mem0_library_backend_health_check_runs_library_add_and_cleanup_probe() 
 
 
 def test_mem0_library_backend_health_check_reports_llm_probe_failure() -> None:
-    from innies_memory.memory.backends import Mem0LibraryMemoryBackend
+    from thinkback.memory.backends import Mem0LibraryMemoryBackend
 
     class FakeMemoryClient:
         def add(self, messages, **kwargs):  # type: ignore[no-untyped-def]
@@ -659,7 +659,7 @@ def test_mem0_library_backend_health_check_reports_llm_probe_failure() -> None:
 
 
 def test_mem0_library_backend_health_check_reports_cleanup_delete_failure() -> None:
-    from innies_memory.memory.backends import Mem0LibraryMemoryBackend
+    from thinkback.memory.backends import Mem0LibraryMemoryBackend
 
     class FakeMemoryClient:
         def add(self, messages, **kwargs):  # type: ignore[no-untyped-def]
@@ -683,7 +683,7 @@ def test_mem0_library_backend_health_check_reports_cleanup_delete_failure() -> N
 
 
 def test_mem0_library_backend_creates_history_db_parent_directory(tmp_path) -> None:
-    from innies_memory.memory.backends import Mem0LibraryMemoryBackend
+    from thinkback.memory.backends import Mem0LibraryMemoryBackend
 
     history_db_path = tmp_path / "nested" / "history.db"
     observed: dict[str, bool] = {}
@@ -709,7 +709,7 @@ def test_mem0_library_backend_creates_history_db_parent_directory(tmp_path) -> N
 
 
 def test_mem0_library_backend_builds_lazy_client_once_under_concurrent_access() -> None:
-    from innies_memory.memory.backends import Mem0LibraryMemoryBackend
+    from thinkback.memory.backends import Mem0LibraryMemoryBackend
 
     class FakeMemoryClient:
         pass
@@ -737,7 +737,7 @@ def test_mem0_library_backend_builds_lazy_client_once_under_concurrent_access() 
 
 
 def test_mem0_library_backend_allows_calls_to_initialized_client_concurrently() -> None:
-    from innies_memory.memory.backends import Mem0LibraryMemoryBackend
+    from thinkback.memory.backends import Mem0LibraryMemoryBackend
 
     class BlockingMemoryClient:
         def __init__(self) -> None:
@@ -816,7 +816,7 @@ def test_mem0_library_backend_runs_mem0_internal_thread_pool_inline() -> None:
 
     import mem0.memory.main as mem0_main
 
-    from innies_memory.memory.backends import Mem0LibraryMemoryBackend
+    from thinkback.memory.backends import Mem0LibraryMemoryBackend
 
     original_mem0_concurrent = mem0_main.concurrent
     original_std_executor = concurrent.futures.ThreadPoolExecutor
@@ -853,7 +853,7 @@ def test_mem0_library_backend_runs_mem0_internal_thread_pool_inline() -> None:
 
 
 def test_mem0_library_backend_limits_concurrent_mem0_calls() -> None:
-    from innies_memory.memory.backends import Mem0LibraryMemoryBackend
+    from thinkback.memory.backends import Mem0LibraryMemoryBackend
 
     class BlockingMemoryClient:
         def __init__(self) -> None:
@@ -918,7 +918,7 @@ def test_mem0_library_backend_does_not_spawn_mem0_threads_during_concurrent_call
 
     import mem0.memory.main as mem0_main
 
-    from innies_memory.memory.backends import Mem0LibraryMemoryBackend
+    from thinkback.memory.backends import Mem0LibraryMemoryBackend
 
     original_mem0_concurrent = mem0_main.concurrent
     thread_ids: set[int] = set()
@@ -969,7 +969,7 @@ def test_mem0_library_backend_delete_retries_not_found_then_converges(
 ) -> None:
     """mem0 v2 窗口性 not found：退避重试后成功删除（supersede 清理场景）。"""
 
-    from innies_memory.memory.backends import Mem0LibraryMemoryBackend
+    from thinkback.memory.backends import Mem0LibraryMemoryBackend
 
     class FlakyMemoryClient:
         def __init__(self) -> None:
@@ -982,7 +982,7 @@ def test_mem0_library_backend_delete_retries_not_found_then_converges(
             return {"message": "Memory deleted successfully!"}
 
     sleeps: list[float] = []
-    monkeypatch.setattr("innies_memory.memory.backends.mem0_library.time.sleep", sleeps.append)
+    monkeypatch.setattr("thinkback.memory.backends.mem0_library.time.sleep", sleeps.append)
 
     client = FlakyMemoryClient()
     backend = Mem0LibraryMemoryBackend(
@@ -1000,14 +1000,14 @@ def test_mem0_library_backend_delete_not_found_after_retries_is_idempotent_skip(
 ) -> None:
     """重试预算耗尽仍 not found：与并发已删除不可区分，幂等跳过不上抛。"""
 
-    from innies_memory.memory.backends import Mem0LibraryMemoryBackend
+    from thinkback.memory.backends import Mem0LibraryMemoryBackend
 
     class AlwaysMissingClient:
         def delete(self, memory_id):  # type: ignore[no-untyped-def]
             raise ValueError(f"Memory with id {memory_id} not found")
 
     sleeps: list[float] = []
-    monkeypatch.setattr("innies_memory.memory.backends.mem0_library.time.sleep", sleeps.append)
+    monkeypatch.setattr("thinkback.memory.backends.mem0_library.time.sleep", sleeps.append)
 
     backend = Mem0LibraryMemoryBackend(
         config={"history_db_path": ".mem0/history.db"}, memory_client=AlwaysMissingClient()
@@ -1023,14 +1023,14 @@ def test_mem0_library_backend_delete_does_not_retry_unrelated_valueerrors(
 ) -> None:
     """not found 之外的 ValueError 不重试直接上抛（真实故障要暴露）。"""
 
-    from innies_memory.memory.backends import Mem0LibraryMemoryBackend
+    from thinkback.memory.backends import Mem0LibraryMemoryBackend
 
     class FakeMemoryClient:
         def delete(self, memory_id):  # type: ignore[no-untyped-def]
             raise ValueError("vector store connection refused")
 
     sleeps: list[float] = []
-    monkeypatch.setattr("innies_memory.memory.backends.mem0_library.time.sleep", sleeps.append)
+    monkeypatch.setattr("thinkback.memory.backends.mem0_library.time.sleep", sleeps.append)
 
     backend = Mem0LibraryMemoryBackend(
         config={"history_db_path": ".mem0/history.db"}, memory_client=FakeMemoryClient()

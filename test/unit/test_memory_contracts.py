@@ -1,7 +1,7 @@
 import pytest
 from pydantic import ValidationError
 
-from innies_memory.memory.schemas import (
+from thinkback.memory.schemas import (
     AppendMemoryRequest,
     DeleteMemoryRequest,
     DeleteScope,

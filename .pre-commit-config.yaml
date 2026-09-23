@@ -24,21 +24,21 @@ repos:
       - id: ruff-check
         name: ruff check
         description: Lint Python sources with Ruff.
-        entry: poetry run ruff check src test script alembic
+        entry: uv run --group dev ruff check src test script alembic
         language: system
         files: \.py$
         pass_filenames: false
       - id: ruff-format
         name: ruff format --check
         description: Check Python formatting with Ruff (no auto-fix).
-        entry: poetry run ruff format --check src test script alembic
+        entry: uv run --group dev ruff format --check src test script alembic
         language: system
         files: \.py$
         pass_filenames: false
       - id: mypy
         name: mypy
         description: Static type-check Python sources under src/.
-        entry: poetry run mypy src
+        entry: uv run --group dev mypy src
         language: system
         files: ^src/.*\.py$
         pass_filenames: false

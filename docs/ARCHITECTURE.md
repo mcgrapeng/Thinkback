@@ -11,6 +11,11 @@
 编排收敛 `memory/`，基础设施隔离 `infra/`，传输层薄化 `api/` + `rpc/`。
 **短期记忆（L1/L2）只落 PostgreSQL，服务无 Redis / Celery 依赖。**
 
+包布局：代码包为 `src/thinkback`（uv + PEP 621 + Python 3.12，
+hatchling 构建）；部署标识（镜像名 / k8s 配置 / 数据库名 /
+Milvus collection / `LONG_TERM_SCOPE_ID`）沿用 `innies-memory`，
+两者独立演进，重命名部署标识需配套 gitops 与数据迁移。
+
 ---
 
 ## 1. 架构总览
@@ -72,7 +77,7 @@
 ## 2. 组件结构
 
 ```text
-src/innies_memory/
+src/thinkback/
 ├── domain/                    # 纯领域层（仅标准库依赖）
 │   ├── enums.py               # 10 个 StrEnum 状态机/词汇表
 │   ├── entities.py            # JournalEntry/SummaryEntry/MemoryIndexEntry/TaskEntry
@@ -87,9 +92,12 @@ src/innies_memory/
 │       ├── canonical.py       # memory_conflict_slot / canonical_memory_text*
 │       └── support.py         # 源文本交叉校验 / round_order 游标 / 本地索引 ID 识别
 ├── memory/                    # 应用层
-│   ├── service.py             # MemoryService（编排器，4027 行；含委托保持兼容）
+│   ├── service.py             # MemoryService（用例编排器：append/recall/delete/rebuild 状态机、锁与缓存边界）
 │   ├── schemas.py             # API DTO + 校验器（re-export domain.enums）
 │   ├── caches.py              # BoundedTTLCache(dict 子类：TTL + 容量淘汰)
+│   ├── l3.py                  # L3WriteExecutor（后台写基础设施：线程池生命周期/容量背压/future 记账）
+│   ├── l2_refresh.py          # L2BackgroundRefresher（LLM 综合摘要后台去抖刷新）
+│   ├── decay.py               # MemoryDecaySweeper（遗忘 decay 清扫，默认关）
 │   ├── repositories/
 │   │   ├── _l1_cache.py       # L1 进程内缓存 mixin（N-5 锁保护）
 │   │   ├── in_memory.py       # 测试/开发实现
@@ -111,7 +119,8 @@ src/innies_memory/
 
 | 组件 | 职责 | 不负责 |
 | --- | --- | --- |
-| `MemoryService` | 用例编排：幂等、任务状态机、锁边界、L3 异步管线、L2 后台刷新触发、墓碑与重建 | 文本策略（已下沉 domain）、SQL、mem0 调用细节 |
+| `MemoryService` | 用例编排：幂等、任务状态机、锁边界、L3 写工作流、L2 后台刷新触发、墓碑与重建 | 文本策略（已下沉 domain）、SQL、mem0 调用细节 |
+| `L3WriteExecutor` | L3 后台写基础设施：executor 生命周期（自建/注入）、容量背压（信号量+槽位计数）、write/cleanup future 记账与 drain | 业务语义（任务状态流转、L3 写流程回调在 service） |
 | `L2BackgroundRefresher` | L2 LLM 综合摘要后台刷新：去抖计数、在飞去重、失败降级保留拼接版 | LLM 调用细节（composer 注入） |
 | `MemoryDecaySweeper` | 遗忘 decay（P2#7，默认关）：老+久未召回的长尾记忆置 SUPPRESSED；槽位/墓碑保护、召回强化、进程级时间门控 | 记忆价值判断（无 LLM，确定性政策） |
 | `SqlAlchemyMemoryRepository` | L1/L2/索引/任务的 PG 持久化；同步外观 + 内部事件循环线程 | 业务判断（指纹冲突语义由 service 决定） |
@@ -125,7 +134,7 @@ src/innies_memory/
 | 池/信号量 | 配置 | 保护对象 |
 | --- | --- | --- |
 | API 读/写线程池 | `MEMORY_API_WORKER_LIMIT`(8) × 2，等待 `MEMORY_API_WORKER_WAIT_SECONDS`(5s) | 同步 MemoryService 调用不阻塞事件循环 |
-| L3 后台执行器 | `MEMORY_L3_EXECUTOR_WORKERS`(16) + `MEMORY_L3_MAX_PENDING_TASKS`(256) 信号量背压 | async 模式的 mem0 抽取 |
+| L3 后台执行器（`memory/l3.py` `L3WriteExecutor`） | `MEMORY_L3_EXECUTOR_WORKERS`(16) + `MEMORY_L3_MAX_PENDING_TASKS`(256) 信号量背压 | async 模式的 mem0 抽取 |
 | mem0 调用信号量 | `MEMORY_BACKEND_MAX_CONCURRENT_CALLS`(4) | LLM/Embedding/Milvus 压力 |
 | 仓储事件循环 | 单线程 loop，单操作超时 30s | DB 连接（pool 5+5） |
 

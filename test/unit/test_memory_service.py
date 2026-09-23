@@ -7,10 +7,10 @@ from typing import Any
 import pytest
 from loguru import logger
 
-from innies_memory.infra import logging as logging_infra
-from innies_memory.memory.backends import FakeMemoryBackend
-from innies_memory.memory.repositories import InMemoryMemoryRepository, TaskEntry
-from innies_memory.memory.schemas import (
+from thinkback.infra import logging as logging_infra
+from thinkback.memory.backends import FakeMemoryBackend
+from thinkback.memory.repositories import InMemoryMemoryRepository, TaskEntry
+from thinkback.memory.schemas import (
     AppendMemoryRequest,
     DeleteMemoryRequest,
     DeleteScope,
@@ -25,7 +25,7 @@ from innies_memory.memory.schemas import (
     TaskStatus,
     UpdateMemoryRequest,
 )
-from innies_memory.memory.service import MemoryService
+from thinkback.memory.service import MemoryService
 
 
 def make_append(
@@ -4240,7 +4240,7 @@ def test_l3_index_rejects_non_p0_event_when_white_list_is_configured(
 
     验证 P0 白名单仍然是有效的 gate——只是默认行为放宽了，而不是完全失效。
     """
-    from innies_memory.infra import config as config_module
+    from thinkback.infra import config as config_module
 
     cached_get_settings = config_module.get_settings
     cached_get_settings.cache_clear()
@@ -4445,7 +4445,7 @@ def test_l3_index_rejects_non_birthday_memories_when_white_list_is_birthday_only
 
     验证白名单显式配置时仍然有效——白名单收紧语义。
     """
-    from innies_memory.infra import config as config_module
+    from thinkback.infra import config as config_module
 
     cached_get_settings = config_module.get_settings
     cached_get_settings.cache_clear()
@@ -7459,7 +7459,7 @@ def test_backend_update_failure_raises_runtime_error() -> None:
     修复前：直接 self.backend.update(...) 抛 ValueError 时会被 except Exception 吞掉，
     但日志/可观测性无法区分 mem0 失败 vs 业务错误。修复后：必须抛 RuntimeError("mem0 library update failed: ...")。
     """
-    from innies_memory.memory.service import _BackendUpdate
+    from thinkback.memory.service import _BackendUpdate
 
     backend = _CallWrappingBackend()
     backend.raise_runtime_error = True
@@ -7473,7 +7473,7 @@ def test_backend_update_failure_raises_runtime_error() -> None:
 
 def test_backend_update_success_uses_call_wrapper() -> None:
     """N-6: 成功路径也必须走 backend.update → _call，保证包装与重试路径不缺席。"""
-    from innies_memory.memory.service import _BackendUpdate
+    from thinkback.memory.service import _BackendUpdate
 
     backend = _CallWrappingBackend()
     update_op = _BackendUpdate(memory_id="mem-2", data="hello", backend=backend)

@@ -1,7 +1,7 @@
 from pathlib import Path
 from types import SimpleNamespace
 
-from innies_memory.memory.schemas import MemoryStatus
+from thinkback.memory.schemas import MemoryStatus
 
 
 def test_lifespan_shuts_down_l3_executor(monkeypatch) -> None:
@@ -15,10 +15,10 @@ def test_lifespan_shuts_down_l3_executor(monkeypatch) -> None:
     import asyncio
     from concurrent.futures import ThreadPoolExecutor
 
-    from innies_memory.api import app as app_module
-    from innies_memory.memory.backends import FakeMemoryBackend
-    from innies_memory.memory.repositories import InMemoryMemoryRepository
-    from innies_memory.memory.service import MemoryService
+    from thinkback.api import app as app_module
+    from thinkback.memory.backends import FakeMemoryBackend
+    from thinkback.memory.repositories import InMemoryMemoryRepository
+    from thinkback.memory.service import MemoryService
 
     captured: dict[str, ThreadPoolExecutor] = {}
 
@@ -43,7 +43,7 @@ def test_lifespan_shuts_down_l3_executor(monkeypatch) -> None:
     monkeypatch.setattr(app_module, "_memory_service", tracking_service, raising=False)
 
     # Patch dependencies._memory_service lookup the lifespan uses.
-    from innies_memory.api import dependencies
+    from thinkback.api import dependencies
 
     monkeypatch.setattr(dependencies, "_memory_service", tracking_service, raising=False)
 
@@ -73,9 +73,9 @@ def test_drain_l3_background_tasks_shuts_down_owned_executor() -> None:
     drain 本身不关闭 executor（让单元测试能继续使用 service），shutdown
     由显式调用触发。
     """
-    from innies_memory.memory.backends import FakeMemoryBackend
-    from innies_memory.memory.repositories import InMemoryMemoryRepository
-    from innies_memory.memory.service import MemoryService
+    from thinkback.memory.backends import FakeMemoryBackend
+    from thinkback.memory.repositories import InMemoryMemoryRepository
+    from thinkback.memory.service import MemoryService
 
     service = MemoryService(
         repository=InMemoryMemoryRepository(),
@@ -104,9 +104,9 @@ def test_service_with_injected_executor_does_not_double_shutdown() -> None:
     """
     from concurrent.futures import ThreadPoolExecutor
 
-    from innies_memory.memory.backends import FakeMemoryBackend
-    from innies_memory.memory.repositories import InMemoryMemoryRepository
-    from innies_memory.memory.service import MemoryService
+    from thinkback.memory.backends import FakeMemoryBackend
+    from thinkback.memory.repositories import InMemoryMemoryRepository
+    from thinkback.memory.service import MemoryService
 
     external_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="caller-injected")
     try:
@@ -137,7 +137,7 @@ def test_service_with_injected_executor_does_not_double_shutdown() -> None:
 def test_runtime_sources_do_not_depend_on_redis_or_celery() -> None:
     """Redis/Celery 已整体移除：源码不允许再出现 redis 客户端或 celery 集成。"""
 
-    for path in Path("src/innies_memory").rglob("*.py"):
+    for path in Path("src/thinkback").rglob("*.py"):
         source = path.read_text(encoding="utf-8")
         assert "redis" not in source.lower(), str(path)
         assert "celery" not in source.lower(), str(path)
@@ -148,7 +148,7 @@ def test_mem0_config_builder_targets_milvus_memory_collection() -> None:
 
 
 def test_mem0_boundary_uses_library_adapter_without_direct_vector_client() -> None:
-    source = Path("src/innies_memory/memory/backends/mem0_library.py").read_text(encoding="utf-8")
+    source = Path("src/thinkback/memory/backends/mem0_library.py").read_text(encoding="utf-8")
 
     assert "Memory.from_config" in source
     assert "build_mem0_library_config" in source
@@ -157,7 +157,7 @@ def test_mem0_boundary_uses_library_adapter_without_direct_vector_client() -> No
 
 
 def test_runtime_sources_do_not_use_qdrant_configuration() -> None:
-    for path in Path("src/innies_memory").rglob("*.py"):
+    for path in Path("src/thinkback").rglob("*.py"):
         source = path.read_text(encoding="utf-8")
         assert "qdrant" not in source.lower(), str(path)
 
@@ -165,7 +165,7 @@ def test_runtime_sources_do_not_use_qdrant_configuration() -> None:
 def test_runtime_sources_do_not_use_character_id() -> None:
     from pathlib import Path
 
-    for path in Path("src/innies_memory").rglob("*.py"):
+    for path in Path("src/thinkback").rglob("*.py"):
         source = path.read_text(encoding="utf-8")
         assert "character_id" not in source, str(path)
 
@@ -181,16 +181,16 @@ def test_runtime_sources_do_not_import_legacy_top_level_packages() -> None:
         r"^from memory\b",
         r"^import memory\b",
     ]
-    for path in Path("src/innies_memory").rglob("*.py"):
+    for path in Path("src/thinkback").rglob("*.py"):
         source = path.read_text(encoding="utf-8")
         for pattern in forbidden_patterns:
             assert not re.search(pattern, source, re.MULTILINE), f"{path} still matches '{pattern}'"
 
 
 def test_memory_service_exposes_public_workflows() -> None:
-    from innies_memory.memory.backends import FakeMemoryBackend
-    from innies_memory.memory.repositories import InMemoryMemoryRepository
-    from innies_memory.memory.service import MemoryService
+    from thinkback.memory.backends import FakeMemoryBackend
+    from thinkback.memory.repositories import InMemoryMemoryRepository
+    from thinkback.memory.service import MemoryService
 
     service = MemoryService(repository=InMemoryMemoryRepository(), backend=FakeMemoryBackend())
 
@@ -202,9 +202,9 @@ def test_memory_service_exposes_public_workflows() -> None:
 
 
 def test_default_memory_service_uses_sql_repository(monkeypatch) -> None:
-    import innies_memory.api.dependencies as dependencies
-    from innies_memory.memory.backends import FakeMemoryBackend
-    from innies_memory.memory.repositories import SqlAlchemyMemoryRepository
+    import thinkback.api.dependencies as dependencies
+    from thinkback.memory.backends import FakeMemoryBackend
+    from thinkback.memory.repositories import SqlAlchemyMemoryRepository
 
     class FakeHttpBackend(FakeMemoryBackend):
         def __init__(self, **kwargs) -> None:  # type: ignore[no-untyped-def]
@@ -218,9 +218,9 @@ def test_default_memory_service_uses_sql_repository(monkeypatch) -> None:
 
 
 def test_memory_service_can_use_mem0_library_backend_from_settings(monkeypatch) -> None:
-    import innies_memory.api.dependencies as dependencies
-    from innies_memory.infra.config import Settings
-    from innies_memory.memory.backends import Mem0LibraryMemoryBackend
+    import thinkback.api.dependencies as dependencies
+    from thinkback.infra.config import Settings
+    from thinkback.memory.backends import Mem0LibraryMemoryBackend
 
     monkeypatch.setattr(dependencies, "_memory_service", None)
     for variable in [
@@ -283,7 +283,7 @@ def test_memory_service_can_use_mem0_library_backend_from_settings(monkeypatch) 
 
 
 def test_memory_routes_call_sync_service_in_threadpool() -> None:
-    source = Path("src/innies_memory/api/memory.py").read_text(encoding="utf-8")
+    source = Path("src/thinkback/api/memory.py").read_text(encoding="utf-8")
 
     assert "partial(method, *args, **kwargs)" in source
     assert "ThreadPoolExecutor(" in source
@@ -316,8 +316,8 @@ def test_real_validation_script_reuses_configurable_mem0_backend() -> None:
 
 
 def test_real_validation_preflight_reports_missing_config_and_dependency_statuses() -> None:
-    from innies_memory.infra.config import Settings
     from script import real_mem0_pressure
+    from thinkback.infra.config import Settings
 
     def ready() -> dict[str, str]:
         return {"status": "ready", "detail": "ok"}
@@ -336,8 +336,8 @@ def test_real_validation_preflight_reports_missing_config_and_dependency_statuse
 
 
 def test_real_validation_preflight_error_includes_actionable_statuses() -> None:
-    from innies_memory.infra.config import Settings
     from script import real_mem0_pressure
+    from thinkback.infra.config import Settings
 
     def ready() -> dict[str, str]:
         return {"status": "ready", "detail": "ok"}

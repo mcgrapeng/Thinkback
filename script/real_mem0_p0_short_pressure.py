@@ -20,8 +20,8 @@ from uuid import uuid4
 
 from dotenv import load_dotenv
 
-from innies_memory.infra.config import Settings
-from innies_memory.memory.repositories import MemoryIndexEntry, SqlAlchemyMemoryRepository
+from thinkback.infra.config import Settings
+from thinkback.memory.repositories import MemoryIndexEntry, SqlAlchemyMemoryRepository
 
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))

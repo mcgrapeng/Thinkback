@@ -15,11 +15,11 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from innies_memory.memory.backends import FakeMemoryBackend
-from innies_memory.memory.decay import MemoryDecaySweeper
-from innies_memory.memory.repositories import InMemoryMemoryRepository
-from innies_memory.memory.schemas import RecallMemoryRequest
-from innies_memory.memory.service import MemoryService
+from thinkback.memory.backends import FakeMemoryBackend
+from thinkback.memory.decay import MemoryDecaySweeper
+from thinkback.memory.repositories import InMemoryMemoryRepository
+from thinkback.memory.schemas import RecallMemoryRequest
+from thinkback.memory.service import MemoryService
 
 
 def _add(

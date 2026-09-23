@@ -4,16 +4,16 @@ from datetime import datetime
 import pytest
 from sqlalchemy.exc import IntegrityError
 
-from innies_memory.infra.database import engine as engine_module
-from innies_memory.infra.database.models import MemoryRecord
-from innies_memory.memory.repositories import (
+from test.unit.test_memory_service import make_append
+from thinkback.infra.database import engine as engine_module
+from thinkback.infra.database.models import MemoryRecord
+from thinkback.memory.repositories import (
     InMemoryMemoryRepository,
     JournalEntry,
     SqlAlchemyMemoryRepository,
 )
-from innies_memory.memory.repositories import sqlalchemy as repositories_module
-from innies_memory.memory.schemas import DataClassification, MemoryStatus, SourceType
-from test.unit.test_memory_service import make_append
+from thinkback.memory.repositories import sqlalchemy as repositories_module
+from thinkback.memory.schemas import DataClassification, MemoryStatus, SourceType
 
 
 def test_in_memory_repository_orders_equal_timestamp_rounds_by_round_index() -> None:
@@ -202,7 +202,7 @@ async def test_sql_repository_save_round_returns_existing_round_after_concurrent
 
 
 def test_in_memory_repository_add_memory_index_updates_existing_active_backend_id() -> None:
-    from innies_memory.memory.repositories import InMemoryMemoryRepository
+    from thinkback.memory.repositories import InMemoryMemoryRepository
 
     repository = InMemoryMemoryRepository()
 

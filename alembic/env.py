@@ -16,9 +16,9 @@ from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
 from alembic import context
-from innies_memory.infra.config import settings
-from innies_memory.infra.database import models  # noqa: F401  (side-effect import for metadata)
-from innies_memory.infra.database.base import Base
+from thinkback.infra.config import settings
+from thinkback.infra.database import models  # noqa: F401  (side-effect import for metadata)
+from thinkback.infra.database.base import Base
 
 config = context.config
 config.set_main_option("sqlalchemy.url", settings.database_url)

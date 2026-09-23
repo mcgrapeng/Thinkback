@@ -183,20 +183,20 @@ scalability path) live in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 ## Project Layout
 
 ```text
-src/innies_memory/domain       纯领域层：枚举/实体/端口协议/指纹键
+src/thinkback/domain       纯领域层：枚举/实体/端口协议/指纹键
                                ├─ safety         内容安全准入词表
                                ├─ recall_policy  召回去重与预算裁剪
                                ├─ summarization  L2 摘要策略
                                └─ slots/         P0 槽位抽取引擎（正则 NLP）
-src/innies_memory/memory       应用层：编排与用例
+src/thinkback/memory       应用层：编排与用例
                                ├─ service.py     MemoryService 编排器
                                ├─ schemas.py     API DTO（Pydantic）
                                ├─ caches.py      进程内 TTL 读缓存
                                ├─ repositories/  仓储实现（in_memory / sqlalchemy）
                                └─ backends/      L3 后端适配（fake / mem0_library）
-src/innies_memory/infra        基础设施：config / database / readiness / logging
-src/innies_memory/api          HTTP 入口（FastAPI）
-src/innies_memory/rpc          gRPC 入口
+src/thinkback/infra        基础设施：config / database / readiness / logging
+src/thinkback/api          HTTP 入口（FastAPI）
+src/thinkback/rpc          gRPC 入口
 test                           scaffold and behavior tests
 k8s                            Kubernetes deployment assets
 ```

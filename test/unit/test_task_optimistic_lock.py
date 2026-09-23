@@ -16,13 +16,13 @@ from typing import Any
 
 import pytest
 
-from innies_memory.domain.entities import TaskEntry
-from innies_memory.domain.enums import OperationType, TaskStatus
-from innies_memory.domain.errors import TaskStaleWriteError
-from innies_memory.memory.backends import FakeMemoryBackend
-from innies_memory.memory.repositories import InMemoryMemoryRepository
-from innies_memory.memory.schemas import DeleteMemoryRequest, DeleteScope
-from innies_memory.memory.service import MemoryService
+from thinkback.domain.entities import TaskEntry
+from thinkback.domain.enums import OperationType, TaskStatus
+from thinkback.domain.errors import TaskStaleWriteError
+from thinkback.memory.backends import FakeMemoryBackend
+from thinkback.memory.repositories import InMemoryMemoryRepository
+from thinkback.memory.schemas import DeleteMemoryRequest, DeleteScope
+from thinkback.memory.service import MemoryService
 
 
 def make_task(task_id: str = "t1", *, status: TaskStatus = TaskStatus.RUNNING) -> TaskEntry:

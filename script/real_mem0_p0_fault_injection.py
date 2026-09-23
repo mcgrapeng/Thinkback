@@ -260,7 +260,7 @@ def _start_api_process(
         sys.executable,
         "-m",
         "uvicorn",
-        "innies_memory.api.app:app",
+        "thinkback.api.app:app",
         "--app-dir",
         "src",
         "--host",

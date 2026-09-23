@@ -1,9 +1,9 @@
-from innies_memory.infra.config import Settings
+from thinkback.infra.config import Settings
 
 EMPTY_ENV_FILE = "/tmp/innies-memory-missing-test.env"
 
 
-def test_settings_defaults_are_innies_memory_baseline(monkeypatch) -> None:
+def test_settings_defaults_are_thinkback_baseline(monkeypatch) -> None:
     for variable in [
         "OPENAI_API_KEY",
         "POSTGRES_DATABASE",
@@ -53,7 +53,7 @@ def test_settings_defaults_are_innies_memory_baseline(monkeypatch) -> None:
     assert settings.memory_llm_base_url == "https://dashscope.aliyuncs.com/compatible-mode/v1"
     assert settings.memory_embedding_base_url == "http://embedding.example.internal:7345/v1"
     assert settings.memory_embedding_api_key == ""
-    assert settings.memory_milvus_collection == "innies_memory"
+    assert settings.memory_milvus_collection == "thinkback"
     assert settings.memory_embedding_dims == 1024
     assert settings.memory_llm_model == "qwen-plus-latest"
     assert settings.memory_embedding_model == "zhiman-embedding"

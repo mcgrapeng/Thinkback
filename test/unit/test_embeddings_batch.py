@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from innies_memory.memory.embeddings import OpenAICompatibleEmbeddingNoDimensions
+from thinkback.memory.embeddings import OpenAICompatibleEmbeddingNoDimensions
 
 
 class _FakeEmbeddings:

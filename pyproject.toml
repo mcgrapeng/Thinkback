@@ -1,44 +1,45 @@
-[tool.poetry]
-name = "innies-memory"
+[project]
+name = "thinkback"
 version = "0.1.0"
-description = "Memory service for innies conversations"
-authors = ["innies Contributors"]
+description = "Memory service for conversations (Thinkback)"
 readme = "README.md"
-packages = [
-    {include = "innies_memory", from = "src"}
+requires-python = ">=3.12,<3.14"
+dependencies = [
+    "fastapi>=0.135.2,<0.136",
+    "uvicorn[standard]>=0.43.0,<0.44",
+    "pydantic>=2.12.5,<3",
+    "pydantic-settings>=2.13.1,<3",
+    "sqlalchemy[asyncio]>=2.0.49,<3",
+    "asyncpg>=0.30.0,<0.31",
+    "greenlet>=3.5.0,<4",
+    "alembic>=1.18.4,<2",
+    "loguru>=0.7.2,<0.8",
+    "openai>=2.12.0,<3",
+    "python-dotenv>=1.0.0,<2",
+    "mem0ai>=2.0.20,<3",
+    "pymilvus>=3.0.0,<4",
+    "grpcio>=1.60,<2.0",
+    "grpcio-reflection>=1.60,<2.0",
 ]
 
-[tool.poetry.dependencies]
-python = ">=3.12,<3.14"
-fastapi = "^0.135.2"
-uvicorn = {extras = ["standard"], version = "^0.43.0"}
-pydantic = "^2.12.5"
-pydantic-settings = "^2.13.1"
-sqlalchemy = {extras = ["asyncio"], version = "^2.0.49"}
-asyncpg = "^0.30.0"
-greenlet = "^3.5.0"
-alembic = "^1.18.4"
-loguru = "^0.7.2"
-openai = "^2.12.0"
-python-dotenv = "^1.0.0"
-mem0ai = "^2.0.20"
-pymilvus = "^3.0.0"
-grpcio = ">=1.60,<2.0"
-grpcio-reflection = ">=1.60,<2.0"
-
-[tool.poetry.group.dev.dependencies]
-pytest = "^8.3.0"
-pytest-asyncio = "^0.24.0"
-pytest-mock = "^3.14.0"
-pytest-cov = "^6.0"
-httpx = "^0.28.0"
-ruff = ">=0.9,<1.0"
-mypy = "^1.14.0"
-grpcio-tools = ">=1.60,<2.0"
+[dependency-groups]
+dev = [
+    "pytest>=8.3.0,<9",
+    "pytest-asyncio>=0.24.0,<0.25",
+    "pytest-mock>=3.14.0,<4",
+    "pytest-cov>=6.0,<7",
+    "httpx>=0.28.0,<0.29",
+    "ruff>=0.9,<1.0",
+    "mypy>=1.14.0,<2",
+    "grpcio-tools>=1.60,<2.0",
+]
 
 [build-system]
-requires = ["poetry-core"]
-build-backend = "poetry.core.masonry.api"
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/thinkback"]
 
 [tool.ruff]
 line-length = 100
@@ -51,9 +52,9 @@ ignore = ["E501", "B008", "B904", "ASYNC240"]
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["F401"]
 "test/**/*" = ["ARG", "S101"]
-"src/innies_memory/rpc/memory_pb2.py" = ["ALL"]
-"src/innies_memory/rpc/memory_pb2.pyi" = ["ALL"]
-"src/innies_memory/rpc/memory_pb2_grpc.py" = ["ALL"]
+"src/thinkback/rpc/memory_pb2.py" = ["ALL"]
+"src/thinkback/rpc/memory_pb2.pyi" = ["ALL"]
+"src/thinkback/rpc/memory_pb2_grpc.py" = ["ALL"]
 
 [tool.ruff.format]
 quote-style = "double"
@@ -63,13 +64,13 @@ python_version = "3.12"
 strict = true
 plugins = ["pydantic.mypy"]
 mypy_path = "src"
-packages = ["innies_memory"]
+packages = ["thinkback"]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 module = [
-    "innies_memory.rpc.memory_pb2",
-    "innies_memory.rpc.memory_pb2_grpc",
+    "thinkback.rpc.memory_pb2",
+    "thinkback.rpc.memory_pb2_grpc",
 ]
 ignore_errors = true
 

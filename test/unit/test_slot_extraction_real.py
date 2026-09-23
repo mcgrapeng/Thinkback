@@ -6,7 +6,7 @@ items 出现 "User lives in 杭州工作了" / "User prefers to be called 小朋
 
 import pytest
 
-from innies_memory.domain.slots.extractors import (
+from thinkback.domain.slots.extractors import (
     extract_current_location,
     extract_current_nickname,
 )

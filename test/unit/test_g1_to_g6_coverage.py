@@ -17,10 +17,10 @@ import pytest
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
-from innies_memory.api.app import create_app
-from innies_memory.memory.backends import FakeMemoryBackend
-from innies_memory.memory.repositories import InMemoryMemoryRepository
-from innies_memory.memory.schemas import (
+from thinkback.api.app import create_app
+from thinkback.memory.backends import FakeMemoryBackend
+from thinkback.memory.repositories import InMemoryMemoryRepository
+from thinkback.memory.schemas import (
     AppendMemoryRequest,
     DeleteMemoryRequest,
     DeleteScope,
@@ -31,7 +31,7 @@ from innies_memory.memory.schemas import (
     SummaryState,
     TaskStatus,
 )
-from innies_memory.memory.service import MemoryService
+from thinkback.memory.service import MemoryService
 
 # ---------------------------------------------------------------------------
 # 共用 helper
@@ -170,7 +170,7 @@ def test_lifespan_shuts_down_l3_executor() -> None:
         repository=InMemoryMemoryRepository(),
         backend=FakeMemoryBackend(),
     )
-    import innies_memory.api.dependencies as dependencies_module
+    import thinkback.api.dependencies as dependencies_module
 
     original_service = dependencies_module._memory_service
     dependencies_module._memory_service = service
@@ -226,7 +226,7 @@ def test_get_task_returns_update_task_response() -> None:
     memory = next(
         item for item in service.list_memory_items(user_id="user-1", include_deleted=False).items
     )
-    from innies_memory.memory.schemas import UpdateMemoryRequest
+    from thinkback.memory.schemas import UpdateMemoryRequest
 
     update_response = service.update_memory(
         UpdateMemoryRequest(

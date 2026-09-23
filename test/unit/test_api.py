@@ -1,8 +1,8 @@
 from fastapi import FastAPI
 from loguru import logger
 
-from innies_memory.api.app import create_app
-from innies_memory.infra import logging as logging_infra
+from thinkback.api.app import create_app
+from thinkback.infra import logging as logging_infra
 
 
 def test_create_app_returns_fastapi_app() -> None:
@@ -76,7 +76,7 @@ def test_readiness_endpoint_returns_ready(client, monkeypatch) -> None:
             },
         }
 
-    monkeypatch.setattr("innies_memory.api.health.collect_readiness", fake_collect_readiness)
+    monkeypatch.setattr("thinkback.api.health.collect_readiness", fake_collect_readiness)
 
     response = client.get("/health/ready")
 
@@ -94,7 +94,7 @@ def test_ready_probe_success_does_not_emit_info_logs(client, monkeypatch) -> Non
             },
         }
 
-    monkeypatch.setattr("innies_memory.api.health.collect_readiness", fake_collect_readiness)
+    monkeypatch.setattr("thinkback.api.health.collect_readiness", fake_collect_readiness)
     sink: list[str] = []
     handler_id = logger.add(sink.append, level="INFO", format="{message} {extra}")
     logging_infra.logger.configure(patcher=logging_infra.patch_log_record)
@@ -123,7 +123,7 @@ def test_readiness_endpoint_returns_503_when_dependency_is_not_ready(client, mon
             },
         }
 
-    monkeypatch.setattr("innies_memory.api.health.collect_readiness", fake_collect_readiness)
+    monkeypatch.setattr("thinkback.api.health.collect_readiness", fake_collect_readiness)
 
     response = client.get("/health/ready")
 

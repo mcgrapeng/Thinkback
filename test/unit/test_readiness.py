@@ -2,8 +2,8 @@ import asyncio
 
 import pytest
 
-from innies_memory.infra import readiness
-from innies_memory.infra.config import Settings
+from thinkback.infra import readiness
+from thinkback.infra.config import Settings
 
 
 @pytest.mark.asyncio
@@ -197,7 +197,7 @@ def test_readiness_engine_is_isolated_from_business_pool() -> None:
     """
     from sqlalchemy.pool import NullPool
 
-    from innies_memory.infra.database import engine as engine_module
+    from thinkback.infra.database import engine as engine_module
 
     assert engine_module.readiness_engine is not engine_module.engine
     assert engine_module.readiness_engine.pool.__class__ is NullPool

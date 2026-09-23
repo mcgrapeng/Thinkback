@@ -3,15 +3,15 @@ from collections.abc import Generator
 import pytest
 from fastapi.testclient import TestClient
 
-from innies_memory.api import app as app_module
-from innies_memory.api import dependencies as dependencies_module
-from innies_memory.api import health as health_module
-from innies_memory.api import memory as memory_module
-from innies_memory.api.app import create_app
-from innies_memory.infra import config as config_module
-from innies_memory.infra import logging as logging_module
-from innies_memory.infra import readiness as readiness_module
-from innies_memory.infra.database import engine as engine_module
+from thinkback.api import app as app_module
+from thinkback.api import dependencies as dependencies_module
+from thinkback.api import health as health_module
+from thinkback.api import memory as memory_module
+from thinkback.api.app import create_app
+from thinkback.infra import config as config_module
+from thinkback.infra import logging as logging_module
+from thinkback.infra import readiness as readiness_module
+from thinkback.infra.database import engine as engine_module
 
 
 @pytest.fixture(autouse=True)

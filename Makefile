@@ -8,40 +8,40 @@ K8S_DIR ?= k8s
 .PHONY: fmt format-check lint typecheck test coverage check hooks-install hooks-run dev-up dev-down image-build k8s-apply k8s-delete proto-gen migration-up migration-downgrade-1 migration-status migration-history migration-revision
 
 proto-gen:
-	uv run --extra dev python -m grpc_tools.protoc \
+	uv run --group dev python -m grpc_tools.protoc \
 		-I proto \
-		--python_out=src/innies_memory/rpc \
-		--grpc_python_out=src/innies_memory/rpc \
-		--pyi_out=src/innies_memory/rpc \
+		--python_out=src/thinkback/rpc \
+		--grpc_python_out=src/thinkback/rpc \
+		--pyi_out=src/thinkback/rpc \
 		proto/memory.proto
-	sed -i '' 's/^import memory_pb2 as memory__pb2$$/from innies_memory.rpc import memory_pb2 as memory__pb2/' \
-		src/innies_memory/rpc/memory_pb2_grpc.py
+	sed -i '' 's/^import memory_pb2 as memory__pb2$$/from thinkback.rpc import memory_pb2 as memory__pb2/' \
+		src/thinkback/rpc/memory_pb2_grpc.py
 
 fmt:
-	uv run --extra dev ruff format .
+	uv run --group dev ruff format .
 
 format-check:
-	uv run --extra dev ruff format --check .
+	uv run --group dev ruff format --check .
 
 lint:
-	uv run --extra dev ruff check .
+	uv run --group dev ruff check .
 
 typecheck:
-	uv run --extra dev mypy .
+	uv run --group dev mypy .
 
 test:
-	uv run --extra dev pytest -v
+	uv run --group dev pytest -v
 
 coverage:
-	uv run --extra dev pytest --cov=innies_memory --cov-report=term-missing --cov-report=xml -v
+	uv run --group dev pytest --cov=thinkback --cov-report=term-missing --cov-report=xml -v
 
 check: format-check lint typecheck coverage
 
 hooks-install:
-	uv run --extra dev pre-commit install
+	uv run --group dev pre-commit install
 
 hooks-run:
-	uv run --extra dev pre-commit run --all-files
+	uv run --group dev pre-commit run --all-files
 
 dev-up:
 	docker compose up

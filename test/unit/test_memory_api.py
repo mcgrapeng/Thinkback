@@ -5,11 +5,11 @@ from threading import Event
 import pytest
 from fastapi.testclient import TestClient
 
-from innies_memory.api.app import create_app
-from innies_memory.memory.backends import FakeMemoryBackend
-from innies_memory.memory.repositories import InMemoryMemoryRepository
-from innies_memory.memory.schemas import AppendMemoryRequest
-from innies_memory.memory.service import MemoryService
+from thinkback.api.app import create_app
+from thinkback.memory.backends import FakeMemoryBackend
+from thinkback.memory.repositories import InMemoryMemoryRepository
+from thinkback.memory.schemas import AppendMemoryRequest
+from thinkback.memory.service import MemoryService
 
 
 class FailingProviderBackend(FakeMemoryBackend):
@@ -91,7 +91,7 @@ def append_payload() -> dict:
 
 @pytest.mark.asyncio
 async def test_run_write_memory_call_timeout_returns_503_when_worker_pool_busy(monkeypatch) -> None:
-    import innies_memory.api.memory as memory_api
+    import thinkback.api.memory as memory_api
 
     slots = asyncio.BoundedSemaphore(1)
     await slots.acquire()
@@ -115,7 +115,7 @@ async def test_run_write_memory_call_timeout_returns_503_when_worker_pool_busy(m
 async def test_run_write_memory_call_waits_for_worker_slot_before_returning_503(
     monkeypatch,
 ) -> None:
-    import innies_memory.api.memory as memory_api
+    import thinkback.api.memory as memory_api
 
     slots = asyncio.BoundedSemaphore(1)
     await slots.acquire()
@@ -132,12 +132,12 @@ async def test_run_write_memory_call_waits_for_worker_slot_before_returning_503(
 async def test_recall_uses_dedicated_worker_pool_when_write_pool_is_full(
     client, monkeypatch
 ) -> None:
-    import innies_memory.api.memory as memory_api
+    import thinkback.api.memory as memory_api
 
     write_slots = asyncio.BoundedSemaphore(1)
     await write_slots.acquire()
     monkeypatch.setattr(memory_api, "_memory_write_call_slots", write_slots)
-    monkeypatch.setattr("innies_memory.api.dependencies._memory_service", ReadWriteMemoryService())
+    monkeypatch.setattr("thinkback.api.dependencies._memory_service", ReadWriteMemoryService())
     monkeypatch.setattr(memory_api.settings, "memory_api_worker_wait_seconds", 0.001)
 
     try:
@@ -161,7 +161,7 @@ async def test_recall_uses_dedicated_worker_pool_when_write_pool_is_full(
 
 @pytest.mark.asyncio
 async def test_run_write_memory_call_does_not_spawn_thread_for_slot_acquire(monkeypatch) -> None:
-    import innies_memory.api.memory as memory_api
+    import thinkback.api.memory as memory_api
 
     async def fail_to_thread(*_args, **_kwargs):  # type: ignore[no-untyped-def]
         raise AssertionError("slot acquisition must stay on the event loop")
@@ -175,7 +175,7 @@ async def test_run_write_memory_call_does_not_spawn_thread_for_slot_acquire(monk
 async def test_run_write_memory_call_timeout_returns_503_without_waiting_for_thread(
     monkeypatch,
 ) -> None:
-    import innies_memory.api.memory as memory_api
+    import thinkback.api.memory as memory_api
 
     release = Event()
     monkeypatch.setattr(memory_api.settings, "memory_api_worker_wait_seconds", 0.01)
@@ -195,7 +195,7 @@ async def test_run_write_memory_call_timeout_returns_503_without_waiting_for_thr
 async def test_run_write_memory_call_timeout_keeps_worker_slot_until_thread_exits(
     monkeypatch,
 ) -> None:
-    import innies_memory.api.memory as memory_api
+    import thinkback.api.memory as memory_api
 
     release = Event()
     monkeypatch.setattr(memory_api.settings, "memory_api_worker_wait_seconds", 0.01)
@@ -225,7 +225,7 @@ async def test_run_write_memory_call_timeout_keeps_worker_slot_until_thread_exit
 
 def test_append_recall_delete_task_api(client, monkeypatch) -> None:
     service = MemoryService(repository=InMemoryMemoryRepository(), backend=FakeMemoryBackend())
-    monkeypatch.setattr("innies_memory.api.dependencies._memory_service", service)
+    monkeypatch.setattr("thinkback.api.dependencies._memory_service", service)
 
     append_response = client.post("/memory/append", json=append_payload())
 
@@ -271,7 +271,7 @@ def test_memory_management_routes_list_get_update_and_hide_internal_fields(
     client, monkeypatch
 ) -> None:
     service = MemoryService(repository=InMemoryMemoryRepository(), backend=FakeMemoryBackend())
-    monkeypatch.setattr("innies_memory.api.dependencies._memory_service", service)
+    monkeypatch.setattr("thinkback.api.dependencies._memory_service", service)
     assert client.post("/memory/append", json=append_payload()).status_code == 200
     memory_id = next(
         memory.memory_id
@@ -313,7 +313,7 @@ def test_memory_management_routes_list_get_update_and_hide_internal_fields(
 
 def test_memory_management_update_missing_memory_returns_404(client, monkeypatch) -> None:
     service = MemoryService(repository=InMemoryMemoryRepository(), backend=FakeMemoryBackend())
-    monkeypatch.setattr("innies_memory.api.dependencies._memory_service", service)
+    monkeypatch.setattr("thinkback.api.dependencies._memory_service", service)
 
     response = client.post(
         "/memory/update",
@@ -333,7 +333,7 @@ def test_memory_management_update_missing_memory_returns_404(client, monkeypatch
 def test_memory_routes_return_200_without_any_authentication_header(monkeypatch) -> None:
     """记忆服务是内部服务，不做调用方鉴权；无 header 也必须可访问。"""
     service = MemoryService(repository=InMemoryMemoryRepository(), backend=FakeMemoryBackend())
-    monkeypatch.setattr("innies_memory.api.dependencies._memory_service", service)
+    monkeypatch.setattr("thinkback.api.dependencies._memory_service", service)
     with TestClient(create_app()) as test_client:
         response = test_client.post(
             "/memory/recall",
@@ -350,7 +350,7 @@ def test_memory_routes_return_200_without_any_authentication_header(monkeypatch)
 
 def test_append_rejects_extra_fields_inside_messages(client, monkeypatch) -> None:
     service = MemoryService(repository=InMemoryMemoryRepository(), backend=FakeMemoryBackend())
-    monkeypatch.setattr("innies_memory.api.dependencies._memory_service", service)
+    monkeypatch.setattr("thinkback.api.dependencies._memory_service", service)
     payload = append_payload()
     payload["messages"][0]["memory_scope_id"] = "innies"
 
@@ -362,7 +362,7 @@ def test_append_rejects_extra_fields_inside_messages(client, monkeypatch) -> Non
 
 def test_append_round_conflict_returns_409(client, monkeypatch) -> None:
     service = MemoryService(repository=InMemoryMemoryRepository(), backend=FakeMemoryBackend())
-    monkeypatch.setattr("innies_memory.api.dependencies._memory_service", service)
+    monkeypatch.setattr("thinkback.api.dependencies._memory_service", service)
     payload = append_payload()
     assert client.post("/memory/append", json=payload).status_code == 200
     payload["messages"][0]["content"] = "我喜欢被提醒早睡"
@@ -375,7 +375,7 @@ def test_append_round_conflict_returns_409(client, monkeypatch) -> None:
 
 def test_delete_missing_memory_id_returns_400(client, monkeypatch) -> None:
     service = MemoryService(repository=InMemoryMemoryRepository(), backend=FakeMemoryBackend())
-    monkeypatch.setattr("innies_memory.api.dependencies._memory_service", service)
+    monkeypatch.setattr("thinkback.api.dependencies._memory_service", service)
 
     response = client.post(
         "/memory/delete",
@@ -396,7 +396,7 @@ def test_delete_missing_memory_id_returns_400(client, monkeypatch) -> None:
 
 def test_delete_scope_irrelevant_identifier_returns_422(client, monkeypatch) -> None:
     service = MemoryService(repository=InMemoryMemoryRepository(), backend=FakeMemoryBackend())
-    monkeypatch.setattr("innies_memory.api.dependencies._memory_service", service)
+    monkeypatch.setattr("thinkback.api.dependencies._memory_service", service)
 
     response = client.post(
         "/memory/delete",
@@ -416,7 +416,7 @@ def test_delete_scope_irrelevant_identifier_returns_422(client, monkeypatch) -> 
 
 def test_privacy_recall_fail_closed_returns_403(client, monkeypatch) -> None:
     service = MemoryService(repository=InMemoryMemoryRepository(), backend=FakeMemoryBackend())
-    monkeypatch.setattr("innies_memory.api.dependencies._memory_service", service)
+    monkeypatch.setattr("thinkback.api.dependencies._memory_service", service)
 
     response = client.post(
         "/memory/recall",
@@ -434,7 +434,7 @@ def test_privacy_recall_fail_closed_returns_403(client, monkeypatch) -> None:
 
 def test_mem0_provider_failure_returns_502_not_unhandled_500(client, monkeypatch) -> None:
     service = MemoryService(repository=InMemoryMemoryRepository(), backend=FailingProviderBackend())
-    monkeypatch.setattr("innies_memory.api.dependencies._memory_service", service)
+    monkeypatch.setattr("thinkback.api.dependencies._memory_service", service)
 
     response = client.post("/memory/append", json=append_payload())
 
@@ -443,7 +443,7 @@ def test_mem0_provider_failure_returns_502_not_unhandled_500(client, monkeypatch
 
 
 def test_l3_background_queue_saturation_returns_503(client, monkeypatch) -> None:
-    monkeypatch.setattr("innies_memory.api.dependencies._memory_service", SaturatedMemoryService())
+    monkeypatch.setattr("thinkback.api.dependencies._memory_service", SaturatedMemoryService())
 
     response = client.post("/memory/append", json=append_payload())
 
@@ -453,7 +453,7 @@ def test_l3_background_queue_saturation_returns_503(client, monkeypatch) -> None
 
 @pytest.mark.asyncio
 async def test_memory_api_worker_saturation_returns_503(client, monkeypatch) -> None:
-    import innies_memory.api.memory as memory_api
+    import thinkback.api.memory as memory_api
 
     slots = asyncio.BoundedSemaphore(1)
     await slots.acquire()
@@ -471,7 +471,7 @@ async def test_memory_api_worker_saturation_returns_503(client, monkeypatch) -> 
 
 @pytest.mark.asyncio
 async def test_memory_api_worker_timeout_does_not_poison_limiter(monkeypatch) -> None:
-    import innies_memory.api.memory as memory_api
+    import thinkback.api.memory as memory_api
 
     slots = asyncio.BoundedSemaphore(1)
     await slots.acquire()
@@ -492,7 +492,7 @@ async def test_memory_api_worker_timeout_does_not_poison_limiter(monkeypatch) ->
 
 
 def test_l3_background_status_route_returns_queue_state(client, monkeypatch) -> None:
-    monkeypatch.setattr("innies_memory.api.dependencies._memory_service", StatusMemoryService())
+    monkeypatch.setattr("thinkback.api.dependencies._memory_service", StatusMemoryService())
 
     response = client.get("/memory/l3/background-status")
 
@@ -509,7 +509,7 @@ def test_l3_background_status_route_returns_queue_state(client, monkeypatch) -> 
 
 @pytest.mark.asyncio
 async def test_repository_timeout_returns_503_not_unhandled_500() -> None:
-    import innies_memory.api.memory as memory_api
+    import thinkback.api.memory as memory_api
 
     def stalled_repository_call() -> None:
         raise RuntimeError("memory repository operation timed out after 30s")
@@ -559,7 +559,7 @@ def test_update_memory_with_restricted_content_returns_403_fail_closed(client, m
         item for item in service.list_memory_items(user_id="user-1", include_deleted=False).items
     )
 
-    monkeypatch.setattr("innies_memory.api.dependencies._memory_service", service)
+    monkeypatch.setattr("thinkback.api.dependencies._memory_service", service)
 
     response = client.post(
         "/memory/update",

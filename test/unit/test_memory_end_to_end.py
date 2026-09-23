@@ -1,6 +1,6 @@
-from innies_memory.memory.backends import FakeMemoryBackend
-from innies_memory.memory.repositories import InMemoryMemoryRepository
-from innies_memory.memory.schemas import (
+from thinkback.memory.backends import FakeMemoryBackend
+from thinkback.memory.repositories import InMemoryMemoryRepository
+from thinkback.memory.schemas import (
     AppendMemoryRequest,
     DeleteMemoryRequest,
     DeleteScope,
@@ -9,7 +9,7 @@ from innies_memory.memory.schemas import (
     RecallIntent,
     RecallMemoryRequest,
 )
-from innies_memory.memory.service import MemoryService
+from thinkback.memory.service import MemoryService
 
 
 def append_round(service: MemoryService, index: int, text: str) -> None:

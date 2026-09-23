@@ -3,11 +3,11 @@ from __future__ import annotations
 import pytest
 from loguru import logger
 
-from innies_memory.api import dependencies
-from innies_memory.infra import logging as logging_infra
-from innies_memory.infra import readiness
-from innies_memory.memory.backends import FakeMemoryBackend
-from innies_memory.memory.repositories import InMemoryMemoryRepository
+from thinkback.api import dependencies
+from thinkback.infra import logging as logging_infra
+from thinkback.infra import readiness
+from thinkback.memory.backends import FakeMemoryBackend
+from thinkback.memory.repositories import InMemoryMemoryRepository
 
 
 def _append_payload() -> dict[str, object]:

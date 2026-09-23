@@ -16,20 +16,20 @@ from typing import Any
 
 import pytest
 
-from innies_memory.infra.llm import OpenAICompatibleLLMClient
-from innies_memory.memory.backends import FakeMemoryBackend
-from innies_memory.memory.l2_refresh import (
+from thinkback.infra.llm import OpenAICompatibleLLMClient
+from thinkback.memory.backends import FakeMemoryBackend
+from thinkback.memory.l2_refresh import (
     L2BackgroundRefresher,
     build_default_composer_with,
 )
-from innies_memory.memory.repositories import InMemoryMemoryRepository
-from innies_memory.memory.schemas import (
+from thinkback.memory.repositories import InMemoryMemoryRepository
+from thinkback.memory.schemas import (
     AppendMemoryRequest,
     DeleteMemoryRequest,
     DeleteScope,
     RecallMemoryRequest,
 )
-from innies_memory.memory.service import MemoryService
+from thinkback.memory.service import MemoryService
 
 
 def make_append(round_id: str, content: str, *, index: int = 1) -> AppendMemoryRequest:

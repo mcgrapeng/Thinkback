@@ -9,8 +9,8 @@ import uuid
 import grpc
 
 sys.path.insert(0, "src")
-from innies_memory.rpc import memory_pb2 as pb  # noqa: E402
-from innies_memory.rpc import memory_pb2_grpc  # noqa: E402
+from thinkback.rpc import memory_pb2 as pb  # noqa: E402
+from thinkback.rpc import memory_pb2_grpc  # noqa: E402
 
 RUN = uuid.uuid4().hex[:8]
 USER = f"grpcchain-{RUN}"

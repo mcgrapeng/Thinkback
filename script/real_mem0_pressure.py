@@ -17,12 +17,12 @@ from uuid import uuid4
 
 from dotenv import load_dotenv
 
-from innies_memory.api.dependencies import get_memory_backend
-from innies_memory.infra.config import Settings
-from innies_memory.infra.database.engine import check_database
-from innies_memory.infra.readiness import check_milvus
-from innies_memory.memory.repositories import MemoryIndexEntry, SqlAlchemyMemoryRepository
-from innies_memory.memory.schemas import (
+from thinkback.api.dependencies import get_memory_backend
+from thinkback.infra.config import Settings
+from thinkback.infra.database.engine import check_database
+from thinkback.infra.readiness import check_milvus
+from thinkback.memory.repositories import MemoryIndexEntry, SqlAlchemyMemoryRepository
+from thinkback.memory.schemas import (
     AppendMemoryRequest,
     DeleteMemoryRequest,
     DeleteScope,
@@ -32,7 +32,7 @@ from innies_memory.memory.schemas import (
     RecallIntent,
     RecallMemoryRequest,
 )
-from innies_memory.memory.service import MemoryService
+from thinkback.memory.service import MemoryService
 
 
 class PreflightError(RuntimeError):

@@ -5,11 +5,11 @@ from __future__ import annotations
 import grpc
 import pytest
 
-from innies_memory.memory.backends import FakeMemoryBackend
-from innies_memory.memory.repositories import InMemoryMemoryRepository
-from innies_memory.memory.service import MemoryService
-from innies_memory.rpc import memory_pb2 as pb
-from innies_memory.rpc import memory_pb2_grpc
+from thinkback.memory.backends import FakeMemoryBackend
+from thinkback.memory.repositories import InMemoryMemoryRepository
+from thinkback.memory.service import MemoryService
+from thinkback.rpc import memory_pb2 as pb
+from thinkback.rpc import memory_pb2_grpc
 
 
 @pytest.fixture(scope="module")
@@ -18,7 +18,7 @@ def grpc_channel():  # type: ignore[no-untyped-def]
 
     from grpc_reflection.v1alpha import reflection
 
-    from innies_memory.rpc.servicer import MemoryServicer
+    from thinkback.rpc.servicer import MemoryServicer
 
     svc = MemoryService(
         repository=InMemoryMemoryRepository(),
@@ -185,7 +185,7 @@ class _RecordingContext:
 def test_handle_error_maps_dead_letter_to_aborted() -> None:
     """回归：dead_letter（重试预算耗尽）gRPC 侧必须映射 ABORTED（对齐 HTTP 409），
     而不是落进 INTERNAL 让客户端无法区分"该停止重试"和"服务端 bug"。"""
-    from innies_memory.rpc.servicer import _handle_error
+    from thinkback.rpc.servicer import _handle_error
 
     context = _RecordingContext()
     _handle_error(
