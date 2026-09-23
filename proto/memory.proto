@@ -1,0 +1,250 @@
+syntax = "proto3";
+
+package memory;
+
+option py_generic_services = false;
+
+// ─── Enums ────────────────────────────────────────────────────────────────────
+
+enum MessageRole {
+  MESSAGE_ROLE_USER = 0;
+  MESSAGE_ROLE_ASSISTANT = 1;
+  MESSAGE_ROLE_SYSTEM = 2;
+}
+
+enum MemoryType {
+  MEMORY_TYPE_PROFILE = 0;
+  MEMORY_TYPE_PREFERENCE = 1;
+  MEMORY_TYPE_EVENT = 2;
+  MEMORY_TYPE_PLAN = 3;
+  MEMORY_TYPE_CONSTRAINT = 4;
+}
+
+enum MemoryStatus {
+  MEMORY_STATUS_ACTIVE = 0;
+  MEMORY_STATUS_DELETED = 1;
+  MEMORY_STATUS_SUPPRESSED = 2;
+  MEMORY_STATUS_SUPERSEDED = 3;
+}
+
+enum SourceType {
+  SOURCE_TYPE_CHAT_ROUND = 0;
+  SOURCE_TYPE_SESSION_REBUILD = 1;
+  SOURCE_TYPE_MANUAL_FIX = 2;
+  SOURCE_TYPE_IMPORT = 3;
+  SOURCE_TYPE_SYSTEM_MIGRATION = 4;
+}
+
+enum DataClassification {
+  DATA_CLASSIFICATION_NORMAL = 0;
+  DATA_CLASSIFICATION_PERSONAL = 1;
+  DATA_CLASSIFICATION_SENSITIVE = 2;
+  DATA_CLASSIFICATION_RESTRICTED = 3;
+}
+
+enum SummaryState {
+  SUMMARY_STATE_ACTIVE = 0;
+  SUMMARY_STATE_STALE = 1;
+  SUMMARY_STATE_DIRTY = 2;
+  SUMMARY_STATE_REBUILDING = 3;
+}
+
+enum TaskStatus {
+  TASK_STATUS_PENDING = 0;
+  TASK_STATUS_RUNNING = 1;
+  TASK_STATUS_COMPLETED = 2;
+  TASK_STATUS_FAILED = 3;
+  TASK_STATUS_DEAD_LETTER = 4;
+}
+
+enum OperationType {
+  OPERATION_TYPE_WRITE_ROUND = 0;
+  OPERATION_TYPE_UPDATE_MEMORY = 1;
+  OPERATION_TYPE_DELETE_MEMORY = 2;
+  OPERATION_TYPE_DELETE_SESSION = 3;
+  OPERATION_TYPE_DELETE_ALL = 4;
+  OPERATION_TYPE_REBUILD_L2 = 5;
+  OPERATION_TYPE_REBUILD_L3 = 6;
+}
+
+enum RecallIntent {
+  RECALL_INTENT_CHAT = 0;
+  RECALL_INTENT_SENSITIVE = 1;
+}
+
+enum DeleteScope {
+  DELETE_SCOPE_MEMORY = 0;
+  DELETE_SCOPE_SESSION = 1;
+  DELETE_SCOPE_ALL = 2;
+}
+
+// ─── Messages ─────────────────────────────────────────────────────────────────
+
+message MemoryMessage {
+  string message_id = 1;
+  MessageRole role = 2;
+  string content = 3;
+  string timestamp = 4;  // ISO 8601
+}
+
+message AppendRequest {
+  string request_id = 1;
+  string user_id = 2;
+  string session_id = 3;
+  string round_id = 4;
+  repeated MemoryMessage messages = 5;
+  string source_timestamp = 6;  // ISO 8601
+  optional int32 round_index = 7;
+  map<string, string> metadata = 8;
+}
+
+message AppendResponse {
+  string status = 1;
+  string task_id = 2;
+  string round_id = 3;
+  repeated string l3_events = 4;  // JSON-encoded event summaries
+}
+
+message RecallRequest {
+  string user_id = 1;
+  string session_id = 2;
+  string query = 3;
+  RecallIntent intent = 4;
+  int32 l3_limit = 5;
+  float l3_score_threshold = 6;
+  int32 token_budget = 7;
+}
+
+message MemoryItem {
+  string layer = 1;
+  string content = 2;
+  string source = 3;
+  optional string memory_id = 4;
+  optional float score = 5;
+  map<string, string> metadata = 6;
+}
+
+message RecallResponse {
+  string status = 1;
+  bool degraded = 2;
+  repeated string degradation_reasons = 3;
+  repeated MemoryItem items = 4;
+}
+
+message DeleteRequest {
+  string request_id = 1;
+  string user_id = 2;
+  DeleteScope scope = 3;
+  string operation_id = 4;
+  optional string memory_id = 5;
+  optional string session_id = 6;
+}
+
+message DeleteResponse {
+  string status = 1;
+  string task_id = 2;
+  int32 affected_memories = 3;
+  optional SummaryState summary_state = 4;
+}
+
+message ListMemoriesRequest {
+  string user_id = 1;
+  bool include_deleted = 2;
+}
+
+message ManagedMemoryItem {
+  string memory_id = 1;
+  string content = 2;
+  MemoryStatus status = 3;
+  SourceType source_type = 4;
+  DataClassification data_classification = 5;
+  optional MemoryType memory_type = 6;
+  repeated string backend_categories = 7;
+}
+
+message ListMemoriesResponse {
+  string status = 1;
+  repeated ManagedMemoryItem items = 2;
+}
+
+message GetMemoryRequest {
+  string memory_id = 1;
+  string user_id = 2;
+}
+
+message GetMemoryResponse {
+  string status = 1;
+  ManagedMemoryItem memory = 2;
+}
+
+message UpdateMemoryRequest {
+  string request_id = 1;
+  string user_id = 2;
+  string operation_id = 3;
+  string memory_id = 4;
+  string content = 5;
+  optional MemoryType memory_type = 6;
+}
+
+message UpdateMemoryResponse {
+  string status = 1;
+  string task_id = 2;
+  ManagedMemoryItem memory = 3;
+  optional SummaryState summary_state = 4;
+}
+
+message RebuildRequest {
+  string request_id = 1;
+  string user_id = 2;
+  string operation_id = 3;
+  optional string session_id = 4;
+  optional string history_version = 5;
+  bool rebuild_l2 = 6;
+  bool rebuild_l3 = 7;
+}
+
+message RebuildResponse {
+  string status = 1;
+  string task_id = 2;
+  bool rebuilt_l2 = 3;
+  bool rebuilt_l3 = 4;
+}
+
+message GetTaskRequest {
+  string task_id = 1;
+}
+
+message TaskResponse {
+  string task_id = 1;
+  string request_id = 2;
+  OperationType op_type = 3;
+  TaskStatus status = 4;
+  string scope = 5;  // JSON-encoded scope dict
+  optional string last_error = 6;
+  string result = 7;  // JSON-encoded result dict
+}
+
+message L3BackgroundStatusRequest {}
+
+message L3BackgroundStatusResponse {
+  string write_mode = 1;
+  int32 executor_workers = 2;
+  int32 max_pending_tasks = 3;
+  int32 pending_write_tasks = 4;
+  int32 cleanup_tasks = 5;
+  int32 available_capacity = 6;
+}
+
+// ─── Service ──────────────────────────────────────────────────────────────────
+
+service MemoryService {
+  rpc Append(AppendRequest) returns (AppendResponse);
+  rpc Recall(RecallRequest) returns (RecallResponse);
+  rpc Delete(DeleteRequest) returns (DeleteResponse);
+  rpc ListMemories(ListMemoriesRequest) returns (ListMemoriesResponse);
+  rpc GetMemory(GetMemoryRequest) returns (GetMemoryResponse);
+  rpc UpdateMemory(UpdateMemoryRequest) returns (UpdateMemoryResponse);
+  rpc Rebuild(RebuildRequest) returns (RebuildResponse);
+  rpc GetTask(GetTaskRequest) returns (TaskResponse);
+  rpc GetL3BackgroundStatus(L3BackgroundStatusRequest) returns (L3BackgroundStatusResponse);
+}
