@@ -1,0 +1,81 @@
+name: Docker Build and Push
+
+on:
+  push:
+    branches:
+      - "main"
+      - "test"
+      - "dev"
+    tags:
+      - "v*"
+
+  release:
+    types: [ published ]
+
+  workflow_dispatch:
+
+jobs:
+  build-and-push:
+    uses: example-org/dx/.github/workflows/docker-image-build-push.yml@main
+    secrets: inherit
+    with:
+      service-name: 'thinkback'
+      image-name: 'registry.example.com/thinkback'
+
+      # Build configuration
+      dockerfile: 'Dockerfile'
+      platforms: 'linux/amd64'
+
+      build-runner: 'ubuntu-latest-16core'
+
+  deploy-dev:
+    needs: ["build-and-push"]
+    if: github.ref_name == 'dev'
+    uses: example-org/dx/.github/workflows/gitops-image-update.yml@main
+    secrets: inherit
+    with:
+      gitops-repo: example-org/gitops-deploy
+      gitops-branch: test/thinkback/pvg1s1/dev
+      files: |
+        apps/thinkback/dev/values.yaml
+      file-type: helm-values
+      service-name: thinkback
+      container-name: ""
+      image-name: ${{ github.event.inputs.image }}
+      use-metadata-tags: true
+      tag-only: true
+
+  deploy-test:
+    needs: ["build-and-push"]
+    if: github.ref_name == 'test'
+    uses: example-org/dx/.github/workflows/gitops-image-update.yml@main
+    secrets: inherit
+    with:
+      gitops-repo: example-org/gitops-deploy
+      gitops-branch: test/thinkback/pvg1s1/main
+      files: |
+        apps/thinkback/test/values.yaml
+      file-type: helm-values
+      service-name: thinkback
+      container-name: ""
+      image-name: ${{ github.event.inputs.image }}
+      use-metadata-tags: true
+      tag-only: true
+
+  deploy-staging:
+    needs: ["build-and-push"]
+    if: startsWith(github.ref, 'refs/tags/')
+    uses: example-org/dx/.github/workflows/gitops-image-update.yml@main
+    secrets: inherit
+    with:
+      gitops-repo: example-org/gitops-deploy
+      gitops-branch: staging/thinkback/pvg2s1/main
+                                                                     # 支持多文件，按需填写（相对 GitOps 仓库根目录）
+      files: |
+        apps/thinkback/staging/values.yaml
+      file-type: helm-values                                         # 或 helm-values|kustomization|manifest
+      service-name: thinkback                                    # 对于 values.yaml 模式：<service>.image.registry/tag
+      container-name: ""                                             # manifest 类型时用于匹配容器名
+      image-name: ${{ github.event.inputs.image }}
+      use-metadata-tags: true                                        # 若为 true，则 image-name 传入基础名（不含 tag）
+      tag-only: true                                                 # 只更新 tag，不修改 registry/repository
