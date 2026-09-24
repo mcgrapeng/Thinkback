@@ -15,9 +15,9 @@ poetry install
 ```bash
 make run
 make worker
-make test
+make tests
 make lint
-make real-test
+make real-tests
 ```
 
 如果只安装运行时依赖，可执行 `make install`；日常开发推荐执行 `make dev`，它会安装开发依赖并注册 pre-commit hook。
@@ -237,14 +237,14 @@ make run
 提交前至少运行以下质量门禁：
 
 ```bash
-.venv/bin/python -m pytest test/unit -q
-.venv/bin/python -m compileall -q src script alembic test
+.venv/bin/python -m pytest tests/unit -q
+.venv/bin/python -m compileall -q src script alembic tests
 ```
 
 如果只改 API 文档、Swagger 注释或手册，至少运行：
 
 ```bash
-.venv/bin/python -m pytest test/unit/test_api_docs.py test/unit/test_scaffold_files.py -q
+.venv/bin/python -m pytest tests/unit/test_api_docs.py tests/unit/test_scaffold_files.py -q
 ```
 
 如果改动数据库模型或 Alembic 迁移，额外运行：
@@ -276,7 +276,7 @@ curl http://127.0.0.1:8000/health/ready
 运行：
 
 ```bash
-make real-test
+make real-tests
 ```
 
 脚本会追加 5 轮对话、触发 L3 生成、召回长期偏好、删除目标记忆、重建 L2/L3 并再次召回确认链路可用。

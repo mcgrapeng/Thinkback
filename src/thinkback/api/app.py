@@ -212,6 +212,24 @@ def create_app() -> FastAPI:
     _register_request_middleware(app)
     app.include_router(health_router)
     app.include_router(memory_router)
+    # 治理台 M1：只读聚合端点（Bearer 可选鉴权），见 docs/管理后台设计方案。
+    from thinkback.api.admin import router as admin_router
+
+    app.include_router(admin_router)
+    cors_origins = [
+        origin.strip()
+        for origin in settings.admin_cors_allow_origins.split(",")
+        if origin.strip()
+    ]
+    if cors_origins:
+        from fastapi.middleware.cors import CORSMiddleware
+
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=cors_origins,
+            allow_methods=["GET", "POST"],
+            allow_headers=["Authorization"],
+        )
 
     @app.get("/")
     async def root() -> dict[str, str]:

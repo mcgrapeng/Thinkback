@@ -408,6 +408,30 @@ class TaskResponse(BaseModel):
     scope: dict[str, Any] = Field(description="任务作用域摘要，例如 user_id、session_id。")
     last_error: str | None = Field(default=None, description="任务失败时记录的错误信息。")
     result: dict[str, Any] = Field(default_factory=dict, description="任务完成后的结果摘要。")
+    retry_count: int = Field(default=0, description="重试次数（治理台 retry 色阶用）。")
+
+
+class AdminMemoryItem(BaseModel):
+    """治理台记忆检索条目（本地索引视图，只读）。"""
+
+    memory_id: str = Field(description="本地业务记忆 ID。")
+    backend_memory_id: str = Field(description="L3 后端（mem0）记忆 ID 反链。")
+    user_id: str = Field(description="用户维度。")
+    memory_scope_id: str = Field(description="范围维度。")
+    memory_text: str = Field(description="记忆文本。")
+    memory_status: MemoryStatus = Field(description="记忆状态。")
+    memory_type: str | None = Field(default=None, description="记忆分类。")
+    data_classification: str = Field(default="normal", description="敏感等级。")
+    source_refs: list[dict[str, str]] = Field(default_factory=list, description="来源回合引用。")
+    valid_at: datetime | None = Field(default=None, description="事实生效时刻（双时态）。")
+    invalid_at: datetime | None = Field(default=None, description="事实失效时刻（双时态）。")
+    last_recalled_at: datetime | None = Field(
+        default=None, description="最近召回时刻（None=从未召回）。"
+    )
+    recall_count: int = Field(default=0, description="累计召回次数。")
+    conflict_slot: str | None = Field(
+        default=None, description="冲突槽位（由记忆文本派生，治理台展示用）。"
+    )
 
 
 class L3BackgroundStatusResponse(BaseModel):

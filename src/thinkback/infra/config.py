@@ -132,6 +132,12 @@ class Settings(BaseSettings):
 
     # ── gRPC ──────────────────────────────────────────────────────────
     grpc_enabled: bool = True
+    # ── 管理后台（治理台 M1）────────────────────────────────────────
+    # /admin/api 的共享 Bearer token：非空即强制校验（防御纵深，见管理后台
+    # 设计方案 Q8）；为空放行（本地开发 / 网关隔离完备时可关）。
+    admin_token: str = ""
+    # 治理台 SPA 的 CORS 白名单（逗号分隔 origin，空 = 不启用 CORS 中间件）。
+    admin_cors_allow_origins: str = ""
     grpc_host: str = "0.0.0.0"
     grpc_port: int = 50051
     grpc_max_workers: int = 8

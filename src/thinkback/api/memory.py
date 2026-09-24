@@ -24,6 +24,7 @@ from loguru import logger
 from thinkback.api.dependencies import (
     get_memory_service,
 )
+from thinkback.api.errors import service_error_to_http
 from thinkback.infra.config import settings
 from thinkback.memory.schemas import (
     AppendMemoryRequest,
@@ -231,26 +232,13 @@ async def _run_memory_call_in_pool[**P, R](
             detail="memory api worker queue full: temporarily unavailable",
         ) from exc
     except ValueError as exc:
-        detail = str(exc)
-        if "fail-closed" in detail:
-            status_code = 403
-        elif "conflict" in detail:
-            status_code = 409
-        elif "not found" in detail:
-            status_code = 404
-        else:
-            status_code = 400
-        raise HTTPException(status_code=status_code, detail=detail) from exc
+        mapped = service_error_to_http(exc)
+        assert mapped is not None  # ValueError 恒有映射
+        raise mapped from exc
     except RuntimeError as exc:
-        detail = str(exc)
-        if "dead_letter" in detail or "stale write" in detail:
-            raise HTTPException(status_code=409, detail=detail) from exc
-        if "l3 background queue full" in detail:
-            raise HTTPException(status_code=503, detail=detail) from exc
-        if "repository operation timed out" in detail:
-            raise HTTPException(status_code=503, detail=detail) from exc
-        if "mem0 library" in detail or "memory backend" in detail:
-            raise HTTPException(status_code=502, detail=detail) from exc
+        mapped = service_error_to_http(exc)
+        if mapped is not None:
+            raise mapped from exc
         # 未分类 RuntimeError：带 traceback 落日志后再上抛。
         # 没有这里的服务端日志，线上一次性 500 无法定位根因。
         logger.opt(exception=exc).bind(method_name=method_name).error(

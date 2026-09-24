@@ -24,14 +24,14 @@ repos:
       - id: ruff-check
         name: ruff check
         description: Lint Python sources with Ruff.
-        entry: uv run --group dev ruff check src test script alembic
+        entry: uv run --group dev ruff check src tests script alembic
         language: system
         files: \.py$
         pass_filenames: false
       - id: ruff-format
         name: ruff format --check
         description: Check Python formatting with Ruff (no auto-fix).
-        entry: uv run --group dev ruff format --check src test script alembic
+        entry: uv run --group dev ruff format --check src tests script alembic
         language: system
         files: \.py$
         pass_filenames: false

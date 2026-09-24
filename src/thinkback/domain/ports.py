@@ -15,6 +15,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Any, Protocol
 
 from thinkback.domain.entities import (
+    AdminAuditEntry,
     JournalEntry,
     MemoryIndexEntry,
     SummaryEntry,
@@ -148,6 +149,59 @@ class MemoryRepository(Protocol):
     def reclaim_stale_running_tasks(self, *, max_age_seconds: float) -> list[str]: ...
 
     def reclaim_stale_running_task(self, task_id: str, *, max_age_seconds: float) -> bool: ...
+
+    def list_tasks(
+        self,
+        *,
+        statuses: list[str] | None = None,
+        older_than_seconds: float | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[TaskEntry]:
+        """管理面任务列表：按状态/年龄过滤，updated_at 倒序分页。"""
+        ...
+
+    def count_tasks_by_status(self) -> dict[str, int]:
+        """管理面聚合：各状态任务计数。"""
+        ...
+
+    def count_memories_by_status(self) -> dict[str, int]:
+        """管理面聚合：各状态本地索引记忆计数。"""
+        ...
+
+    def admin_list_memories(
+        self,
+        *,
+        user_id: str | None = None,
+        memory_scope_id: str | None = None,
+        statuses: list[str] | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> tuple[list[MemoryIndexEntry], int]:
+        """管理面记忆检索：过滤 + 分页，返回 (条目, 匹配总数)。"""
+        ...
+
+    def get_memory_index(self, memory_id: str) -> MemoryIndexEntry | None:
+        """按本地记忆 ID 直查索引条目（治理台详情用）。"""
+        ...
+
+    def get_rounds_by_refs(self, refs: list[dict[str, str]]) -> list[JournalEntry]:
+        """按 source_refs 批量取 journal 原文回合（缺失的静默跳过）。"""
+        ...
+
+    def save_admin_audit(self, entry: AdminAuditEntry) -> None:
+        """治理台审计留痕（只追加）。"""
+
+    def list_admin_audit(
+        self,
+        *,
+        action: str | None = None,
+        operator: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[AdminAuditEntry]:
+        """审计查询：created_at 倒序分页。"""
+        ...
 
     def close(self, timeout: float = 5.0) -> None: ...
 

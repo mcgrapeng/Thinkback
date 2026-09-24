@@ -14,6 +14,7 @@ from typing import Any
 from uuid import uuid4
 
 from thinkback.domain.entities import (
+    AdminAuditEntry,
     JournalEntry,
     MemoryIndexEntry,
     SummaryEntry,
@@ -46,6 +47,7 @@ class InMemoryMemoryRepository(L1CacheMixin):
     summaries: dict[str, SummaryEntry] = field(default_factory=dict)
     memories: dict[str, MemoryIndexEntry] = field(default_factory=dict)
     tasks: dict[str, TaskEntry] = field(default_factory=dict)
+    admin_audit: list[AdminAuditEntry] = field(default_factory=list)
     # 与 SQL 版 updated_at 对应的墙钟时间戳，reclaim_stale_running_tasks 用
     task_updated_at: dict[str, float] = field(default_factory=dict)
     l1_cache: dict[str, list[JournalEntry]] = field(default_factory=dict)
@@ -447,3 +449,95 @@ class InMemoryMemoryRepository(L1CacheMixin):
             task.row_version += 1
             self.task_updated_at[task_id] = time.time()
             return True
+
+    def list_tasks(
+        self,
+        *,
+        statuses: list[str] | None = None,
+        older_than_seconds: float | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[TaskEntry]:
+        """与 SQL 版同语义：状态/年龄过滤，按更新时间倒序分页。"""
+
+        now = time.time()
+        with self.task_lock:
+            matched: list[tuple[float, TaskEntry]] = []
+            for task_id, task in self.tasks.items():
+                if statuses and task.status.value not in statuses:
+                    continue
+                if (
+                    older_than_seconds is not None
+                    and now - self.task_updated_at.get(task_id, 0.0) < older_than_seconds
+                ):
+                    continue
+                matched.append((self.task_updated_at.get(task_id, 0.0), deepcopy(task)))
+        matched.sort(key=lambda item: item[0], reverse=True)
+        return [task for _, task in matched[offset : offset + limit]]
+
+    def count_tasks_by_status(self) -> dict[str, int]:
+        with self.task_lock:
+            counts: dict[str, int] = {}
+            for task in self.tasks.values():
+                counts[task.status.value] = counts.get(task.status.value, 0) + 1
+            return counts
+
+    def count_memories_by_status(self) -> dict[str, int]:
+        counts: dict[str, int] = {}
+        for memory in self.memories.values():
+            counts[memory.memory_status.value] = counts.get(memory.memory_status.value, 0) + 1
+        return counts
+
+    def admin_list_memories(
+        self,
+        *,
+        user_id: str | None = None,
+        memory_scope_id: str | None = None,
+        statuses: list[str] | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> tuple[list[MemoryIndexEntry], int]:
+        """与 SQL 版同语义：过滤 + 分页，memory_id 稳定排序。"""
+
+        matched = [
+            deepcopy(memory)
+            for memory in self.memories.values()
+            if (user_id is None or memory.user_id == user_id)
+            and (memory_scope_id is None or memory.memory_scope_id == memory_scope_id)
+            and (statuses is None or memory.memory_status.value in statuses)
+        ]
+        matched.sort(key=lambda memory: memory.memory_id)
+        return matched[offset : offset + limit], len(matched)
+
+    def get_memory_index(self, memory_id: str) -> MemoryIndexEntry | None:
+        memory = self.memories.get(memory_id)
+        return deepcopy(memory) if memory is not None else None
+
+    def get_rounds_by_refs(self, refs: list[dict[str, str]]) -> list[JournalEntry]:
+        rounds: list[JournalEntry] = []
+        for ref in refs:
+            entry = self.journal_by_round.get(ref.get("round_id", ""))
+            if entry is not None:
+                rounds.append(deepcopy(entry))
+        return rounds
+
+
+    def save_admin_audit(self, entry: AdminAuditEntry) -> None:
+        self.admin_audit.append(entry)
+
+    def list_admin_audit(
+        self,
+        *,
+        action: str | None = None,
+        operator: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[AdminAuditEntry]:
+        matched = [
+            deepcopy(entry)
+            for entry in self.admin_audit
+            if (action is None or entry.action == action)
+            and (operator is None or entry.operator == operator)
+        ]
+        matched.sort(key=lambda entry: entry.created_at, reverse=True)
+        return matched[offset : offset + limit]

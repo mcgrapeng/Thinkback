@@ -69,6 +69,7 @@ from thinkback.memory.repositories import (
     source_ref_key,
 )
 from thinkback.memory.schemas import (
+    AdminMemoryItem,
     AppendMemoryRequest,
     AppendMemoryResponse,
     DataClassification,
@@ -2092,6 +2093,117 @@ L2 更新 (缓存失效)
             last_error=task.last_error,
             result=task.result,
         )
+
+    def list_tasks(
+        self,
+        *,
+        statuses: list[str] | None = None,
+        older_than_seconds: float | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[TaskResponse]:
+        """管理面任务列表（只读聚合，策略在仓储层）。"""
+
+        return [
+            TaskResponse(
+                task_id=task.task_id,
+                request_id=task.request_id,
+                op_type=task.op_type,
+                status=task.status,
+                scope=task.scope,
+                last_error=task.last_error,
+                result=task.result,
+                retry_count=task.retry_count,
+            )
+            for task in self.repository.list_tasks(
+                statuses=statuses,
+                older_than_seconds=older_than_seconds,
+                limit=limit,
+                offset=offset,
+            )
+        ]
+
+    def overview_stats(self) -> dict[str, Any]:
+        """管理面总览聚合：记忆/任务状态计数（只读）。"""
+
+        return {
+            "memories": self.repository.count_memories_by_status(),
+            "tasks": self.repository.count_tasks_by_status(),
+        }
+
+    def admin_list_memories(
+        self,
+        *,
+        user_id: str | None = None,
+        memory_scope_id: str | None = None,
+        statuses: list[str] | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        """管理面记忆检索（只读）：条目 + 冲突槽位派生 + 分页总数。"""
+
+        entries, total = self.repository.admin_list_memories(
+            user_id=user_id,
+            memory_scope_id=memory_scope_id,
+            statuses=statuses,
+            limit=limit,
+            offset=offset,
+        )
+        items = [
+            AdminMemoryItem(
+                memory_id=entry.memory_id,
+                backend_memory_id=entry.backend_memory_id,
+                user_id=entry.user_id,
+                memory_scope_id=entry.memory_scope_id,
+                memory_text=entry.memory_text,
+                memory_status=entry.memory_status,
+                memory_type=entry.memory_type,
+                data_classification=entry.data_classification,
+                source_refs=entry.source_refs,
+                valid_at=entry.valid_at,
+                invalid_at=entry.invalid_at,
+                last_recalled_at=entry.last_recalled_at,
+                recall_count=entry.recall_count,
+                conflict_slot=memory_conflict_slot(entry.memory_text),
+            )
+            for entry in entries
+        ]
+        return {"items": items, "total": total, "limit": limit, "offset": offset}
+
+    def memory_source(self, memory_id: str) -> dict[str, Any] | None:
+        """治理台来源反链：记忆条目 + 其 source_refs 指向的 journal 原文回合。"""
+
+        memory = self.repository.get_memory_index(memory_id)
+        if memory is None:
+            return None
+        rounds = self.repository.get_rounds_by_refs(memory.source_refs)
+        return {
+            "memory": AdminMemoryItem(
+                memory_id=memory.memory_id,
+                backend_memory_id=memory.backend_memory_id,
+                user_id=memory.user_id,
+                memory_scope_id=memory.memory_scope_id,
+                memory_text=memory.memory_text,
+                memory_status=memory.memory_status,
+                memory_type=memory.memory_type,
+                data_classification=memory.data_classification,
+                source_refs=memory.source_refs,
+                valid_at=memory.valid_at,
+                invalid_at=memory.invalid_at,
+                last_recalled_at=memory.last_recalled_at,
+                recall_count=memory.recall_count,
+                conflict_slot=memory_conflict_slot(memory.memory_text),
+            ),
+            "rounds": [
+                {
+                    "round_id": entry.round_id,
+                    "session_id": entry.session_id,
+                    "source_timestamp": entry.source_timestamp,
+                    "messages": entry.messages,
+                }
+                for entry in rounds
+            ],
+        }
 
     def _reclaim_stale_running_task(self, task_id: str) -> bool:
         """读路径惰性回收；失败（DB 抖动等）不阻塞读，按原状态返回。"""

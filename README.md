@@ -46,7 +46,7 @@ Not included in P0:
 ```bash
 poetry install
 cp .env.example .env
-make test
+make tests
 make run
 ```
 
@@ -137,14 +137,14 @@ worker process anymore.
 Run deterministic tests:
 
 ```bash
-make test
+make tests
 ```
 
 Run the real Mem0 5-round pressure scenario:
 
 ```bash
 make docker-up
-make real-test
+make real-tests
 ```
 
 The real pressure script requires `OPENAI_API_KEY` and `MILVUS_URL`. Mem0
@@ -178,7 +178,7 @@ curl http://localhost:8000/health/ready
 ```
 
 Architecture details (layers, components, data flow, API design, DB schema,
-scalability path) live in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+scalability path) live in [docs/ARCHITECTURE.md](docs/report/ARCHITECTURE.md).
 
 ## Project Layout
 

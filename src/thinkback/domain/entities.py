@@ -160,3 +160,15 @@ class TaskEntry:
     last_error: str | None = None
     result: dict[str, Any] = field(default_factory=dict)
     row_version: int = 0
+
+
+@dataclass
+class AdminAuditEntry:
+    """治理台操作审计条目（admin POST 动作留痕，只追加不修改）。"""
+
+    audit_id: str
+    created_at: datetime
+    operator: str
+    action: str
+    target: str
+    detail: dict[str, Any] = field(default_factory=dict)

@@ -20,6 +20,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from thinkback.domain.entities import (
+    AdminAuditEntry,
     JournalEntry,
     MemoryIndexEntry,
     SummaryEntry,
@@ -38,6 +39,7 @@ from thinkback.domain.keys import fingerprint, source_ref_key
 from thinkback.domain.summarization import summarize_rounds
 from thinkback.infra.database.engine import SessionLocal
 from thinkback.infra.database.models import (
+    AdminAuditRecord,
     CurrentSummaryRecord,
     MemoryRecord,
     MemoryTaskRecord,
@@ -1119,6 +1121,160 @@ class SqlAlchemyMemoryRepository(L1CacheMixin):
             )
         return reclaimed
 
+    def list_tasks(
+        self,
+        *,
+        statuses: list[str] | None = None,
+        older_than_seconds: float | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[TaskEntry]:
+        return self._run(
+            self._list_tasks(
+                statuses=statuses,
+                older_than_seconds=older_than_seconds,
+                limit=limit,
+                offset=offset,
+            )
+        )
+
+    async def _list_tasks(
+        self,
+        *,
+        statuses: list[str] | None,
+        older_than_seconds: float | None,
+        limit: int,
+        offset: int,
+    ) -> list[TaskEntry]:
+        """管理面任务列表（只读）：状态/年龄过滤，updated_at 倒序分页。"""
+
+        stmt = select(MemoryTaskRecord)
+        if statuses:
+            stmt = stmt.where(MemoryTaskRecord.status.in_(statuses))
+        if older_than_seconds is not None:
+            cutoff = datetime.now(UTC) - timedelta(seconds=older_than_seconds)
+            stmt = stmt.where(MemoryTaskRecord.updated_at < cutoff)
+        stmt = stmt.order_by(MemoryTaskRecord.updated_at.desc()).limit(limit).offset(offset)
+        async with self.session_factory() as session:
+            records = (await session.execute(stmt)).scalars().all()
+            return [self._task_from_record(record) for record in records]
+
+    def count_tasks_by_status(self) -> dict[str, int]:
+        return self._run(self._count_tasks_by_status())
+
+    async def _count_tasks_by_status(self) -> dict[str, int]:
+        async with self.session_factory() as session:
+            rows = (
+                await session.execute(
+                    select(MemoryTaskRecord.status, func.count()).group_by(MemoryTaskRecord.status)
+                )
+            ).all()
+            return {str(status): int(count) for status, count in rows}
+
+    def count_memories_by_status(self) -> dict[str, int]:
+        return self._run(self._count_memories_by_status())
+
+    async def _count_memories_by_status(self) -> dict[str, int]:
+        async with self.session_factory() as session:
+            rows = (
+                await session.execute(
+                    select(MemoryRecord.memory_status, func.count()).group_by(
+                        MemoryRecord.memory_status
+                    )
+                )
+            ).all()
+            return {str(status): int(count) for status, count in rows}
+
+    def admin_list_memories(
+        self,
+        *,
+        user_id: str | None = None,
+        memory_scope_id: str | None = None,
+        statuses: list[str] | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> tuple[list[MemoryIndexEntry], int]:
+        return self._run(
+            self._admin_list_memories(
+                user_id=user_id,
+                memory_scope_id=memory_scope_id,
+                statuses=statuses,
+                limit=limit,
+                offset=offset,
+            )
+        )
+
+    async def _admin_list_memories(
+        self,
+        *,
+        user_id: str | None,
+        memory_scope_id: str | None,
+        statuses: list[str] | None,
+        limit: int,
+        offset: int,
+    ) -> tuple[list[MemoryIndexEntry], int]:
+        """管理面记忆检索（只读）：过滤 + 分页 + 总数，memory_id 稳定排序。"""
+
+        conditions = []
+        if user_id is not None:
+            conditions.append(MemoryRecord.user_id == user_id)
+        if memory_scope_id is not None:
+            conditions.append(MemoryRecord.memory_scope_id == memory_scope_id)
+        if statuses:
+            conditions.append(MemoryRecord.memory_status.in_(statuses))
+
+        async with self.session_factory() as session:
+            base = select(MemoryRecord)
+            count_stmt = select(func.count()).select_from(MemoryRecord)
+            for condition in conditions:
+                base = base.where(condition)
+                count_stmt = count_stmt.where(condition)
+            total = int((await session.execute(count_stmt)).scalar_one())
+            records = (
+                (
+                    await session.execute(
+                        base.order_by(MemoryRecord.memory_id).limit(limit).offset(offset)
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            return [self._memory_from_record(record) for record in records], total
+
+    def get_memory_index(self, memory_id: str) -> MemoryIndexEntry | None:
+        return self._run(self._get_memory_index(memory_id))
+
+    async def _get_memory_index(self, memory_id: str) -> MemoryIndexEntry | None:
+        async with self.session_factory() as session:
+            record = await session.get(MemoryRecord, memory_id)
+            return self._memory_from_record(record) if record else None
+
+    def get_rounds_by_refs(self, refs: list[dict[str, str]]) -> list[JournalEntry]:
+        return self._run(self._get_rounds_by_refs(refs))
+
+    async def _get_rounds_by_refs(self, refs: list[dict[str, str]]) -> list[JournalEntry]:
+        round_ids = [ref["round_id"] for ref in refs if ref.get("round_id")]
+        if not round_ids:
+            return []
+        async with self.session_factory() as session:
+            records = (
+                (
+                    await session.execute(
+                        select(SummaryRoundJournalRecord).where(
+                            SummaryRoundJournalRecord.round_id.in_(round_ids)
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            by_round = {record.round_id: record for record in records}
+            return [
+                self._journal_from_record(by_round[round_id])
+                for round_id in round_ids
+                if round_id in by_round
+            ]
+
     @staticmethod
     def _journal_from_record(record: SummaryRoundJournalRecord) -> JournalEntry:
         return JournalEntry(
@@ -1184,3 +1340,59 @@ class SqlAlchemyMemoryRepository(L1CacheMixin):
             result=dict(record.result or {}),
             row_version=int(getattr(record, "row_version", 0) or 0),
         )
+
+
+    def save_admin_audit(self, entry: AdminAuditEntry) -> None:
+        self._run(self._save_admin_audit(entry))
+
+    async def _save_admin_audit(self, entry: AdminAuditEntry) -> None:
+        async with self.session_factory() as session:
+            session.add(
+                AdminAuditRecord(
+                    audit_id=entry.audit_id,
+                    created_at=entry.created_at,
+                    operator=entry.operator,
+                    action=entry.action,
+                    target=entry.target,
+                    detail=entry.detail,
+                )
+            )
+            await session.commit()
+
+    def list_admin_audit(
+        self,
+        *,
+        action: str | None = None,
+        operator: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[AdminAuditEntry]:
+        return self._run(self._list_admin_audit(action=action, operator=operator, limit=limit, offset=offset))
+
+    async def _list_admin_audit(
+        self,
+        *,
+        action: str | None,
+        operator: str | None,
+        limit: int,
+        offset: int,
+    ) -> list[AdminAuditEntry]:
+        stmt = select(AdminAuditRecord)
+        if action is not None:
+            stmt = stmt.where(AdminAuditRecord.action == action)
+        if operator is not None:
+            stmt = stmt.where(AdminAuditRecord.operator == operator)
+        stmt = stmt.order_by(AdminAuditRecord.created_at.desc()).limit(limit).offset(offset)
+        async with self.session_factory() as session:
+            records = (await session.execute(stmt)).scalars().all()
+            return [
+                AdminAuditEntry(
+                    audit_id=record.audit_id,
+                    created_at=record.created_at,
+                    operator=record.operator,
+                    action=record.action,
+                    target=record.target,
+                    detail=dict(record.detail or {}),
+                )
+                for record in records
+            ]

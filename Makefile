@@ -5,7 +5,7 @@ IMAGE ?= thinkback
 VERSION ?= 0.1.0
 # K8S_DIR：Kustomize 部署目录，环境 overlay 可覆盖为其他目录。
 K8S_DIR ?= k8s
-.PHONY: fmt format-check lint typecheck test coverage check hooks-install hooks-run dev-up dev-down image-build k8s-apply k8s-delete proto-gen migration-up migration-downgrade-1 migration-status migration-history migration-revision
+.PHONY: fmt format-check lint typecheck test coverage check hooks-install hooks-run dev dev-up dev-down image-build k8s-apply k8s-delete proto-gen migration-up migration-downgrade-1 migration-status migration-history migration-revision
 
 proto-gen:
 	uv run --group dev python -m grpc_tools.protoc \
@@ -36,6 +36,10 @@ coverage:
 	uv run --group dev pytest --cov=thinkback --cov-report=term-missing --cov-report=xml -v
 
 check: format-check lint typecheck coverage
+
+# 本地开发：后端 7002 / 前端 7001 起步，占用自动顺延（script/dev.py）
+dev:
+	uv run python script/dev.py
 
 hooks-install:
 	uv run --group dev pre-commit install

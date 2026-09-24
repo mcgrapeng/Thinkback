@@ -291,7 +291,7 @@ HTTP 部署后的 smoke test 应另行通过 `/memory/*` 接口执行。
 脚本：
 
 ```bash
-make real-test
+make real-tests
 ```
 
 HTTP 部署后的质量回归和 P0 压测脚本通过 `THINKBACK_MEMORY_API_URL` 访问 thinkback API。
@@ -328,7 +328,7 @@ real validation preflight failed: missing_config=OPENAI_API_KEY database=ready r
 4. 生产 Kubernetes 使用 ConfigMap/Secret 注入配置，`ENVIRONMENT=production` 时进程不读取 `.env`。
 5. 删除边界见 [技术栈选型](Thinkback记忆服务技术栈选型.md) 第 5 节。
 6. 删除、重建和写入失败时，`ins_memory_task` 必须记录 `failed` 和 `last_error`。
-7. 同步边界和线程池口径见 [工程实现与运行边界](Thinkback记忆三层工程实现与运行边界.md) 第 9 节。
+7. 同步边界和线程池口径见 [工程实现与运行边界](../report/Thinkback记忆三层工程实现与运行边界.md) 第 9 节。
 8. `SqlAlchemyMemoryRepository` 在固定后台 event loop 上运行 async SQLAlchemy 调用。
    SQLAlchemy engine 使用默认连接池，避免每次仓库调用新建 event loop 和 asyncpg 连接。
    生产如要进一步降低同步边界成本，再把仓库和服务整体改成 async。

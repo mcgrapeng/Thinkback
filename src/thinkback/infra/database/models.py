@@ -167,3 +167,22 @@ class MemoryTaskRecord(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
+
+
+class AdminAuditRecord(Base):
+    """治理台操作审计（只追加；admin POST 动作留痕，P5 页面数据源）。
+
+    operator 在共享 token 鉴权（Q8）下为 "admin" 常量；升级到实名鉴权后
+    记操作者标识，表结构无需变化。
+    """
+
+    __tablename__ = "ins_admin_audit"
+
+    audit_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), index=True
+    )
+    operator: Mapped[str] = mapped_column(String(128), default="admin", index=True)
+    action: Mapped[str] = mapped_column(String(64), index=True)
+    target: Mapped[str] = mapped_column(String(256), default="")
+    detail: Mapped[dict[str, object]] = mapped_column(JSON, default=dict)
