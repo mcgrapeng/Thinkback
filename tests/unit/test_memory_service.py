@@ -639,6 +639,54 @@ def test_recall_l3_item_exposes_business_memory_id_for_management_delete() -> No
     assert all("豆包" not in item.content for item in deleted_recall.items)
 
 
+def test_update_memory_refreshes_valid_at_so_backfill_picks_user_edit() -> None:
+    """Bug #3: update_memory 必须刷新 valid_at。
+
+    不然 _backfill_matching_slot_memories 用 _memory_valid_sort_key 选 newest
+    时会把用户编辑过的记忆当作"老事实"漏选，导致用户纠错被跨 session 召回
+    路径覆盖。
+    """
+
+    repository = InMemoryMemoryRepository()
+    backend = FakeMemoryBackend()
+    service = MemoryService(repository=repository, backend=backend)
+
+    # 1) append 一条 P0 槽位事实（valid_at 为 append 时间）
+    service.append(
+        make_append(round_id="round-pet-old", content="我养了一只猫，名字叫麻薯。")
+    )
+    memory = next(
+        memory
+        for memory in repository.active_memories("user-1", "thinkback")
+        if "麻薯" in memory.memory_text
+    )
+    original_valid_at = memory.valid_at
+    assert original_valid_at is not None
+
+    # 2) 模拟时间推进 + 用户 update_memory 纠错
+    service.update_memory(
+        UpdateMemoryRequest(
+            request_id="update-pet-1",
+            user_id="user-1",
+            operation_id="update-pet-op",
+            memory_id=memory.memory_id,
+            content="User has a cat named 豆包",
+            memory_type=MemoryType.PROFILE,
+        )
+    )
+
+    # 3) 用户的 edit 必须有比原 valid_at 新的时间戳
+    updated = repository.get_memory_index(memory.memory_id)
+    assert updated is not None
+    assert updated.memory_text == "User has a cat named 豆包"
+    assert updated.valid_at is not None
+    assert updated.valid_at > original_valid_at, (
+        f"update_memory 没有刷新 valid_at（orig={original_valid_at}, "
+        f"updated={updated.valid_at}）。_backfill_matching_slot_memories "
+        f"会用 valid_at 选 newest，用户纠错会被后续自然提到的旧值覆盖。"
+    )
+
+
 def test_update_memory_updates_backend_index_and_marks_source_summaries_dirty() -> None:
     repository = InMemoryMemoryRepository()
     backend = CountingUpdateBackend()
@@ -7214,6 +7262,47 @@ def test_apply_memory_update_does_backend_update_outside_lock() -> None:
         f"H-3 bug 复发：_apply_memory_update 在持锁时调用了 backend.update "
         f"（call_lock_state={backend.call_lock_state}）。必须把 backend.update "
         f"移到锁外执行。"
+    )
+
+
+def test_supersede_does_backend_delete_outside_lock() -> None:
+    """H-3 覆盖扩展：supersede 路径的 backend.delete 也必须在锁外执行。
+
+    Bug 场景：append → _backfill_p0_slots → _supersede_conflicting_memories →
+    _delete_backend_memory（sync 模式直接 backend.delete）。同步 mem0 网络 I/O
+    在 _index_mutation_lock 持锁期间执行，串行化其他用户的所有 L3 写。
+    """
+
+    repository = InMemoryMemoryRepository()
+    backend = SlowBackend()
+    probe = _LockProbe()
+    backend.lock_probe = probe
+    service = MemoryService(repository=repository, backend=backend)
+    service._index_mutation_lock = probe  # type: ignore[assignment]
+
+    # 种入一条 active 记忆（同槽位 pet_name:猫，将被 supersede 覆盖）。
+    old = repository.add_memory_index(
+        backend_memory_id="backend-pet-old",
+        user_id="user-1",
+        source_refs=[{"session_id": "session-1", "round_id": "round-1"}],
+        memory_text="User has a cat named 麻薯",
+    )
+
+    # append 一条同槽位但不同昵称的事实，触发 _publish_append_round_locally
+    # → _backfill_p0_slots → _supersede_conflicting_memories → backend.delete。
+    service.append(make_append(round_id="round-supersede-1", content="我养了一只猫，名字叫豆包"))
+
+    # 必须发生 supersede：旧记忆 SUPERSEDED，backend.delete 被调用过
+    assert old.memory_status.name == "SUPERSEDED"
+    assert backend.call_count >= 1, (
+        "测试前提：应触发 backend.delete（supersede 清理 backend-pet-old）。"
+        "如果 call_count=0，请检查 _backfill_p0_slots 的 source 解析是否仍命中旧 slot。"
+    )
+    # 关键断言：所有 backend.delete/update 调用都在锁外执行
+    assert all(state is False for state in backend.call_lock_state), (
+        f"H-3 bug 复发：_supersede_conflicting_memories 在持锁时调用了 backend.delete "
+        f"（call_lock_state={backend.call_lock_state}）。"
+        f"必须把 supersede 路径的 backend.delete 移到锁外执行。"
     )
 
 

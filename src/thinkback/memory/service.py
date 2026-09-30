@@ -510,12 +510,13 @@ L2 更新 (缓存失效)
             if restricted_or_unsafe:
                 l3_events = [{"event": "SKIP", "reason": "restricted_or_unsafe_memory_content"}]
                 self.repository.mark_round_deleted(request.round_id)
+                append_pending_backend_writes: list[Any] = []
             else:
                 entry.round_state = "pending_append" if self.l3_write_mode == "sync" else "active"
                 if self.l3_write_mode == "sync":
                     self.repository.mark_round_pending_append(request.round_id)
                 if self.l3_write_mode == "async":
-                    self._publish_append_round_locally(
+                    append_pending_backend_writes = self._publish_append_round_locally(
                         entry=entry,
                         request=request,
                         session_scope_id=session_scope_id,
@@ -537,6 +538,13 @@ L2 更新 (缓存失效)
                         slot_reserved=l3_slot_reserved,
                     )
                     l3_slot_reserved = False
+                    # 锁外执行 append 后台 publish 阶段收集到的 backend 写
+                    # （async 模式下 backend.delete 已在 _l3.executor 上，本列表仅含
+                    # _BackendDeleteSync 兜底项）。
+                    if append_pending_backend_writes:
+                        self._run_backend_writes(
+                            append_pending_backend_writes, index_log=append_log
+                        )
                     LOGGER_MEMORY.completed(
                         "append",
                         "completed",
@@ -563,7 +571,7 @@ L2 更新 (缓存失效)
                 )
                 entry.round_state = "active"
                 self.repository.mark_round_active(request.round_id)
-                self._publish_append_round_locally(
+                append_pending_backend_writes = self._publish_append_round_locally(
                     entry=entry,
                     request=request,
                     session_scope_id=session_scope_id,
@@ -587,6 +595,10 @@ L2 更新 (缓存失效)
             "l3_events": [self._redact_event(event) for event in l3_events],
         }
         self.repository.save_task(task)
+        # 锁外执行 append 后台 publish 阶段（_backfill_p0_slots → supersede）收集
+        # 的 backend.delete 回调；避免 mem0 网络 I/O 串行化其他同 user L3 写。
+        if append_pending_backend_writes:
+            self._run_backend_writes(append_pending_backend_writes, index_log=append_log)
         LOGGER_MEMORY.completed(
             "append",
             "completed",
@@ -615,7 +627,8 @@ L2 更新 (缓存失效)
         request: AppendMemoryRequest,
         session_scope_id: str,
         l3_scope_id: str,
-    ) -> None:
+    ) -> list[Any]:
+        """apppend 后的本地状态发布；返回锁外待执行的 backend 写回调。"""
         self.repository.update_l1(entry)
         self._upsert_default_summary(request.user_id, session_scope_id)
         if self._l2_refresher is not None:
@@ -624,7 +637,7 @@ L2 更新 (缓存失效)
         if self._decay_sweeper is not None:
             # P2#7：遗忘清扫（进程级时间门控，默认 1 小时至多一次）。
             self._decay_sweeper.maybe_submit(request.user_id, l3_scope_id)
-        self._backfill_p0_slots_from_round_source(
+        pending_backend_writes = self._backfill_p0_slots_from_round_source(
             source_text=" ".join(
                 message.content.strip()
                 for message in request.messages
@@ -638,6 +651,7 @@ L2 更新 (缓存失效)
         )
         self._invalidate_summary_cache(request.user_id, session_scope_id)
         self._invalidate_active_memory_cache(request.user_id, l3_scope_id)
+        return pending_backend_writes
 
     # ---- 测试与运维观测垫片：底层状态已移至 L3WriteExecutor ----
 
@@ -2353,6 +2367,7 @@ L2 更新 (缓存失效)
         previous_memory_type = current.memory_type
         previous_backend_categories = list(current.backend_categories)
         previous_metadata = dict(getattr(current, "metadata", {}) or {})
+        previous_valid_at = getattr(current, "valid_at", None)
         metadata = dict(getattr(current, "metadata", {}) or {})
         metadata.pop("source_text", None)
         metadata.update(
@@ -2377,6 +2392,11 @@ L2 更新 (缓存失效)
                     )
                 )
                 backend_updated = True
+            # Bug #3 修复：manual update 必须刷新 valid_at。
+            # _backfill_matching_slot_memories 用 _memory_valid_sort_key 选
+            # newest；不刷 valid_at 会让用户编辑被跨 session 后续自然提到的
+            # 旧事实覆盖。
+            update_valid_at = datetime.now(UTC)
             updated = self.repository.update_memory_index(
                 current.memory_id,
                 backend_memory_id=current.backend_memory_id,
@@ -2389,17 +2409,19 @@ L2 更新 (缓存失效)
                 else current.memory_type,
                 backend_categories=current.backend_categories,
                 metadata=metadata,
+                valid_at=update_valid_at,
             )
             if updated is None:
                 raise RuntimeError("memory index update failed")
             index_updated = True
-            superseded_memory_ids = self._supersede_conflicting_memories(
+            superseded_memory_ids, supersede_pending = self._supersede_conflicting_memories(
                 user_id=request.user_id,
                 memory_scope_id=l3_scope_id,
                 backend_memory_id=current.backend_memory_id,
                 memory_text=request.content,
                 l3_metadata={"source_refs": current.source_refs},
             )
+            pending_backend_writes.extend(supersede_pending)
         except Exception:
             # 失败回滚：先在锁内恢复本地索引，再收集锁外回滚 backend.update。
             rollback_writes: list[Any] = []
@@ -2415,6 +2437,7 @@ L2 更新 (缓存失效)
                         memory_type=previous_memory_type,
                         backend_categories=previous_backend_categories,
                         metadata=previous_metadata,
+                        valid_at=previous_valid_at,
                     )
             if backend_updated:
                 rollback_writes.append(
@@ -3247,8 +3270,12 @@ L2 更新 (缓存失效)
         memory_scope_id: str,
         source_refs: list[dict[str, str]],
         request_metadata: dict[str, Any],
-    ) -> None:
-        """从原始回合中补齐 P0 关键槽位，降低后端抽取遗漏造成的召回风险。"""
+    ) -> list[Any]:
+        """从原始回合中补齐 P0 关键槽位，降低后端抽取遗漏造成的召回风险。
+
+        返回值：锁外待执行的 backend 写回调（_BackendDeleteSync 列表）。
+        由调用方在持锁路径外通过 ``_run_backend_writes`` 执行。
+        """
 
         backfill_log = logger.bind(
             user_id=user_id,
@@ -3264,6 +3291,7 @@ L2 更新 (缓存失效)
         )
         indexed_count = 0
         skipped_count = 0
+        pending_backend_writes: list[Any] = []
         for memory_text in self._p0_canonical_memories_from_source(source_text):
             slot = self._memory_conflict_slot(memory_text)
             if not self._memory_supported_by_source(memory_text, l3_metadata):
@@ -3300,13 +3328,14 @@ L2 更新 (缓存失效)
                 ):
                     skipped_count += 1
                     continue
-                self._supersede_conflicting_memories(
+                _, supersede_pending = self._supersede_conflicting_memories(
                     user_id=user_id,
                     memory_scope_id=memory_scope_id,
                     backend_memory_id=backend_id,
                     memory_text=memory_text,
                     l3_metadata=l3_metadata,
                 )
+                pending_backend_writes.extend(supersede_pending)
                 self.repository.add_memory_index(
                     backend_memory_id=backend_id,
                     user_id=user_id,
@@ -3331,6 +3360,7 @@ L2 更新 (缓存失效)
         backfill_log.bind(indexed_count=indexed_count, skipped_count=skipped_count).info(
             "memory p0 slot backfill completed"
         )
+        return pending_backend_writes
 
     @staticmethod
     def _local_p0_backend_memory_id(
@@ -3533,7 +3563,8 @@ L2 更新 (缓存失效)
             └───────────────────────┬─────────────────┘
                                 │
                                 ▼
-            _supersede_conflicting_memories(...)
+            _, supersede_pending = _supersede_conflicting_memories(...)
+            extend(supersede_pending)
             add_memory_index(backend_id, …, index_metadata)
             if memory_text ≠ original_memory_text:
                 append(_BackendUpdate(...))
@@ -3642,13 +3673,14 @@ L2 更新 (缓存失效)
                     "memory l3 event indexing skipped"
                 )
                 return pending_backend_writes
-            self._supersede_conflicting_memories(
+            _, supersede_pending = self._supersede_conflicting_memories(
                 user_id=user_id,
                 memory_scope_id=memory_scope_id,
                 backend_memory_id=backend_id,
                 memory_text=memory_text,
                 l3_metadata=l3_metadata,
             )
+            pending_backend_writes.extend(supersede_pending)
         self.repository.add_memory_index(
             backend_memory_id=backend_id,
             user_id=user_id,
@@ -3759,12 +3791,13 @@ L2 更新 (缓存失效)
         backend_memory_id: str,
         memory_text: str,
         l3_metadata: dict[str, Any] | None = None,
-    ) -> list[str]:
+    ) -> tuple[list[str], list[Any]]:
         new_slot = self._memory_conflict_slot(memory_text)
         if new_slot is None:
-            return []
+            return [], []
         new_partition = self._conflict_partition_from_metadata(l3_metadata or {})
         superseded_ids: list[str] = []
+        pending_backend_writes: list[Any] = []
         for memory in self.repository.active_memories(user_id, memory_scope_id):
             if memory.backend_memory_id == backend_memory_id:
                 continue
@@ -3777,17 +3810,12 @@ L2 更新 (缓存失效)
                 continue
             superseded_ids.append(memory.memory_id)
             if self._is_backend_managed_memory_id(memory.backend_memory_id):
-                try:
-                    self._delete_backend_memory(memory.backend_memory_id)
-                except Exception as exc:
-                    logger.bind(
-                        user_id=user_id,
-                        memory_scope_id=memory_scope_id,
-                        memory_id=memory.memory_id,
-                        backend_memory_id=memory.backend_memory_id,
-                        error_type=type(exc).__name__,
-                    ).warning("memory superseded backend cleanup failed")
-        return superseded_ids
+                deferred = self._schedule_backend_delete(memory.backend_memory_id)
+                if isinstance(deferred, _BackendDeleteSync):
+                    pending_backend_writes.append(deferred)
+                # async 模式：_schedule_backend_delete 已提交到 _l3.executor，
+                # 返回 True，caller 不需要跟踪。
+        return superseded_ids, pending_backend_writes
 
     @staticmethod
     def _is_backend_managed_memory_id(memory_id: str) -> bool:
