@@ -230,4 +230,4 @@ web/node_modules/
 web/dist/
 web/tsconfig.tsbuildinfo
 docs/report
-shots
+.shots
