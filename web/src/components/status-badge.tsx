@@ -34,12 +34,19 @@ const STATUS_TONES: Record<string, Tone> = {
   pending: "neutral",
 };
 
-export function StatusBadge({ status }: { status: string }) {
+export function StatusBadge({
+  status,
+  size = "sm",
+}: {
+  status: string;
+  size?: "default" | "sm";
+}) {
   const tone = STATUS_TONES[status] ?? "neutral";
   return (
     <Badge
       variant={tone}
-      className={cn(status === "DELETED" && "line-through decoration-neutral/60")}
+      size={size}
+      className={cn(status === "DELETED" && "line-through decoration-foreground-soft")}
     >
       {STATUS_LABELS[status] ?? status}
     </Badge>

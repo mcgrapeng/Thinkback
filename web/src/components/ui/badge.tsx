@@ -5,7 +5,7 @@ import { cn } from "@/lib/utils";
 /** appica 徽章规范：soft 同色相底 + emphasis 文字色，无边框。 */
 
 const badgeVariants = cva(
-  "inline-flex items-center gap-1 rounded-md px-2.5 py-1 text-xs font-medium w-fit whitespace-nowrap",
+  "inline-flex items-center gap-1 rounded-md font-medium w-fit whitespace-nowrap",
   {
     variants: {
       variant: {
@@ -19,9 +19,14 @@ const badgeVariants = cva(
         neutral: "bg-neutral-soft text-neutral",
         violet: "bg-violet-soft text-violet",
       },
+      size: {
+        default: "px-2.5 py-1 text-xs",
+        sm: "px-2 py-0.5 text-[11px]",
+      },
     },
     defaultVariants: {
       variant: "default",
+      size: "default",
     },
   },
 );
@@ -29,9 +34,10 @@ const badgeVariants = cva(
 function Badge({
   className,
   variant,
+  size,
   ...props
 }: React.ComponentProps<"span"> & VariantProps<typeof badgeVariants>) {
-  return <span data-slot="badge" className={cn(badgeVariants({ variant }), className)} {...props} />;
+  return <span data-slot="badge" className={cn(badgeVariants({ variant, size }), className)} {...props} />;
 }
 
 export { Badge, badgeVariants };

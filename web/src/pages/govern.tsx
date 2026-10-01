@@ -170,7 +170,7 @@ export function GovernPage() {
       {isMobile ? (
         <div className="flex items-start gap-2.5 rounded-xl border border-warning-strong/30 bg-warning-soft p-4 text-sm text-foreground">
           <ShieldAlert aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-warning" />
-          <p>移动端仅支持查看与准备参数；执行请在桌面端进行。</p>
+          <p>移动端仅可查看 · 治理操作请在桌面端执行。</p>
         </div>
       ) : null}
 
@@ -185,7 +185,7 @@ export function GovernPage() {
         <TabsContent value="delete" className="mt-4">
           <Card className="max-w-2xl">
             <CardHeader>
-              <CardTitle>删除记忆</CardTitle>
+              <CardTitle className="text-base">删除记忆</CardTitle>
               <CardDescription>
                 按范围删除指定用户的记忆并留下删除屏障；用户全局删除不可逆。
               </CardDescription>
@@ -303,7 +303,7 @@ export function GovernPage() {
         <TabsContent value="update" className="mt-4">
           <Card className="max-w-2xl">
             <CardHeader>
-              <CardTitle>更新记忆正文</CardTitle>
+              <CardTitle className="text-base">更新记忆正文</CardTitle>
               <CardDescription>覆写指定记忆的文本内容，原内容进入审计留痕。</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
@@ -376,7 +376,7 @@ export function GovernPage() {
         <TabsContent value="rebuild" className="mt-4">
           <Card className="max-w-2xl">
             <CardHeader>
-              <CardTitle>重建记忆索引</CardTitle>
+              <CardTitle className="text-base">重建记忆索引</CardTitle>
               <CardDescription>从 journal 原文重放，重建 L2 摘要与 L3 长期索引。</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">

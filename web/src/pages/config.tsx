@@ -115,12 +115,12 @@ export function ConfigPage() {
         </div>
       ) : (
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-          {groups.map(([group, fields]) => (
-            <Card key={group}>
-              <CardHeader>
-                <CardTitle>{GROUP_LABELS[group] ?? "其他"}</CardTitle>
-                <CardDescription>{fields.length} 项</CardDescription>
-              </CardHeader>
+            {groups.map(([group, fields]) => (
+              <Card key={group}>
+                <CardHeader className="border-b border-border-muted pb-3">
+                  <CardTitle className="text-base">{GROUP_LABELS[group] ?? "其他"}</CardTitle>
+                  <CardDescription>{fields.length} 项</CardDescription>
+                </CardHeader>
               <CardContent>
                 <dl className="space-y-0">
                   {fields.map((field) => (
