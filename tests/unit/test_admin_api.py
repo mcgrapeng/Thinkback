@@ -8,6 +8,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -84,6 +85,140 @@ def test_overview_aggregates_memories_tasks_and_l3() -> None:
         "cleanup_tasks",
         "available_capacity",
     }
+    # P0-1+2: 扩展字段用于「需关注」面板与「最近治理动作」卡片
+    assert "recent_failed_tasks" in body
+    assert isinstance(body["recent_failed_tasks"], list)
+    assert "recent_audit_actions" in body
+    assert isinstance(body["recent_audit_actions"], list)
+
+
+def test_admin_overview_failed_tasks_have_truncated_last_error() -> None:
+    """Overview 「需关注」面板的失败任务 last_error 截断 200 字符，避免撑爆卡片。"""
+    client, service = build_client()
+    long_error = "X" * 500
+    service.repository.save_task(
+        TaskEntry(
+            task_id="memory-extract:longfail",
+            request_id="r1",
+            op_type=OperationType.WRITE_ROUND,
+            scope={"user_id": "user-1"},
+            status=TaskStatus.FAILED,
+            retry_count=3,
+            last_error=long_error,
+        )
+    )
+    body = client.get("/admin/api/overview").json()
+    failed = body["recent_failed_tasks"]
+    assert any(t["task_id"] == "memory-extract:longfail" for t in failed)
+    task = next(t for t in failed if t["task_id"] == "memory-extract:longfail")
+    assert len(task["last_error"]) == 200
+
+
+def test_admin_overview_includes_by_classification_source_type_and_throughput() -> None:
+    """Overview 扩展字段：数据分类 / 来源类型 / 5min 吞吐 — P1/P2 落地。
+
+    前端 Overview 服务身份卡 / 4 张分布图 / L3 5min 吞吐卡直接消费这些字段。
+    """
+    client, service = build_client(l3_write_mode="sync")
+    seed_memories_and_rounds(service)
+
+    # 在仓储里塞不同 classification / source_type 的记录
+    from thinkback.domain.enums import DataClassification, SourceType
+    repo = service.repository
+    repo.add_memory_index(
+        backend_memory_id="b-class-1",
+        user_id="user-1",
+        source_refs=[{"session_id": "s1", "round_id": "r-class-1"}],
+        memory_text="User likes coffee",
+        data_classification=DataClassification.SENSITIVE.value,
+        source_type=SourceType.MANUAL_FIX.value,
+    )
+    repo.add_memory_index(
+        backend_memory_id="b-class-2",
+        user_id="user-1",
+        source_refs=[{"session_id": "s1", "round_id": "r-class-2"}],
+        memory_text="User birthday is 1990-01-01",
+        data_classification=DataClassification.PERSONAL.value,
+        source_type=SourceType.CHAT_ROUND.value,
+    )
+
+    response = client.get("/admin/api/overview")
+    assert response.status_code == 200
+    body = response.json()
+
+    # 分类分布
+    cls = body.get("by_classification", {})
+    assert "personal" in cls or "sensitive" in cls, cls
+    # 至少敏感 + 个人 + 普通三种（seed 制造的）
+    assert sum(cls.values()) >= 2
+
+    # 来源分布
+    src = body.get("by_source_type", {})
+    assert "chat_round" in src or "manual_fix" in src, src
+
+    # 5min 吞吐（in-memory 滑动窗口：本测试进程中所有 append 都被记录）
+    tp = body.get("throughput_5min", {})
+    assert set(tp.keys()) == {"append_ok", "append_fail", "recall_ok", "recall_fail"}
+    for kind in tp.values():
+        assert "count" in kind
+        assert "per_minute" in kind
+
+
+def test_admin_health_detail_returns_service_identity() -> None:
+    """Overview 服务身份卡：版本 / uptime / alembic / DB 池 / gRPC / 关键开关。"""
+    client, _service = build_client()
+
+    response = client.get("/admin/api/health/detail")
+    assert response.status_code == 200
+    body = response.json()
+
+    # 必填字段
+    assert "uptime_seconds" in body
+    assert body["uptime_seconds"] >= 0
+    assert "process_started_at" in body
+    assert body["app"]["name"].lower() == "thinkback"
+    assert "version" in body["app"]
+    assert body["app"]["environment"] in {"development", "staging", "production"}
+
+    # alembic 字段（可能为 None 表示还没跑过迁移）
+    assert "alembic_current" in body
+
+    # DB 池字段
+    assert body["db_pool"]["size"] > 0
+    assert body["db_pool"]["max_overflow"] is not None
+
+    # gRPC 字段
+    assert "port" in body["grpc"]
+    assert isinstance(body["grpc"]["port"], int)
+
+    # 关键开关
+    flags = body["flags"]
+    assert isinstance(flags["memory_l2_llm_enabled"], bool)
+    assert isinstance(flags["memory_decay_enabled"], bool)
+    assert isinstance(flags["memory_infer_facts"], bool)
+    assert isinstance(flags["memory_p0_slots"], list)
+
+
+def test_admin_reclaim_orphan_tasks_endpoint() -> None:
+    """运维端点：手动触发孤儿 running 任务回收。"""
+    client, service = build_client()
+    service.repository.save_task(
+        TaskEntry(
+            task_id="memory-extract:orphan-test",
+            request_id="r-orphan",
+            op_type=OperationType.WRITE_ROUND,
+            scope={"user_id": "user-1"},
+            status=TaskStatus.RUNNING,
+            retry_count=0,
+        )
+    )
+    response = client.post("/admin/api/maintenance/reclaim-orphan-tasks")
+    assert response.status_code == 200
+    body = response.json()
+    assert "reclaimed_count" in body
+    assert "reclaimed_task_ids" in body
+    assert isinstance(body["reclaimed_count"], int)
+    assert isinstance(body["reclaimed_task_ids"], list)
 
 
 def test_admin_tasks_list_filters_and_paginates() -> None:
@@ -257,6 +392,117 @@ def test_admin_delete_writes_audit_and_deletes() -> None:
     assert audit[0]["operator"] == "admin"
     assert audit[0]["target"] == "user-1"
     assert audit[0]["detail"]["scope"] == "memory"
+    # affected_count must reflect the actual number deleted (not None)
+    assert audit[0]["detail"]["affected_count"] == 1
+
+
+def test_admin_update_audit_does_not_leak_content() -> None:
+    """admin/update 审计留痕**不写正文**：只记指纹+长度+memory_type。
+    防 audit 接口被滥用窥探用户记忆原文（PII / 凭据泄漏面）。"""
+    client, service = build_client(l3_write_mode="sync")
+    seed_memories_and_rounds(service)
+    secret_content = "User's bank account password is 123456 and SSN is 999-99-9999"
+
+    target_memory_id = next(
+        item["memory_id"]
+        for item in client.get("/admin/api/memories", params={"user_id": "user-1"}).json()["items"]
+        if item["memory_text"] == "User likes coffee"
+    )
+    response = client.post(
+        "/admin/api/update",
+        json={
+            "request_id": "req-admin-upd",
+            "user_id": "user-1",
+            "operation_id": "op-admin-upd-1",
+            "memory_id": target_memory_id,
+            "content": secret_content,
+        },
+    )
+    assert response.status_code == 200
+
+    audit = client.get("/admin/api/audit", params={"action": "update"}).json()
+    assert len(audit) == 1
+    audit_detail = audit[0]["detail"]
+    # 正文必须不在 audit 里
+    assert "content" not in audit_detail
+    assert secret_content not in str(audit_detail)
+    # 必须留可审计的指纹与长度
+    assert audit_detail["content_length"] == len(secret_content)
+    assert isinstance(audit_detail["content_sha256"], str) and len(audit_detail["content_sha256"]) == 64
+    assert audit_detail["operation_id"] == "op-admin-upd-1"
+
+
+def test_admin_audit_invalid_action_returns_400() -> None:
+    """audit?action= 校验：非法动作必须 400，与 tasks 的 status 校验对齐。
+
+    修复前：admin_list_audit 不校验 action，非法值返回 200 + []，运营人员
+    误以为"动作没产生数据"——BUG #5。"""
+    client, _service = build_client()
+
+    response = client.get("/admin/api/audit", params={"action": "no-such-action"})
+    assert response.status_code == 400
+    assert "invalid audit action" in response.json()["detail"]
+
+    # 合法动作不应 400
+    for valid_action in ("delete", "update", "rebuild"):
+        response = client.get("/admin/api/audit", params={"action": valid_action})
+        assert response.status_code == 200, f"action={valid_action} should be valid"
+
+
+@pytest.mark.parametrize(
+    "endpoint",
+    [
+        "/admin/api/delete",
+        "/admin/api/update",
+        "/admin/api/rebuild",
+    ],
+)
+def test_admin_endpoints_reject_empty_or_whitespace_user_id(endpoint: str) -> None:
+    """防御纵深：admin 操作类端点必须拒绝空串/纯空白 user_id。
+
+    修复前：IdStr 只有 max_length=128 约束，空串能过校验，rebuild 会创建空
+    user_id 的任务并触发空范围重建——BUG #6。前端 govern.tsx 已有 trim+length>0
+    校验（按钮 disabled），但 gRPC / curl / SDK 等非 web 入口绕过。
+    """
+    client, service = build_client(l3_write_mode="sync")
+    seed_memories_and_rounds(service)
+
+    if endpoint == "/admin/api/delete":
+        body = {
+            "request_id": "r1",
+            "user_id": "",
+            "scope": "memory",
+            "operation_id": "op1",
+            "memory_id": "x",
+        }
+    elif endpoint == "/admin/api/update":
+        body = {
+            "request_id": "r1",
+            "user_id": "",
+            "operation_id": "op1",
+            "memory_id": "x",
+            "content": "x",
+        }
+    else:  # /admin/api/rebuild
+        body = {
+            "request_id": "r1",
+            "user_id": "",
+            "operation_id": "op1",
+            "rebuild_l2": True,
+            "rebuild_l3": True,
+        }
+
+    response = client.post(endpoint, json=body)
+    assert response.status_code in {400, 422}, (
+        f"empty user_id should be rejected, got {response.status_code}: {response.json()}"
+    )
+
+    # Whitespace-only user_id also rejected
+    body["user_id"] = "   "
+    response = client.post(endpoint, json=body)
+    assert response.status_code in {400, 422}, (
+        f"whitespace user_id should be rejected, got {response.status_code}: {response.json()}"
+    )
 
 
 def test_admin_rebuild_route_and_audit() -> None:

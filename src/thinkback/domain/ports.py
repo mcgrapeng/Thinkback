@@ -169,6 +169,14 @@ class MemoryRepository(Protocol):
         """管理面聚合：各状态本地索引记忆计数。"""
         ...
 
+    def count_memories_by_classification(self) -> dict[str, int]:
+        """管理面聚合：按数据分类（normal/personal/sensitive/restricted）计数。"""
+        ...
+
+    def count_memories_by_source_type(self) -> dict[str, int]:
+        """管理面聚合：按 source_type（chat_round/manual_fix/...）计数。"""
+        ...
+
     def admin_list_memories(
         self,
         *,
