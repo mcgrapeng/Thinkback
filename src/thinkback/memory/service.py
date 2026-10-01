@@ -2115,11 +2115,13 @@ L2 更新 (缓存失效)
         ]
 
     def overview_stats(self) -> dict[str, Any]:
-        """管理面总览聚合：记忆/任务状态计数（只读）。"""
+        """管理面总览聚合：记忆/任务状态计数 + 数据分类 + 来源类型（只读）。"""
 
         return {
             "memories": self.repository.count_memories_by_status(),
             "tasks": self.repository.count_tasks_by_status(),
+            "by_classification": self.repository.count_memories_by_classification(),
+            "by_source_type": self.repository.count_memories_by_source_type(),
         }
 
     def admin_list_memories(
@@ -2206,9 +2208,7 @@ L2 更新 (缓存失效)
                 task_id, max_age_seconds=settings.task_orphan_running_seconds
             )
         except Exception as exc:  # noqa: BLE001
-            logger.opt(exception=exc).warning(
-                "memory stale running task read-path reclaim failed"
-            )
+            logger.opt(exception=exc).warning("memory stale running task read-path reclaim failed")
             return False
 
     def reclaim_orphan_running_tasks(self) -> list[str]:

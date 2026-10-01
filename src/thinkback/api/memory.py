@@ -25,6 +25,7 @@ from thinkback.api.dependencies import (
     get_memory_service,
 )
 from thinkback.api.errors import service_error_to_http
+from thinkback.api.metrics import record_event
 from thinkback.infra.config import settings
 from thinkback.memory.schemas import (
     AppendMemoryRequest,
@@ -313,7 +314,13 @@ async def append_memory(
         round_id=request.round_id,
         message_count=len(request.messages),
     ).debug("memory append request received")
-    return await _run_write_memory_call(service.append, request)
+    try:
+        response = await _run_write_memory_call(service.append, request)
+    except Exception:
+        record_event("append_fail")
+        raise
+    record_event("append_ok")
+    return response
 
 
 @router.post(
@@ -373,7 +380,13 @@ async def recall_memory(
         intent=request.intent.value,
         query_length=len(request.query),
     ).debug("memory recall request received")
-    return await _run_read_memory_call(service.recall, request)
+    try:
+        response = await _run_read_memory_call(service.recall, request)
+    except Exception:
+        record_event("recall_fail")
+        raise
+    record_event("recall_ok")
+    return response
 
 
 @router.post(

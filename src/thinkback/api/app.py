@@ -2,7 +2,7 @@
 
 from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import asynccontextmanager
-from time import perf_counter
+from time import perf_counter, time
 
 from fastapi import FastAPI, Request, Response
 from loguru import logger
@@ -11,6 +11,9 @@ from thinkback.api.health import router as health_router
 from thinkback.api.memory import router as memory_router
 from thinkback.infra.config import settings
 from thinkback.infra.logging import clear_trace_id, configure_logging, set_trace_id
+
+# 进程启动时间戳（_lifespan 内赋值，admin/api/health/detail 用）
+PROCESS_STARTED_AT: float = 0.0
 
 OPENAPI_DESCRIPTION = """
 thinkback 首版主链路记忆服务 API。
@@ -57,6 +60,11 @@ async def _lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: ARG001
     """
 
     logger.info("memory service lifespan startup started")
+    # 进程启动时刻（Overview 服务身份卡需要：uptime）
+    import thinkback.api.app as _app_module
+
+    _app_module.PROCESS_STARTED_AT = time()
+
     # Run database migrations on startup
     from thinkback.infra.database.migration import run_migrations_async
 
@@ -217,9 +225,7 @@ def create_app() -> FastAPI:
 
     app.include_router(admin_router)
     cors_origins = [
-        origin.strip()
-        for origin in settings.admin_cors_allow_origins.split(",")
-        if origin.strip()
+        origin.strip() for origin in settings.admin_cors_allow_origins.split(",") if origin.strip()
     ]
     if cors_origins:
         from fastapi.middleware.cors import CORSMiddleware

@@ -1081,9 +1081,7 @@ class SqlAlchemyMemoryRepository(L1CacheMixin):
         return reclaimed
 
     def reclaim_stale_running_task(self, task_id: str, *, max_age_seconds: float) -> bool:
-        return self._run(
-            self._reclaim_stale_running_task(task_id, max_age_seconds=max_age_seconds)
-        )
+        return self._run(self._reclaim_stale_running_task(task_id, max_age_seconds=max_age_seconds))
 
     async def _reclaim_stale_running_task(self, task_id: str, *, max_age_seconds: float) -> bool:
         """get_task 读路径自愈：单任务原子条件回收，WHERE 未命中即 no-op。
@@ -1184,6 +1182,34 @@ class SqlAlchemyMemoryRepository(L1CacheMixin):
                 )
             ).all()
             return {str(status): int(count) for status, count in rows}
+
+    def count_memories_by_classification(self) -> dict[str, int]:
+        return self._run(self._count_memories_by_classification())
+
+    async def _count_memories_by_classification(self) -> dict[str, int]:
+        async with self.session_factory() as session:
+            rows = (
+                await session.execute(
+                    select(MemoryRecord.data_classification, func.count()).group_by(
+                        MemoryRecord.data_classification
+                    )
+                )
+            ).all()
+            return {str(cls): int(count) for cls, count in rows}
+
+    def count_memories_by_source_type(self) -> dict[str, int]:
+        return self._run(self._count_memories_by_source_type())
+
+    async def _count_memories_by_source_type(self) -> dict[str, int]:
+        async with self.session_factory() as session:
+            rows = (
+                await session.execute(
+                    select(MemoryRecord.source_type, func.count()).group_by(
+                        MemoryRecord.source_type
+                    )
+                )
+            ).all()
+            return {str(src): int(count) for src, count in rows}
 
     def admin_list_memories(
         self,
@@ -1341,7 +1367,6 @@ class SqlAlchemyMemoryRepository(L1CacheMixin):
             row_version=int(getattr(record, "row_version", 0) or 0),
         )
 
-
     def save_admin_audit(self, entry: AdminAuditEntry) -> None:
         self._run(self._save_admin_audit(entry))
 
@@ -1367,7 +1392,9 @@ class SqlAlchemyMemoryRepository(L1CacheMixin):
         limit: int = 50,
         offset: int = 0,
     ) -> list[AdminAuditEntry]:
-        return self._run(self._list_admin_audit(action=action, operator=operator, limit=limit, offset=offset))
+        return self._run(
+            self._list_admin_audit(action=action, operator=operator, limit=limit, offset=offset)
+        )
 
     async def _list_admin_audit(
         self,

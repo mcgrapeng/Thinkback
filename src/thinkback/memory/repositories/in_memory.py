@@ -488,6 +488,20 @@ class InMemoryMemoryRepository(L1CacheMixin):
             counts[memory.memory_status.value] = counts.get(memory.memory_status.value, 0) + 1
         return counts
 
+    def count_memories_by_classification(self) -> dict[str, int]:
+        counts: dict[str, int] = {}
+        for memory in self.memories.values():
+            key = str(getattr(memory, "data_classification", "") or "normal")
+            counts[key] = counts.get(key, 0) + 1
+        return counts
+
+    def count_memories_by_source_type(self) -> dict[str, int]:
+        counts: dict[str, int] = {}
+        for memory in self.memories.values():
+            key = str(getattr(memory, "source_type", "") or "chat_round")
+            counts[key] = counts.get(key, 0) + 1
+        return counts
+
     def admin_list_memories(
         self,
         *,
@@ -520,7 +534,6 @@ class InMemoryMemoryRepository(L1CacheMixin):
             if entry is not None:
                 rounds.append(deepcopy(entry))
         return rounds
-
 
     def save_admin_audit(self, entry: AdminAuditEntry) -> None:
         self.admin_audit.append(entry)

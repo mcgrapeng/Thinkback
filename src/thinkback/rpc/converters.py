@@ -24,6 +24,7 @@ from thinkback.memory.schemas import (
     MemoryType,
     OperationType,
     RebuildMemoryRequest,
+    RebuildMemoryResponse,
     RecallIntent,
     RecallMemoryRequest,
     SourceType,
@@ -226,4 +227,15 @@ def get_response_to_pb(resp: GetMemoryResponse) -> pb.GetMemoryResponse:
     return pb.GetMemoryResponse(
         status=resp.status,
         memory=_managed_item_to_pb(resp.memory),
+    )
+
+
+def rebuild_response_to_pb(resp: RebuildMemoryResponse) -> pb.RebuildResponse:
+    """RebuildMemoryRequest → RebuildResponse（与 proto 字段一一对应）。"""
+
+    return pb.RebuildResponse(
+        status=resp.status,
+        task_id=resp.task_id,
+        rebuilt_l2=resp.rebuilt_l2,
+        rebuilt_l3=resp.rebuilt_l3,
     )

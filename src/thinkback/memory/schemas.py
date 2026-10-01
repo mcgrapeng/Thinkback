@@ -120,6 +120,19 @@ class AppendMemoryRequest(BaseModel):
         description="调用方附加元数据；只用于索引和后端 metadata，不应放入密钥或大对象。",
     )
 
+    @field_validator("user_id", "session_id", "round_id", "request_id")
+    @classmethod
+    def _reject_empty_or_whitespace(cls, value: str) -> str:
+        """防御纵深：阻断空串/纯空白 user_id / session_id / round_id / request_id。
+
+        历史上仅 IdStr.max_length=128 兜底，导致空串也能写入。gRPC / curl / SDK 等
+        非 web 入口绕过前端表单校验时，service.append 会创建 round_id='' 的空
+        主键记录并触发 idempotency 冲突——早失败更安全。
+        """
+        if not value or not value.strip():
+            raise ValueError("required id field must be non-empty")
+        return value
+
     @field_validator("metadata", mode="before")
     @classmethod
     def enforce_metadata_size(cls, value: Any) -> Any:
@@ -183,6 +196,14 @@ class RecallMemoryRequest(BaseModel):
         description="返回记忆内容的粗略 token 预算，用于裁剪召回结果。",
     )
 
+    @field_validator("user_id", "session_id")
+    @classmethod
+    def _reject_empty_or_whitespace(cls, value: str) -> str:
+        """防御纵深：阻断空 user_id / session_id（query 允许空，向后端传空查询）。"""
+        if not value or not value.strip():
+            raise ValueError("required id field must be non-empty")
+        return value
+
 
 class DeleteMemoryRequest(BaseModel):
     """删除请求
@@ -203,6 +224,18 @@ class DeleteMemoryRequest(BaseModel):
     operation_id: IdStr = Field(description="删除操作 ID；重复提交同一 operation_id 会做幂等处理。")
     memory_id: IdStr | None = Field(default=None, description="单条删除时必填的业务记忆 ID。")
     session_id: IdStr | None = Field(default=None, description="会话删除时使用的会话 ID。")
+
+    @field_validator("user_id", "request_id", "operation_id")
+    @classmethod
+    def _reject_empty_or_whitespace(cls, value: str) -> str:
+        """防御纵深：阻断空串/纯空白 user_id / request_id / operation_id。
+
+        admin web govern.tsx 已在 UI 层 trim 后判 length>0（deleteReady 校验），
+        但 gRPC、curl、SDK 等非 web 入口可能绕过；这里 server-side 兜底。
+        """
+        if not value or not value.strip():
+            raise ValueError("required id field must be non-empty")
+        return value
 
     @model_validator(mode="after")
     def validate_scope_identifiers(self) -> DeleteMemoryRequest:
@@ -237,6 +270,18 @@ class UpdateMemoryRequest(BaseModel):
     content: str = Field(description="编辑后的长期记忆正文；服务端会去除首尾空白。")
     memory_type: MemoryType | None = Field(default=None, description="可选的新记忆分类。")
 
+    @field_validator("user_id", "request_id", "operation_id", "memory_id")
+    @classmethod
+    def _reject_empty_or_whitespace(cls, value: str) -> str:
+        """防御纵深：阻断空串/纯空白 ID。
+
+        admin web govern.tsx 已在 UI 层做 length>0 校验（updateReady），
+        但 gRPC / curl / SDK 等非 web 入口可能绕过；这里 server-side 兜底。
+        """
+        if not value or not value.strip():
+            raise ValueError("required id field must be non-empty")
+        return value
+
     @field_validator("content")
     @classmethod
     def strip_and_validate_content(cls, value: str) -> str:
@@ -267,6 +312,21 @@ class RebuildMemoryRequest(BaseModel):
     )
     rebuild_l2: bool = Field(default=True, description="是否重建 L2 阶段摘要。")
     rebuild_l3: bool = Field(default=True, description="是否重建 L3 长期记忆索引。")
+
+    @field_validator("user_id", "request_id", "operation_id")
+    @classmethod
+    def _reject_empty_or_whitespace(cls, value: str) -> str:
+        """防御纵深：阻断空串/纯空白 user_id / request_id / operation_id。
+
+        前端 govern.tsx 已经在 UI 层做了 trim+length>0 校验（rebuildReady / deleteReady），
+        但 admin web 之外的入口（gRPC、curl、SDK）依然可能发空串进来。
+        这里再补一刀避免 backend 静默接受空 user_id 触发空范围重建任务。
+        """
+        if not value or not value.strip():
+            raise ValueError(
+                f"{cls.__name__.replace('MemoryRequest', '').lower()} field must be non-empty"
+            )
+        return value
 
 
 class MemoryItem(BaseModel):

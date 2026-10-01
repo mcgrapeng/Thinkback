@@ -152,22 +152,19 @@ def test_l3_background_status(stub: memory_pb2_grpc.MemoryServiceStub) -> None:
     assert resp.executor_workers > 0
 
 
-def test_rebuild_not_exposed_via_grpc(stub: memory_pb2_grpc.MemoryServiceStub) -> None:
-    import grpc
-
-    try:
-        stub.Rebuild(
-            pb.RebuildRequest(
-                request_id="req-rb",
-                user_id="u1",
-                operation_id="op-rebuild-1",
-                rebuild_l2=True,
-                rebuild_l3=True,
-            )
+def test_rebuild_returns_response(stub: memory_pb2_grpc.MemoryServiceStub) -> None:
+    """Rebuild RPC 已上线：调用返回 task_id，proto 里声明的语义与业务路由一致。"""
+    resp = stub.Rebuild(
+        pb.RebuildRequest(
+            request_id="req-rb",
+            user_id="u1",
+            operation_id="op-rebuild-1",
+            rebuild_l2=True,
+            rebuild_l3=True,
         )
-        raise AssertionError("expected UNIMPLEMENTED for rebuild endpoint")
-    except grpc.RpcError as exc:
-        assert exc.code() == grpc.StatusCode.UNIMPLEMENTED
+    )
+    assert resp.task_id
+    assert resp.status in {"completed", "running", "already_done"}
 
 
 class _RecordingContext:

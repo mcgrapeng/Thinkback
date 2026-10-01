@@ -77,7 +77,8 @@ ignore_errors = true
 [tool.pytest.ini_options]
 minversion = "8.0"
 addopts = "-ra -q --strict-markers"
-testpaths = ["test"]
+testpaths = ["tests"]
+python_functions = ["test"]
 pythonpath = ["src"]
 asyncio_mode = "auto"
 
