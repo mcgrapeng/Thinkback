@@ -72,7 +72,7 @@ function SheetTitle({ className, ...props }: React.ComponentProps<"h2">) {
 function SheetDescription({ className, ...props }: React.ComponentProps<"p">) {
   return (
     <SheetPrimitive.Description
-      className={cn("text-xs text-muted-foreground", className)}
+      className={cn("text-xs text-foreground-muted", className)}
       {...props}
     />
   );

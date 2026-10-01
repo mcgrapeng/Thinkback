@@ -1,8 +1,9 @@
 /** 应用外壳：桌面侧边导航（分组 + active 指示条）/ 移动顶栏（汉堡 → Sheet 抽屉）、
- * 暗色切换、跳过链接。移动导航抽屉修复了此前 md 以下无导航入口的硬伤。 */
+ * 暗色切换、跳过链接、顶部 fetch 进度条。 */
 
 import { useEffect, useState } from "react";
 import { Link, useLocation } from "@tanstack/react-router";
+import { useIsFetching } from "@tanstack/react-query";
 import {
   Activity,
   Database,
@@ -99,14 +100,14 @@ function NavLink({
       aria-current={active ? "page" : undefined}
       onClick={onNavigate}
       className={cn(
-        "relative flex h-10 items-center gap-2.5 rounded-lg px-3 text-sm font-medium text-foreground transition-colors hover:bg-background-muted focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--ring)]",
-        active && "bg-background-muted text-foreground-intense",
+        "relative flex h-10 items-center gap-2.5 rounded-lg pl-4 pr-3 text-sm font-medium text-foreground-muted transition-colors hover:bg-background-muted hover:text-foreground-intense focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--ring)]",
+        active && "bg-background-muted pl-3 text-foreground-intense font-semibold",
       )}
     >
       {active ? (
         <span
           aria-hidden="true"
-          className="absolute left-0 top-1/2 h-4 w-0.5 -translate-y-1/2 rounded-full bg-foreground-intense"
+          className="absolute left-0 top-1/2 h-5 w-[3px] -translate-y-1/2 rounded-r-full bg-primary"
         />
       ) : null}
       <Icon aria-hidden="true" className="size-4" />
@@ -134,6 +135,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
   const { dark, toggle } = useDarkMode();
   const location = useLocation();
   const [navOpen, setNavOpen] = useState(false);
+  const isFetching = useIsFetching();
 
   const active = (to: string) =>
     to === "/" ? location.pathname === "/" : location.pathname.startsWith(to);
@@ -162,6 +164,16 @@ export function Layout({ children }: { children: React.ReactNode }) {
 
   return (
     <div className="min-h-screen bg-background">
+      {/* 全局 fetch 进度条：任何 query 正在 refetch 时顶部出现 */}
+      <div
+        aria-hidden="true"
+        className={cn(
+          "fixed left-0 right-0 top-0 z-50 h-0.5 overflow-hidden bg-transparent transition-opacity",
+          isFetching > 0 ? "opacity-100" : "opacity-0",
+        )}
+      >
+        <div className="h-full w-1/3 origin-left animate-[fetch-bar_1.1s_ease-in-out_infinite] bg-primary" />
+      </div>
       <a
         href="#main"
         className="sr-only focus:not-sr-only focus:absolute focus:left-2 focus:top-2 focus:z-50 focus:rounded-md focus:bg-primary focus:px-3 focus:py-2 focus:text-primary-foreground"
@@ -190,9 +202,9 @@ export function Layout({ children }: { children: React.ReactNode }) {
         {/* 桌面侧边栏 */}
         <nav
           aria-label="主导航"
-          className="hidden shrink-0 flex-col gap-5 border-r border-border bg-background-subtle p-3.5 md:flex md:w-60"
+          className="hidden shrink-0 flex-col gap-6 border-r border-border bg-background-subtle p-5 md:flex md:w-64"
         >
-          <div className="px-2 pb-1 pt-1">
+          <div className="px-1 pb-1 pt-1">
             <BrandMark />
           </div>
           {navList()}
@@ -218,7 +230,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
           </SheetContent>
         </Sheet>
 
-        <main id="main" tabIndex={-1} className="min-w-0 flex-1 p-5 md:p-8 lg:px-10 xl:px-12">
+        <main id="main" tabIndex={-1} className="min-w-0 flex-1 mx-auto w-full max-w-[1400px] p-4 md:p-6 lg:p-8">
           {children}
         </main>
       </div>

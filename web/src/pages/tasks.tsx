@@ -47,23 +47,23 @@ function TaskDetail({ task }: { task: TaskItem }) {
     <div className="space-y-2 p-3">
       {task.last_error ? (
         <div>
-          <h4 className="text-xs font-medium text-muted-foreground">最后错误</h4>
+          <h4 className="text-xs font-medium text-foreground-muted">最后错误</h4>
           <p className="font-mono text-xs break-all text-error">{task.last_error}</p>
         </div>
       ) : null}
       <div>
-        <h4 className="text-xs font-medium text-muted-foreground">任务结果（JSON）</h4>
+        <h4 className="text-xs font-medium text-foreground-muted">任务结果（JSON）</h4>
         <pre className="max-h-60 overflow-auto rounded-xl bg-background-muted p-3 font-mono text-xs">
           {JSON.stringify(task.result ?? {}, null, 2)}
         </pre>
       </div>
       <div>
-        <h4 className="text-xs font-medium text-muted-foreground">请求 ID</h4>
+        <h4 className="text-xs font-medium text-foreground-muted">请求 ID</h4>
         <p className="font-mono text-xs break-all">{task.request_id}</p>
       </div>
       {task.last_error?.includes("reclaimed") ? (
-        <p className="text-xs text-muted-foreground">
-          此任务由孤儿回收机制收敛为失败（进程重启/关机竞态遗留），非业务错误。
+        <p className="text-xs text-foreground-muted">
+          此任务由回收机制收敛 · 非业务错误
         </p>
       ) : null}
     </div>
@@ -250,7 +250,7 @@ export function TasksPage() {
                       <span className="truncate font-mono text-xs">{task.task_id}</span>
                       <StatusBadge status={task.status} />
                     </span>
-                    <span className="flex items-center gap-2 text-xs text-muted-foreground">
+                    <span className="flex items-center gap-2 text-xs text-foreground-muted">
                       <span>{scopeUser(task.scope)}</span>
                       <span>·</span>
                       <span>{task.op_type}</span>

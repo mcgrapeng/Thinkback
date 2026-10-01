@@ -3,9 +3,10 @@
  * 来源反链是本页灵魂：L3 抽取记忆 → journal 原文对照，人工核验「有源」。
  */
 
-import { useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import type * as React from "react";
 import { Link } from "@tanstack/react-router";
-import { AlertTriangle, ChevronLeft, ChevronRight, Search } from "lucide-react";
+import { AlertTriangle, ChevronLeft, ChevronRight, Loader2, Search, X } from "lucide-react";
 import { toast } from "sonner";
 import { useMemories, useMemorySource, type MemoryFilters } from "@/api/queries";
 import type { AdminMemoryItem } from "@/api/client";
@@ -39,6 +40,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { findHighlightSegments } from "@/lib/highlight";
 import { formatTime } from "@/lib/utils";
 
 const STATUS_OPTIONS = [
@@ -51,46 +53,33 @@ const STATUS_OPTIONS = [
 
 const PAGE_SIZE = 50;
 
-/** 最长公共连续段（中文无分词，靠公共子串定位命中片段）。 */
-function longestCommonSpan(a: string, b: string): string {
-  let best = "";
-  for (let i = 0; i < a.length; i++) {
-    for (let j = 0; j < b.length; j++) {
-      let k = 0;
-      while (i + k < a.length && j + k < b.length && a[i + k] === b[j + k]) k++;
-      if (k > best.length && /[\p{L}\p{N}]/u.test(a.slice(i, i + k))) {
-        best = a.slice(i, i + k);
-      }
-    }
-  }
-  return best;
-}
-
-/** 在原文中高亮命中记忆的关键词：拉丁词元 + 中英公共子串（≥2 字符）。 */
-function highlightSource(content: string, memoryText: string) {
-  const tokens = new Set(
-    memoryText
-      .split(/[\s,.;:!?，。；：！？、]+/)
-      .filter((token) => token.length >= 2),
+function HighlightedText({
+  content,
+  memoryText,
+}: {
+  content: string;
+  memoryText: string;
+}) {
+  const segments = useMemo(
+    () => findHighlightSegments(content, memoryText),
+    [content, memoryText],
   );
-  const span = longestCommonSpan(memoryText, content);
-  if (span.length >= 2) tokens.add(span);
-  const list = Array.from(tokens).slice(0, 8);
-  if (list.length === 0) return content;
-  const pattern = new RegExp(
-    list.map((token) => token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|"),
-    "g",
+  return (
+    <>
+      {segments.map((segment, index) =>
+        segment.kind === "match" ? (
+          <mark
+            key={index}
+            className="rounded-sm bg-warning-soft px-0.5 font-medium text-foreground-emphasis"
+          >
+            {segment.value}
+          </mark>
+        ) : (
+          <span key={index}>{segment.value}</span>
+        ),
+      )}
+    </>
   );
-  const parts = content.split(pattern);
-  const matches = content.match(pattern) ?? [];
-  return parts.flatMap((part, index) => [
-    <span key={`p-${index}`}>{part}</span>,
-    matches[index] ? (
-      <mark key={`m-${index}`} className="rounded-sm bg-warning-soft px-0.5 font-medium">
-        {matches[index]}
-      </mark>
-    ) : null,
-  ]);
 }
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
@@ -102,20 +91,18 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   );
 }
 
-function MemoryDetail({
-  memory,
-  onClose,
-}: {
-  memory: AdminMemoryItem;
-  onClose: () => void;
-}) {
+function MemoryDetail({ memory }: { memory: AdminMemoryItem }) {
   const source = useMemorySource(memory.memory_id);
   return (
     <div className="flex h-full flex-col overflow-hidden">
-      <SheetHeader className="border-b border-border">
-        <SheetTitle className="truncate font-mono text-sm" title={memory.memory_id}>
+      <SheetHeader className="gap-1 border-b border-border">
+        <SheetTitle>记忆详情</SheetTitle>
+        <p
+          className="truncate font-mono text-xs text-foreground-emphasis"
+          title={memory.memory_id}
+        >
           {memory.memory_id}
-        </SheetTitle>
+        </p>
         <SheetDescription>
           {memory.user_id} · {memory.memory_scope_id}
         </SheetDescription>
@@ -194,7 +181,12 @@ function MemoryDetail({
                         >
                           {message.role === "assistant" ? "助手" : "用户"}
                         </p>
-                        <p>{highlightSource(message.content ?? "", memory.memory_text)}</p>
+                        <p>
+                          <HighlightedText
+                            content={message.content ?? ""}
+                            memoryText={memory.memory_text}
+                          />
+                        </p>
                       </div>
                     ))}
                   </CardContent>
@@ -216,10 +208,14 @@ function MemoryDetail({
               variant="ghost"
               size="sm"
               onClick={() => {
-                void navigator.clipboard?.writeText(memory.memory_id).then(() => {
-                  toast.success("已复制记忆 ID");
-                  onClose();
-                });
+                void navigator.clipboard?.writeText(memory.memory_id).then(
+                  () => {
+                    toast.success("已复制记忆 ID");
+                  },
+                  () => {
+                    toast.error("复制失败：浏览器拒绝访问剪贴板");
+                  },
+                );
               }}
             >
               复制记忆 ID
@@ -237,20 +233,71 @@ export function MemoriesPage() {
   const [statusInput, setStatusInput] = useState<string>("ALL");
   const [applied, setApplied] = useState<MemoryFilters>({ page: 1 });
   const [selected, setSelected] = useState<AdminMemoryItem | null>(null);
-  const { data, isPending, isError } = useMemories({
+  const resultsRef = useRef<HTMLDivElement>(null);
+  const lastFilterKeyRef = useRef<string>("");
+
+  const trimmedUserId = userIdInput.trim() || undefined;
+  const trimmedScope = scopeInput.trim() || undefined;
+
+  // 文本输入 300ms debounce → 自动应用（与 status 即时筛选一致）
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setApplied((prev) => {
+        if (prev.user_id === trimmedUserId && prev.memory_scope_id === trimmedScope) {
+          return prev;
+        }
+        return { user_id: trimmedUserId, memory_scope_id: trimmedScope, page: 1 };
+      });
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [trimmedUserId, trimmedScope]);
+
+  // status 切换立即应用 → 但必须重置 page 到 1（避免分页越界）
+  useEffect(() => {
+    setApplied((prev) => (prev.page === 1 ? prev : { ...prev, page: 1 }));
+  }, [statusInput]);
+
+  const { data, isPending, isError, isFetching } = useMemories({
     ...applied,
     statuses: statusInput === "ALL" ? undefined : statusInput,
   });
 
+  // 筛选 / 分页 / 状态变化 → 滚到结果顶部（保持视觉锚点）
+  useEffect(() => {
+    if (!data) return;
+    const filterKey = `${applied.user_id ?? ""}|${applied.memory_scope_id ?? ""}|${statusInput}|${applied.page}`;
+    if (lastFilterKeyRef.current && lastFilterKeyRef.current !== filterKey) {
+      resultsRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+    lastFilterKeyRef.current = filterKey;
+  }, [data, applied.user_id, applied.memory_scope_id, applied.page, statusInput]);
+
   const applyFilters = () => {
     setApplied({
-      user_id: userIdInput.trim() || undefined,
-      memory_scope_id: scopeInput.trim() || undefined,
+      user_id: trimmedUserId,
+      memory_scope_id: trimmedScope,
       page: 1,
     });
   };
 
+  const clearFilters = () => {
+    setUserIdInput("");
+    setScopeInput("");
+    setStatusInput("ALL");
+  };
+
+  const hasActiveFilter =
+    userIdInput.trim() !== "" || scopeInput.trim() !== "" || statusInput !== "ALL";
+
   const totalPages = data ? Math.max(1, Math.ceil(data.total / PAGE_SIZE)) : 1;
+
+  const openDetail = (item: AdminMemoryItem) => setSelected(item);
+  const onRowKeyDown = (event: React.KeyboardEvent, item: AdminMemoryItem) => {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      openDetail(item);
+    }
+  };
 
   return (
     <div className="space-y-6">
@@ -266,23 +313,35 @@ export function MemoriesPage() {
         <label className="sr-only" htmlFor="filter-user">
           用户 ID
         </label>
-        <Input
-          id="filter-user"
-          className="flex-1"
-          placeholder="用户 ID（留空 = 全量）"
-          value={userIdInput}
-          onChange={(event) => setUserIdInput(event.target.value)}
-        />
+        <div className="relative flex-1">
+          <Search
+            aria-hidden="true"
+            className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-foreground-soft"
+          />
+          <Input
+            id="filter-user"
+            className="pl-9"
+            placeholder="用户 ID（留空 = 全量）"
+            value={userIdInput}
+            onChange={(event) => setUserIdInput(event.target.value)}
+          />
+        </div>
         <label className="sr-only" htmlFor="filter-scope">
           范围
         </label>
-        <Input
-          id="filter-scope"
-          className="flex-1"
-          placeholder="范围（默认全部）"
-          value={scopeInput}
-          onChange={(event) => setScopeInput(event.target.value)}
-        />
+        <div className="relative flex-1">
+          <Search
+            aria-hidden="true"
+            className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-foreground-soft"
+          />
+          <Input
+            id="filter-scope"
+            className="pl-9"
+            placeholder="范围（默认全部）"
+            value={scopeInput}
+            onChange={(event) => setScopeInput(event.target.value)}
+          />
+        </div>
         <label className="sr-only" htmlFor="filter-status">
           状态
         </label>
@@ -301,6 +360,17 @@ export function MemoriesPage() {
         <Button type="submit" className="sm:w-28">
           <Search aria-hidden="true" /> 检索
         </Button>
+        {hasActiveFilter ? (
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={clearFilters}
+            aria-label="清空筛选条件"
+          >
+            <X aria-hidden="true" /> 清空
+          </Button>
+        ) : null}
       </form>
 
       {isError ? (
@@ -319,128 +389,135 @@ export function MemoriesPage() {
         </div>
       ) : null}
 
-      {data ? (
-        <>
-          {/* 桌面表格：记忆 ID 为真实按钮（键盘可达），整行仍可点击 */}
-          <div className="hidden md:block">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>记忆 ID</TableHead>
-                  <TableHead>记忆文本</TableHead>
-                  <TableHead>槽位</TableHead>
-                  <TableHead>状态</TableHead>
-                  <TableHead>生效时刻</TableHead>
-                  <TableHead>失效时刻</TableHead>
-                  <TableHead className="text-right">召回</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {data.items.map((item) => (
-                  <TableRow
-                    key={item.memory_id}
-                    className="cursor-pointer"
-                    onClick={() => setSelected(item)}
-                  >
-                    <TableCell className="max-w-40">
-                      <button
-                        type="button"
-                        className="block w-full truncate text-left font-mono text-xs text-foreground-muted hover:text-foreground-intense hover:underline"
-                        title={item.memory_id}
-                        onClick={() => setSelected(item)}
-                      >
-                        {item.memory_id}
-                      </button>
-                    </TableCell>
-                    <TableCell className="max-w-72">
-                      <span
-                        className="block truncate text-sm text-foreground-emphasis"
-                        title={item.memory_text}
-                      >
-                        {item.memory_text}
-                      </span>
-                    </TableCell>
-                    <TableCell className="text-xs text-foreground-muted">
-                      {item.conflict_slot ?? "—"}
-                    </TableCell>
-                    <TableCell>
-                      <StatusBadge status={item.memory_status} />
-                    </TableCell>
-                    <TableCell className="text-xs text-foreground-muted">
-                      {formatTime(item.valid_at)}
-                    </TableCell>
-                    <TableCell className="text-xs text-foreground-muted">
-                      {formatTime(item.invalid_at)}
-                    </TableCell>
-                    <TableCell className="text-right font-mono text-xs tabular-nums">
-                      {item.recall_count}
-                    </TableCell>
+      <div ref={resultsRef} aria-busy={isFetching} aria-live="polite">
+        {data ? (
+          <>
+            {/* 桌面表格：整行 role=button，键盘 Enter/Space 打开详情（不止记忆 ID 列） */}
+            <div className="hidden md:block">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>记忆 ID</TableHead>
+                    <TableHead>记忆文本</TableHead>
+                    <TableHead>槽位</TableHead>
+                    <TableHead>状态</TableHead>
+                    <TableHead>生效时刻</TableHead>
+                    <TableHead>失效时刻</TableHead>
+                    <TableHead className="text-right">召回</TableHead>
                   </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </div>
+                </TableHeader>
+                <TableBody>
+                  {data.items.map((item) => (
+                    <TableRow
+                      key={item.memory_id}
+                      tabIndex={0}
+                      role="button"
+                      aria-label={`查看记忆 ${item.memory_id}`}
+                      className="cursor-pointer focus-visible:bg-background-muted focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-[var(--ring)]"
+                      onClick={() => openDetail(item)}
+                      onKeyDown={(event) => onRowKeyDown(event, item)}
+                    >
+                      <TableCell className="max-w-40 font-mono text-xs text-foreground-muted">
+                        <span className="block truncate" title={item.memory_id}>
+                          {item.memory_id}
+                        </span>
+                      </TableCell>
+                      <TableCell className="max-w-72">
+                        <span
+                          className="block truncate text-sm text-foreground-emphasis"
+                          title={item.memory_text}
+                        >
+                          {item.memory_text}
+                        </span>
+                      </TableCell>
+                      <TableCell className="text-xs text-foreground-muted">
+                        {item.conflict_slot ?? "—"}
+                      </TableCell>
+                      <TableCell>
+                        <StatusBadge status={item.memory_status} />
+                      </TableCell>
+                      <TableCell className="text-xs text-foreground-muted">
+                        {formatTime(item.valid_at)}
+                      </TableCell>
+                      <TableCell className="text-xs text-foreground-muted">
+                        {formatTime(item.invalid_at)}
+                      </TableCell>
+                      <TableCell className="text-right font-mono text-xs tabular-nums">
+                        {item.recall_count}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
 
-          {/* 移动卡片（触达 ≥44px） */}
-          <div className="space-y-2 md:hidden">
-            {data.items.map((item) => (
-              <Card key={item.memory_id} className="border-border-muted">
-                <CardContent className="p-4">
-                  <button
-                    type="button"
-                    className="flex min-h-11 w-full flex-col gap-1 text-left"
-                    onClick={() => setSelected(item)}
+            {/* 移动卡片（触达 ≥44px） */}
+            <div className="space-y-2 md:hidden">
+              {data.items.map((item) => (
+                <Card key={item.memory_id} className="border-border-muted">
+                  <CardContent className="p-4">
+                    <button
+                      type="button"
+                      className="flex min-h-11 w-full flex-col gap-1 text-left"
+                      onClick={() => openDetail(item)}
+                    >
+                      <span className="flex items-center justify-between gap-2">
+                        <span className="text-sm text-foreground-emphasis">{item.memory_text}</span>
+                        <StatusBadge status={item.memory_status} />
+                      </span>
+                      <span className="flex gap-2 text-xs text-foreground-muted">
+                        <span>{item.conflict_slot ?? "无槽位"}</span>
+                        <span>·</span>
+                        <span>{formatTime(item.valid_at)}</span>
+                      </span>
+                    </button>
+                  </CardContent>
+                </Card>
+              ))}
+            </div>
+
+            <nav className="flex items-center justify-between" aria-label="分页">
+              {totalPages > 1 ? (
+                <>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={applied.page <= 1}
+                    onClick={() => setApplied({ ...applied, page: applied.page - 1 })}
                   >
-                    <span className="flex items-center justify-between gap-2">
-                      <span className="text-sm text-foreground-emphasis">{item.memory_text}</span>
-                      <StatusBadge status={item.memory_status} />
-                    </span>
-                    <span className="flex gap-2 text-xs text-foreground-muted">
-                      <span>{item.conflict_slot ?? "无槽位"}</span>
-                      <span>·</span>
-                      <span>{formatTime(item.valid_at)}</span>
-                    </span>
-                  </button>
-                </CardContent>
-              </Card>
-            ))}
-          </div>
-
-          <nav className="flex items-center justify-between" aria-label="分页">
-            {totalPages > 1 ? (
-              <>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  disabled={applied.page <= 1}
-                  onClick={() => setApplied({ ...applied, page: applied.page - 1 })}
-                >
-                  <ChevronLeft aria-hidden="true" /> 上一页
-                </Button>
-                <p className="text-sm tabular-nums text-foreground-muted" aria-live="polite">
-                  第 {applied.page} / {totalPages} 页 · 共 {data.total} 条
+                    <ChevronLeft aria-hidden="true" /> 上一页
+                  </Button>
+                  <p className="flex items-center gap-2 text-sm tabular-nums text-foreground-muted">
+                    {isFetching ? (
+                      <Loader2 aria-hidden="true" className="size-3.5 animate-spin" />
+                    ) : null}
+                    第 {applied.page} / {totalPages} 页 · 共 {data.total} 条
+                  </p>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={applied.page >= totalPages}
+                    onClick={() => setApplied({ ...applied, page: applied.page + 1 })}
+                  >
+                    下一页 <ChevronRight aria-hidden="true" />
+                  </Button>
+                </>
+              ) : (
+                <p className="flex w-full items-center justify-center gap-2 text-sm tabular-nums text-foreground-muted">
+                  {isFetching ? (
+                    <Loader2 aria-hidden="true" className="size-3.5 animate-spin" />
+                  ) : null}
+                  共 {data.total} 条
                 </p>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  disabled={applied.page >= totalPages}
-                  onClick={() => setApplied({ ...applied, page: applied.page + 1 })}
-                >
-                  下一页 <ChevronRight aria-hidden="true" />
-                </Button>
-              </>
-            ) : (
-              <p className="w-full text-center text-sm tabular-nums text-foreground-muted" aria-live="polite">
-                共 {data.total} 条
-              </p>
-            )}
-          </nav>
-        </>
-      ) : null}
+              )}
+            </nav>
+          </>
+        ) : null}
+      </div>
 
       <Sheet open={selected !== null} onOpenChange={(open) => (open ? null : setSelected(null))}>
         <SheetContent className="p-0 sm:max-w-xl">
-          {selected ? <MemoryDetail memory={selected} onClose={() => setSelected(null)} /> : null}
+          {selected ? <MemoryDetail memory={selected} /> : null}
         </SheetContent>
       </Sheet>
     </div>

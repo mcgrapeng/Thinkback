@@ -49,7 +49,61 @@ export interface L3BackgroundStatus {
 export interface OverviewResponse {
   memories: Record<string, number>;
   tasks: Record<string, number>;
+  by_classification: Record<string, number>;
+  by_source_type: Record<string, number>;
   l3: L3BackgroundStatus;
+  throughput_5min: {
+    append_ok: { count: number; per_minute: number };
+    append_fail: { count: number; per_minute: number };
+    recall_ok: { count: number; per_minute: number };
+    recall_fail: { count: number; per_minute: number };
+  };
+  recent_failed_tasks: Array<{
+    task_id: string;
+    request_id: string;
+    op_type: string;
+    status: string;
+    scope: Record<string, unknown>;
+    last_error: string;
+    retry_count: number;
+  }>;
+  recent_audit_actions: Array<{
+    audit_id: string;
+    created_at: string | null;
+    operator: string;
+    action: string;
+    target: string;
+  }>;
+}
+
+export interface ReclaimResponse {
+  reclaimed_count: number;
+  reclaimed_task_ids: string[];
+}
+
+export interface HealthDetailResponse {
+  uptime_seconds: number;
+  process_started_at: number | null;
+  app: { name: string; version: string; environment: string; log_level: string };
+  alembic_current: string | null;
+  db_pool: {
+    size: number;
+    checked_out: number;
+    overflow: number;
+    max_overflow: number | null;
+  };
+  grpc: {
+    enabled: boolean;
+    host: string;
+    port: number;
+    max_workers: number;
+  };
+  flags: {
+    memory_l2_llm_enabled: boolean;
+    memory_decay_enabled: boolean;
+    memory_infer_facts: boolean;
+    memory_p0_slots: string[];
+  };
 }
 
 export interface TaskItem {
@@ -139,6 +193,9 @@ function queryOf(params: Record<string, string | number | undefined>): string {
 
 export const api = {
   overview: () => request<OverviewResponse>("/admin/api/overview"),
+  healthDetail: () => request<HealthDetailResponse>("/admin/api/health/detail"),
+  reclaimOrphanTasks: () =>
+    post<ReclaimResponse>("/admin/api/maintenance/reclaim-orphan-tasks", {}),
   tasks: (params: { statuses?: string; limit?: number; offset?: number }) => {
     const query = new URLSearchParams();
     if (params.statuses) query.set("statuses", params.statuses);

@@ -48,6 +48,13 @@ const ACTION_TONES: Record<string, "error" | "neutral"> = {
 };
 
 function ActionBadge({ action }: { action: string }) {
+  if (action === "delete") {
+    return (
+      <Badge variant="error" className="bg-destructive text-destructive-foreground">
+        {ACTION_LABELS[action] ?? action}
+      </Badge>
+    );
+  }
   const tone = ACTION_TONES[action] ?? "neutral";
   return <Badge variant={tone}>{ACTION_LABELS[action] ?? action}</Badge>;
 }
@@ -145,7 +152,7 @@ export function AuditPage() {
                           {expanded === item.audit_id ? "收起" : "展开"}
                         </Button>
                       ) : (
-                        <span className="text-xs text-muted-foreground">—</span>
+                        <span className="text-xs text-foreground-muted">—</span>
                       )}
                     </TableCell>
                   </TableRow>

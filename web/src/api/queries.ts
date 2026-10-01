@@ -1,6 +1,6 @@
 /** TanStack Query hooks：overview 30s 轮询（设计方案 P1），tasks 随筛选。 */
 
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "./client";
 
 export type MemoryFilters = {
@@ -15,6 +15,25 @@ export function useOverview() {
     queryKey: ["admin", "overview"],
     queryFn: api.overview,
     refetchInterval: 30_000,
+  });
+}
+
+export function useHealthDetail() {
+  return useQuery({
+    queryKey: ["admin", "health-detail"],
+    queryFn: api.healthDetail,
+    refetchInterval: 30_000,
+  });
+}
+
+export function useReclaimOrphanTasks() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: api.reclaimOrphanTasks,
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["admin", "overview"] });
+      void queryClient.invalidateQueries({ queryKey: ["admin", "tasks"] });
+    },
   });
 }
 
