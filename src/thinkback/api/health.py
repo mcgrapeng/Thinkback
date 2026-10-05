@@ -5,13 +5,17 @@
 - ``/health/live``：存活探针（Liveness Probe），仅判断进程是否在跑。
 - ``/health/ready``：就绪探针（Readiness Probe），探测数据库、Milvus、Mem0 Library
   是否可用，任一不可用则返回 503，让上游网关摘流。
+
+S2 (P0-3 落地): ``/metrics`` 暴露 Prometheus 文本 exposition 格式，运维可在
+Prometheus / VictoriaMetrics 端 scrape。
 """
 
 from fastapi import APIRouter
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, PlainTextResponse
 from loguru import logger
 from pydantic import BaseModel
 
+from thinkback.api.metrics import render_prometheus
 from thinkback.infra.config import settings
 from thinkback.infra.readiness import collect_readiness
 
@@ -75,3 +79,21 @@ async def readiness_check() -> JSONResponse:
     else:
         readiness_log.warning("readiness check completed")
     return JSONResponse(status_code=status_code, content=payload)
+
+
+@router.get(
+    "/metrics",
+    summary="Prometheus metrics endpoint",
+    operation_id="health_metrics",
+    description=(
+        "Prometheus 文本 exposition 格式输出当前滚动窗口的请求计数与速率。"
+        "运维可在 Prometheus / VictoriaMetrics 端配置 scrape 抓取。"
+    ),
+    response_class=PlainTextResponse,
+)
+async def metrics_endpoint() -> PlainTextResponse:
+    """S2: /metrics 暴露 thinkback_request_total / thinkback_request_per_minute。"""
+    return PlainTextResponse(
+        content=render_prometheus(),
+        media_type="text/plain; version=0.0.4; charset=utf-8",
+    )

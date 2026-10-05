@@ -14,6 +14,7 @@ from thinkback.memory.schemas import (
     AppendMemoryRequest,
     DeleteMemoryRequest,
     DeleteScope,
+    MemoryItem,
     MemoryStatus,
     MemoryType,
     MessageRole,
@@ -646,7 +647,7 @@ def test_backfill_picks_most_recent_valid_at_within_same_slot() -> None:
     选 valid_at 最新的一条。覆盖 Mutation M1：把 _memory_valid_sort_key 符号反转。
     """
 
-    from datetime import UTC, datetime, timedelta
+    from datetime import UTC, datetime
 
     repository = InMemoryMemoryRepository()
     backend = FakeMemoryBackend()
@@ -7004,34 +7005,40 @@ def test_context_terms_marker_set_dedup() -> None:
 
 
 # ---------------------------------------------------------------------------
-# L-4: 死代码 'if ... pass' 保留说明
+# L-4: 'if ... pass' 死代码已抽取为 _should_skip_backend_search（S4 落地）
 # ---------------------------------------------------------------------------
 # L-4 原始诉求是删除 'if query_slot and not any(item.layer == "L3" ...): pass'
 # 死代码并改 elif 为 if。但该 'pass' 分支实际上是 M-2/M-3 待修复项的占位
 # 语义——当 query_slot 命中但 backfill 空时，**不要**回退到 backend.search，
-# 因为已知 slot 的 active business index 没匹配意味着 slot 上没东西。删除
-# 该 'pass' 会与现有 test_recall_does_not_search_backend_when_known_slot_has_no_active_business_index_match
-# （行 3770）冲突。L-4 的"行为不变"前提不成立。
-# 因此 L-4 在本次 PR **保持原样**：'if ... pass' 留作 M-2/M-3 修复的语义锚点，
-# 后续 PR 实施 M-2/M-3 时直接复用并添加 skip_search 行为。
-# M-2/M-3 行为覆盖在 test_recall_does_not_search_backend_when_known_slot_has_no_active_business_index_match
-# 现有测试中（与 task #19 配套）。
+# 因为已知 slot 的 active business index 没匹配意味着 slot 上没东西。
+# S4 落地（M-2/M-3 已实现：query_slots.py 自指共现门控）：
+# - 'if ... pass' + 'elif ...' 合并为 `_should_skip_backend_search` 静态方法
+# - 决策语义由 `query_slot is not None` 表达
+# - 真值表 4 行写在函数 docstring 里
+# - M-2/M-3 行为不变 (test_recall_does_not_search_backend_when_known_slot_has_no_active_business_index_match
+#   覆盖)；本测试断言 _should_skip_backend_search 存在并被 recall 实际调用。
 
 
-def test_l4_pass_branch_kept_as_m2_m3_anchor() -> None:
-    """L-4 回归锚点：'if ... pass' 死代码保留作为 M-2/M-3 待修复项的占位语义。
+def test_should_skip_backend_search_truth_table() -> None:
+    """S4: 抽出的 _should_skip_backend_search 真值表完整覆盖（4 行）。"""
+    items_with_l3 = [
+        MemoryItem(layer="L3", content="x", source="mem0", memory_id="m1")
+    ]
+    items_no_l3: list[Any] = []
+    assert MemoryService._should_skip_backend_search("preferred_nickname", items_with_l3) is True
+    assert MemoryService._should_skip_backend_search("preferred_nickname", items_no_l3) is True
+    assert MemoryService._should_skip_backend_search(None, items_with_l3) is False
+    assert MemoryService._should_skip_backend_search(None, items_no_l3) is False
 
-    该测试不探查 recall 内部行为，仅断言：
-    1) query_slot 命中但 backfill 空时，backend.search 不被调（M-2/M-3 预期行为）
-       ——由 test_recall_does_not_search_backend_when_known_slot_has_no_active_business_index_match 覆盖
-    2) L-4 的 'if ... pass' 必须保留到 M-2/M-3 实施完成之后才能删除
-    """
+
+def test_recall_uses_extracted_skip_backend_search_function() -> None:
+    """S4: recall 实际通过 _should_skip_backend_search 决定是否调 backend.search。"""
     import inspect
 
     source = inspect.getsource(MemoryService.recall)
-    assert 'if query_slot and not any(item.layer == "L3"' in source, (
-        "L-4 'if ... pass' 分支不应删除——它是 M-2/M-3 修复的语义锚点。"
-        "删除会与 test_recall_does_not_search_backend_when_known_slot_has_no_active_business_index_match 冲突。"
+    assert "_should_skip_backend_search" in source
+    assert 'if query_slot and not any(item.layer == "L3"' not in source, (
+        "S4 内联: 'if ... pass' 死代码应已被 _should_skip_backend_search 取代"
     )
 
 

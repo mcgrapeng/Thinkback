@@ -40,6 +40,9 @@ class CurrentSummaryRecord(Base):
     summary_state: Mapped[str] = mapped_column(String(32), default="active")
     # L2 生成方式：concat（拼接降级）| llm（LLM 综合摘要，后台异步刷新）
     summary_kind: Mapped[str] = mapped_column(String(32), default="concat", server_default="concat")
+    # G4 schema 化 4 段画像：主题/进行中事项/行为偏好/近期状态。
+    # llm 综合版本填；concat 降级版本保持空 dict。读路径可机器消费各段。
+    structured_sections: Mapped[dict[str, str]] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
@@ -87,7 +90,6 @@ class MemoryRecord(Base):
     - ``source_refs``：上游来源引用（round_id / session_id 等），用于追溯与重建；
     - ``memory_status``：active / deleted / superseded / suppressed；
     - ``data_classification``：normal / personal / sensitive / restricted，控制召回脱敏；
-    - ``expires_at``：可选 TTL，过期后由清理任务转 tombstone；
     - ``backend_categories``：mem0 端返回的分类标签列表；
     - ``memory_metadata``：透传给后端的元数据。
     唯一索引 ``uq_ins_memory_active_backend_scope`` 仅在 ``ACTIVE`` 时生效，
@@ -104,7 +106,6 @@ class MemoryRecord(Base):
     source_type: Mapped[str] = mapped_column(String(64), default="chat_round")
     memory_status: Mapped[str] = mapped_column(String(32), default="ACTIVE")
     data_classification: Mapped[str] = mapped_column(String(32), default="normal")
-    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     memory_text: Mapped[str] = mapped_column(Text, default="")
     memory_type: Mapped[str | None] = mapped_column(String(64), nullable=True)
     backend_categories: Mapped[list[str]] = mapped_column(JSON, default=list)

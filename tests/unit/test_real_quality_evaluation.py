@@ -6,7 +6,11 @@ from io import BytesIO
 from pathlib import Path
 from urllib.error import HTTPError, URLError
 
-from tests.script import real_mem0_p0_short_pressure, real_mem0_p0_preprod_pressure, real_mem0_quality_regression
+from tests.script import (
+    real_mem0_p0_preprod_pressure,
+    real_mem0_p0_short_pressure,
+    real_mem0_quality_regression,
+)
 from tests.script.build_p0_pressure_final_report import build_final_report
 from tests.script.real_mem0_p0_fault_injection import (
     _wait_for_readiness,

@@ -50,9 +50,14 @@ class MemoryRepository(Protocol):
         *,
         summary_text: str | None = None,
         summary_kind: str = "concat",
+        structured_sections: dict[str, str] | None = None,
         preserve_llm: bool = False,
     ) -> SummaryEntry:
-        """``preserve_llm=True`` 时，若当前摘要已是 llm 版则跳过 concat 覆盖。"""
+        """``preserve_llm=True`` 时，若当前摘要已是 llm 版则跳过 concat 覆盖。
+
+        G4: ``structured_sections`` 是 schema 化的 4 段画像（llm 综合版填，
+        concat 降级版保持空 dict）。
+        """
         ...
 
     def get_summary(self, user_id: str, memory_scope_id: str) -> SummaryEntry | None: ...

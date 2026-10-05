@@ -100,6 +100,7 @@ class InMemoryMemoryRepository(L1CacheMixin):
         *,
         summary_text: str | None = None,
         summary_kind: str = "concat",
+        structured_sections: dict[str, str] | None = None,
         preserve_llm: bool = False,
     ) -> SummaryEntry:
         composed_text, latest = summarize_rounds(rounds)
@@ -121,6 +122,7 @@ class InMemoryMemoryRepository(L1CacheMixin):
             latest_source_timestamp=latest.source_timestamp if latest else None,
             summary_state=SummaryState.ACTIVE,
             summary_kind=summary_kind,
+            structured_sections=dict(structured_sections) if structured_sections else {},
         )
         self.summaries[scope_key(user_id, memory_scope_id)] = summary
         return summary

@@ -60,18 +60,26 @@ def make_append(round_id: str, content: str, *, index: int = 1) -> AppendMemoryR
 
 
 class RecordingComposer:
-    """记录调用并可编程返回/抛错的 fake composer。"""
+    """记录调用并可编程返回/抛错的 fake composer（G4：返回 (text, sections)）。"""
 
     def __init__(self, output: str = "【主题】测试摘要") -> None:
         self.output = output
         self.calls: list[tuple[int, str | None]] = []
         self.fail = False
 
-    def __call__(self, rounds: list[Any], previous_summary: str | None) -> str:
+    def __call__(
+        self, rounds: list[Any], previous_summary: str | None
+    ) -> tuple[str, dict[str, str]]:
         self.calls.append((len(rounds), previous_summary))
         if self.fail:
             raise RuntimeError("simulated llm failure")
-        return self.output
+        # 与 build_default_composer_with 走同样的解析路径，测试真实行为而非 mock。
+        from thinkback.domain.summarization import sections_to_text
+        from thinkback.memory.l2_refresh import parse_summary_sections
+
+        sections = parse_summary_sections(self.output)
+        text_view = sections_to_text(sections) if sections else self.output.strip()
+        return text_view, sections
 
 
 def make_service(
@@ -219,9 +227,11 @@ def test_pending_scope_not_resubmitted_while_in_flight() -> None:
 
     release = Event()
 
-    def blocking_composer(rounds: list[Any], previous_summary: str | None) -> str:
+    def blocking_composer(
+        rounds: list[Any], previous_summary: str | None
+    ) -> tuple[str, dict[str, str]]:
         release.wait(timeout=5)
-        return "【主题】done"
+        return "【主题】done", {"主题": "done"}
 
     repository = InMemoryMemoryRepository()
     repository.save_round(make_append("r1", "内容"))
@@ -325,6 +335,12 @@ def test_build_default_composer_passes_system_prompt() -> None:
     repository = InMemoryMemoryRepository()
     repository.save_round(make_append("r1", "内容"))
     result = composer(repository.list_rounds("user-1", "session-1"), None)
-    assert result == "【主题】ok"
-    assert "综合摘要" in seen[0][0]  # system prompt 注入
+    # G4: composer 现在返回 (拼接视图, 结构化画像)
+    text_view, sections = result
+    assert text_view == "【主题】ok"
+    assert sections == {"主题": "ok"}
+    # G4: prompt 改为"持续更新的中文综合画像"，原文"综合摘要"语义保留为
+    # "持续更新"+"中文"+"摘要"+"画像"四个关键词的任一即可（覆盖原锚点）。
+    system_first = seen[0][0]
+    assert ("综合摘要" in system_first) or ("画像" in system_first and "摘要" in system_first)
     assert "内容" in seen[0][1]  # 轮次进入 user prompt
