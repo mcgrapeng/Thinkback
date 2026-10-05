@@ -13,6 +13,7 @@
 
 import asyncio
 from collections.abc import Awaitable, Callable
+from typing import Any
 
 from loguru import logger
 
@@ -132,10 +133,17 @@ async def check_mem0_library() -> dict[str, str]:
 
 
 async def check_milvus() -> dict[str, str]:
-    """检查 Milvus 向量库连接：list_collections 探针。
+    """检查 Milvus 向量库连接 + collection schema 与 BM25 兼容。
 
     L3 在没 OPENAI_API_KEY 时直接 skip（开发环境）；
     生产环境要求 LLM 凭据齐全，否则 not_ready。
+
+    S8 (W-3 落地): mem0 v2 混合检索（BM25 + 向量）依赖 v3 schema（含 ``text``
+    字段 + ``sparse`` 向量）。旧 schema collection 启动期不阻断会**静默**降级
+    为纯向量检索（mem0 内部只打 warning，运维无感）。这里在 readiness 上
+    探 collection schema —— 缺 ``text`` / ``sparse`` 任一字段即 not_ready，
+    把"静默降级"升级为"启动阻断"。运维侧按 W-3 决策切换新 collection
+    名 + 迁移存量数据。
     """
 
     if not settings.openai_api_key:
@@ -150,6 +158,7 @@ async def check_milvus() -> dict[str, str]:
     check_log = logger.bind(
         milvus_database=settings.milvus_database,
         has_token=bool(settings.milvus_token),
+        collection=settings.memory_milvus_collection,
     )
     check_log.debug("milvus readiness check started")
     client = None
@@ -160,6 +169,17 @@ async def check_milvus() -> dict[str, str]:
             db_name=settings.milvus_database,
         )
         await asyncio.to_thread(client.list_collections)
+        # S8: 校验 collection 是否具备 mem0 v3 混合检索所需的字段。
+        collection_name = settings.memory_milvus_collection
+        has_v3_schema = await _collection_has_v3_schema(client, collection_name)
+        if not has_v3_schema:
+            detail = (
+                f"milvus collection {collection_name!r} missing v3 BM25 fields "
+                "(text/sparse); mem0 hybrid retrieval will silently downgrade to "
+                "pure vector — set MEMORY_MILVUS_COLLECTION to a fresh v3 collection"
+            )
+            check_log.warning("milvus collection schema missing v3 BM25 fields")
+            return {"status": "not_ready", "detail": detail}
     except Exception as exc:
         check_log.bind(error_type=type(exc).__name__).warning("milvus readiness check failed")
         return {"status": "not_ready", "detail": str(exc)}
@@ -170,3 +190,25 @@ async def check_milvus() -> dict[str, str]:
                 close()
     check_log.debug("milvus readiness check completed")
     return {"status": "ready", "detail": "ok"}
+
+
+async def _collection_has_v3_schema(client: Any, collection_name: str) -> bool:
+    """判断 Milvus collection 是否含 mem0 v3 混合检索所需字段。
+
+    新 schema 需同时含 ``text`` 字段 + ``sparse`` 向量。任一缺失即视为旧
+    schema（v2 之前的纯向量结构）。collection 不存在时返回 True（mem0 会
+    按 v3 创建新 collection，符合需求）。
+    """
+    try:
+        describe = await asyncio.to_thread(client.describe_collection, collection_name)
+    except Exception:
+        # collection 不存在或 pymilvus 版本不支持 describe_collection —— 视为 OK。
+        return True
+    fields = describe.get("fields", []) if isinstance(describe, dict) else []
+    has_text = any(
+        isinstance(field, dict) and field.get("name") == "text" for field in fields
+    )
+    has_sparse = any(
+        isinstance(field, dict) and field.get("name") == "sparse" for field in fields
+    )
+    return has_text and has_sparse

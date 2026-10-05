@@ -29,7 +29,9 @@ from loguru import logger
 from thinkback.domain.summarization import (
     L2_STRUCTURED_SUMMARY_SYSTEM_PROMPT,
     SummaryComposer,
+    SummaryComposerResult,
     build_structured_summary_user_prompt,
+    sections_to_text,
 )
 
 if TYPE_CHECKING:
@@ -140,7 +142,7 @@ class L2BackgroundRefresher:
             if not rounds:
                 refresh_log.debug("memory l2 llm refresh skipped: no active rounds")
                 return
-            summary_text = self._composer(rounds, previous_summary)
+            summary_text, structured_sections = self._composer(rounds, previous_summary)
             if not summary_text or not summary_text.strip():
                 raise RuntimeError("l2 llm composer returned empty summary")
             self._repository.upsert_summary_from_rounds(
@@ -149,6 +151,7 @@ class L2BackgroundRefresher:
                 rounds,
                 summary_text=summary_text.strip(),
                 summary_kind="llm",
+                structured_sections=structured_sections,
             )
             with self._state_lock:
                 self._llm_refreshed_scopes.add((user_id, session_scope_id))
@@ -182,10 +185,41 @@ def build_default_composer_with(
     """把「system+user → 文本」的底层调用适配为 ``SummaryComposer``。
 
     供 infra 层注入真实 LLM 客户端、测试注入 fake 使用。
+    返回 ``(拼接视图, 结构化 4 段画像)``；G4 落地后下游可机器消费各段。
     """
 
-    def compose(rounds: list[JournalEntry], previous_summary: str | None) -> str:
+    def compose(
+        rounds: list[JournalEntry], previous_summary: str | None
+    ) -> SummaryComposerResult:
         user_prompt = build_structured_summary_user_prompt(rounds, previous_summary)
-        return complete(L2_STRUCTURED_SUMMARY_SYSTEM_PROMPT, user_prompt)
+        raw = complete(L2_STRUCTURED_SUMMARY_SYSTEM_PROMPT, user_prompt)
+        sections = parse_summary_sections(raw)
+        text_view = sections_to_text(sections) if sections else raw.strip()
+        return text_view, sections
 
     return compose
+
+
+def parse_summary_sections(raw: str) -> dict[str, str]:
+    """解析 LLM 返回的结构化摘要。
+
+    优先尝试 JSON 解析（强 schema 路径）；失败时回退到【】标记的弱解析，
+    容错处理弱模型返回的自由文本（与之前 V2 行为兼容）。
+    """
+    import json
+    import re
+
+    candidate = raw.strip()
+    if candidate.startswith("{"):
+        try:
+            parsed = json.loads(candidate)
+            if isinstance(parsed, dict):
+                return {str(key): str(value) for key, value in parsed.items()}
+        except json.JSONDecodeError:
+            pass
+    sections: dict[str, str] = {}
+    for key in ("主题", "进行中事项", "行为偏好", "近期状态"):
+        match = re.search(rf"【{key}】\s*([^\n【]+)", raw)
+        if match:
+            sections[key] = match.group(1).strip()
+    return sections

@@ -206,7 +206,14 @@ class SqlAlchemyMemoryRepository(L1CacheMixin):
         cached = super().get_l1(user_id, memory_scope_id, session_id)
         if cached:
             return cached
-        rounds = self.list_rounds(user_id, memory_scope_id, session_id)[-L1_CACHE_LIMIT:]
+        rounds = self.list_rounds(
+            user_id,
+            memory_scope_id,
+            session_id,
+            limit=L1_CACHE_LIMIT,
+            descending=True,
+        )
+        rounds.reverse()
         for entry in rounds:
             super().update_l1(entry, limit=L1_CACHE_LIMIT)
         return super().get_l1(user_id, memory_scope_id, session_id)
@@ -303,6 +310,7 @@ class SqlAlchemyMemoryRepository(L1CacheMixin):
         *,
         summary_text: str | None = None,
         summary_kind: str = "concat",
+        structured_sections: dict[str, str] | None = None,
         preserve_llm: bool = False,
     ) -> SummaryEntry:
         composed_text, latest = summarize_rounds(rounds)
@@ -313,6 +321,7 @@ class SqlAlchemyMemoryRepository(L1CacheMixin):
                 summary_text=summary_text if summary_text is not None else composed_text,
                 latest=latest,
                 summary_kind=summary_kind,
+                structured_sections=structured_sections,
                 preserve_llm=preserve_llm,
             )
         )
@@ -325,6 +334,7 @@ class SqlAlchemyMemoryRepository(L1CacheMixin):
         summary_text: str,
         latest: JournalEntry | None,
         summary_kind: str = "concat",
+        structured_sections: dict[str, str] | None = None,
         preserve_llm: bool = False,
     ) -> SummaryEntry:
         async with self.session_factory() as session:
@@ -355,6 +365,7 @@ class SqlAlchemyMemoryRepository(L1CacheMixin):
                     latest_source_round_id=None,
                     latest_source_timestamp=None,
                     summary_state=SummaryState.ACTIVE.value,
+                    structured_sections=dict(structured_sections) if structured_sections else {},
                 )
                 session.add(record)
             record.summary_text = summary_text
@@ -363,6 +374,8 @@ class SqlAlchemyMemoryRepository(L1CacheMixin):
             record.latest_source_timestamp = latest.source_timestamp if latest else None
             record.summary_state = SummaryState.ACTIVE.value
             record.summary_kind = summary_kind
+            if structured_sections is not None:
+                record.structured_sections = dict(structured_sections)
             await session.commit()
             await session.refresh(record)
             return self._summary_from_record(record)
@@ -400,12 +413,26 @@ class SqlAlchemyMemoryRepository(L1CacheMixin):
                 await session.commit()
 
     def list_rounds(
-        self, user_id: str, memory_scope_id: str, session_id: str | None = None
+        self,
+        user_id: str,
+        memory_scope_id: str,
+        session_id: str | None = None,
+        *,
+        limit: int | None = None,
+        descending: bool = False,
     ) -> list[JournalEntry]:
-        return self._run(self._list_rounds(user_id, memory_scope_id, session_id))
+        return self._run(
+            self._list_rounds(user_id, memory_scope_id, session_id, limit=limit, descending=descending)
+        )
 
     async def _list_rounds(
-        self, user_id: str, memory_scope_id: str, session_id: str | None
+        self,
+        user_id: str,
+        memory_scope_id: str,
+        session_id: str | None,
+        *,
+        limit: int | None = None,
+        descending: bool = False,
     ) -> list[JournalEntry]:
         filters = [
             SummaryRoundJournalRecord.user_id == user_id,
@@ -414,18 +441,30 @@ class SqlAlchemyMemoryRepository(L1CacheMixin):
         ]
         if session_id is not None:
             filters.append(SummaryRoundJournalRecord.session_id == session_id)
+        timestamp_col = SummaryRoundJournalRecord.source_timestamp
+        index_col = SummaryRoundJournalRecord.round_index
+        round_id_col = SummaryRoundJournalRecord.round_id
+        if descending:
+            order_by = (
+                timestamp_col.desc(),
+                index_col.desc().nulls_last(),
+                round_id_col.desc(),
+            )
+        else:
+            order_by = (
+                timestamp_col.asc(),
+                index_col.nulls_first(),
+                round_id_col.asc(),
+            )
+        stmt = (
+            select(SummaryRoundJournalRecord)
+            .where(and_(*filters))
+            .order_by(*order_by)
+        )
+        if limit is not None:
+            stmt = stmt.limit(limit)
         async with self.session_factory() as session:
-            records = (
-                await session.scalars(
-                    select(SummaryRoundJournalRecord)
-                    .where(and_(*filters))
-                    .order_by(
-                        SummaryRoundJournalRecord.source_timestamp,
-                        SummaryRoundJournalRecord.round_index.nulls_first(),
-                        SummaryRoundJournalRecord.round_id,
-                    )
-                )
-            ).all()
+            records = (await session.scalars(stmt)).all()
             return [self._journal_from_record(record) for record in records]
 
     def list_user_rounds(self, user_id: str) -> list[JournalEntry]:
@@ -1328,6 +1367,7 @@ class SqlAlchemyMemoryRepository(L1CacheMixin):
             latest_source_timestamp=record.latest_source_timestamp,
             summary_state=SummaryState(record.summary_state),
             summary_kind=getattr(record, "summary_kind", "concat") or "concat",
+            structured_sections=dict(getattr(record, "structured_sections", {}) or {}),
         )
 
     @staticmethod

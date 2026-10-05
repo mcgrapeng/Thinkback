@@ -50,6 +50,7 @@ from thinkback.domain.slots import (
     query_conflict_slot,
     query_is_broad_memory_request,
     round_order,
+    should_extract_to_l3,
     source_cursor,
     source_cursor_from_refs,
     source_has_any,
@@ -585,7 +586,17 @@ L2 更新 (缓存失效)
             "round_id": request.round_id,
             "l3_events": [self._redact_event(event) for event in l3_events],
         }
-        self.repository.save_task(task)
+        # S3 (P1a 自动重放): append 终态写走 _mutate_task_with_retry，
+        # 跨副本 CAS 冲突时重读快照重放。status=COMPLETED 是幂等转换；
+        # conflict 后重读到最新 row_version（哪怕是另一副本已 FAILED），
+        # mutate 回调会把 status 改为 COMPLETED 与业务最终态对齐。
+        self._mutate_task_with_retry(
+            task.task_id,
+            lambda current_task: self._finalize_append_task(
+                current_task, request.round_id, l3_events
+            ),
+            log_context={"stage": "append_final"},
+        )
         # 锁外执行 append 后台 publish 阶段（_backfill_p0_slots → supersede）收集
         # 的 backend.delete 回调；避免 mem0 网络 I/O 串行化其他同 user L3 写。
         if append_pending_backend_writes:
@@ -793,7 +804,7 @@ L2 更新 (缓存失效)
 
     def _mutate_task_with_retry(
         self,
-        task_id: str,
+        task_id: Any,
         mutate: Any,
         *,
         attempts: int = 3,
@@ -823,6 +834,19 @@ L2 更新 (缓存失效)
             **(log_context or {}),
         ).warning("task optimistic lock contention gave up")
         return None
+
+    @staticmethod
+    def _finalize_append_task(
+        task: TaskEntry, round_id: str, l3_events: list[dict[str, Any]]
+    ) -> None:
+        """S3: append 终态 mutate 回调。set 绝对值；与 ``_mutate_task_with_retry``
+        配合，跨副本 CAS 冲突时重读快照重放。"""
+
+        task.status = TaskStatus.COMPLETED
+        task.result = {
+            "round_id": round_id,
+            "l3_events": [MemoryService._redact_event(event) for event in l3_events],
+        }
 
     def _register_pending_l3_cleanup(self, task_id: str | None) -> None:
         if task_id is None:
@@ -1045,6 +1069,18 @@ L2 更新 (缓存失效)
         if self._source_refs_excluded(user_id, memory_scope_id, source_refs):
             run_log.bind(reason="source_ref_excluded").info("memory l3 write skipped")
             return [{"event": "SKIP", "reason": "source_ref_excluded"}]
+        # S5: 写入前廉价过滤层（slot 命中 / 长消息 / metadata 强制）—— 任一
+        # 命中即送 mem0；全不命中则只落 L1/L2，被过滤的轮不会在 Milvus 沉淀
+        # 不可召回的"暗数据"，顺带消灭 B-4（白名单外记忆写入 mem0 但永不可召回）。
+        from thinkback.infra.config import settings as _settings
+
+        if not should_extract_to_l3(
+            messages=messages,
+            metadata=request_metadata,
+            allowed_slots=_settings.memory_p0_slots_list or None,
+        ):
+            run_log.bind(reason="pre_extract_gate_failed").info("memory l3 write skipped")
+            return [{"event": "SKIP", "reason": "pre_extract_gate_failed"}]
         l3_events = self._add_l3_from_messages(
             messages,
             user_id=user_id,
@@ -1233,9 +1269,7 @@ L2 更新 (缓存失效)
                     active_memories=active_memories,
                 )
                 recalled_entries.extend(backfilled)
-            if query_slot and not any(item.layer == "L3" for item in items):
-                pass
-            elif not query_slot or not any(item.layer == "L3" for item in items):
+            if not self._should_skip_backend_search(query_slot, items):
                 # N-7: mem0 网络/服务抖动时 backend.search 可能抛 RuntimeError
                 # （由 Mem0LibraryMemoryBackend._call 统一包装）。V1 设计要求
                 # 降级为只返回 L1/L2，不允许直接 502 让上游雪崩。这里只识别
@@ -1279,6 +1313,8 @@ L2 更新 (缓存失效)
                             memory_id=indexed_memory.memory_id,
                             score=item.get("score"),
                             metadata=self._recall_l3_metadata(item.get("metadata")),
+                            recall_count=getattr(indexed_memory, "recall_count", 0) or 0,
+                            last_recalled_at=getattr(indexed_memory, "last_recalled_at", None),
                         )
                     )
                     recalled_entries.append(indexed_memory)
@@ -1440,10 +1476,20 @@ L2 更新 (缓存失效)
                 deferred()
         except Exception as exc:
             with self._task_status_lock:
+                captured_exc = exc
+
+                def mark_failed(task_to_update: TaskEntry) -> None:
+                    task_to_update.status = TaskStatus.FAILED
+                    task_to_update.last_error = str(captured_exc)
+
                 task = self.repository.get_task(task.task_id) or task
-                task.status = TaskStatus.FAILED
-                task.last_error = str(exc)
-                self.repository.save_task(task)
+                if task is not None:
+                    self._mutate_task_with_retry(
+                        task.task_id,
+                        mark_failed,
+                        log_context={"stage": "delete_backend_cleanup_failed"},
+                    )
+                    task = self.repository.get_task(task.task_id) or task
             delete_log.bind(
                 task_id=task.task_id,
                 backend_memory_id=(
@@ -1454,33 +1500,50 @@ L2 更新 (缓存失效)
             raise
 
         with self._task_status_lock:
+            # S3 (P1a 自动重放): 跨副本 CAS 冲突时由
+            # ``_mutate_task_with_retry`` 重读快照重放。mutate 内部基于最新
+            # 状态决定 status（保留另一副本已 FAILED 的终态，避免把已失败
+            # 的任务改回 COMPLETED）。
             current_task = self.repository.get_task(task.task_id)
             if current_task is not None and (
                 current_task.status is TaskStatus.FAILED
                 or current_task.status is TaskStatus.COMPLETED
             ):
-                task = current_task
-                pending_cleanup_tasks = 0
+                registered_pending_cleanup_tasks = 0
             else:
-                task = current_task or task
-                registered_pending_cleanup_tasks = int(task.result.get("pending_cleanup_tasks", 0))
-                if registered_pending_cleanup_tasks:
-                    pending_cleanup_tasks = registered_pending_cleanup_tasks
-                    task.status = TaskStatus.RUNNING
-                else:
+                current_task = current_task or task
+                registered_pending_cleanup_tasks = int(
+                    current_task.result.get("pending_cleanup_tasks", 0)
+                )
+
+            def finalize_delete(task_to_update: TaskEntry) -> None:
+                # 保留终态：另一副本已 FAILED/COMPLETED 时跳过 status 改写
+                if (
+                    task_to_update.status is TaskStatus.FAILED
+                    or task_to_update.status is TaskStatus.COMPLETED
+                ):
                     pending_cleanup_tasks = 0
-                    task.status = TaskStatus.COMPLETED
-            task.result = {
-                **task.result,
-                "affected_count": len(affected_memory_ids),
-                "affected_memory_ids": affected_memory_ids,
-                "summary_state": SummaryState.DIRTY.value,
-                "scope": request.scope.value,
-                "session_id": request.session_id,
-                "pending_cleanup_tasks": pending_cleanup_tasks,
-            }
-            self.repository.save_task(task)
-            task = self.repository.get_task(task.task_id) or task
+                elif registered_pending_cleanup_tasks:
+                    task_to_update.status = TaskStatus.RUNNING
+                    pending_cleanup_tasks = registered_pending_cleanup_tasks
+                else:
+                    task_to_update.status = TaskStatus.COMPLETED
+                    pending_cleanup_tasks = 0
+                task_to_update.result = {
+                    **task_to_update.result,
+                    "affected_count": len(affected_memory_ids),
+                    "affected_memory_ids": affected_memory_ids,
+                    "summary_state": SummaryState.DIRTY.value,
+                    "scope": request.scope.value,
+                    "session_id": request.session_id,
+                    "pending_cleanup_tasks": pending_cleanup_tasks,
+                }
+
+            task = self._mutate_task_with_retry(
+                task.task_id,
+                finalize_delete,
+                log_context={"stage": "delete_final"},
+            ) or task
         delete_log.bind(
             status=task.status.value,
             task_id=task.task_id,
@@ -3034,9 +3097,39 @@ L2 更新 (缓存失效)
                 source="business_index",
                 memory_id=newest.memory_id,
                 metadata={"memory_as_data": True, "slot_backfill": query_slot},
+                recall_count=getattr(newest, "recall_count", 0) or 0,
+                last_recalled_at=getattr(newest, "last_recalled_at", None),
             )
         )
         return [newest]
+
+    @staticmethod
+    def _should_skip_backend_search(
+        query_slot: str | None, items: list[MemoryItem]
+    ) -> bool:
+        """是否跳过 mem0 backend.search？
+
+        真值表（query_slot 是否命中 P0 槽位，items 中是否已含 L3 命中）：
+
+        +----------+-----------+--------------------------------+
+        |query_slot | has L3?   | 决策                            |
+        +==========+==========+================================+
+        | True     | True      | skip（slot 匹配已精确收敛）     |
+        +----------+-----------+--------------------------------+
+        | True     | False     | skip（slot 已知无业务匹配）     |
+        +----------+-----------+--------------------------------+
+        | False    | True      | search（语义召回继续补全）     |
+        +----------+-----------+--------------------------------+
+        | False    | False     | search（必须靠语义召回）       |
+        +----------+-----------+--------------------------------+
+
+        关键设计：query_slot 命中时**故意不**回退到 backend.search —— 已知
+        slot 的 active business index 没匹配意味着 slot 上没东西，再去 mem0
+        走语义检索反而引入"同主题无关事实"污染（参见
+        test_recall_does_not_search_backend_when_known_slot_has_no_active_business_index_match）。
+        """
+        _ = items  # 当前决策只依赖 query_slot；items 参数为可读性保留
+        return query_slot is not None
 
     @staticmethod
     def _query_conflict_slot(query: str) -> str | None:

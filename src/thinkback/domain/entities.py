@@ -67,12 +67,16 @@ class SummaryEntry:
       summary_id: 摘要编号（唯一）
       user_id: 用户维度
       memory_scope_id: 会话维度
-      summary_text: 摘要正文（纯文本）
+      summary_text: 摘要正文（向后兼容视图，供召回端消费）
       summary_cursor_round: 最后处理过的回合 ID
       latest_source_round_id: 最新源回合 ID（用于版本号）
       latest_source_timestamp: 最新源回合的时间戳
       summary_state: 状态机 [ACTIVE|STALE|DIRTY|REBUILDING]
       summary_kind: 生成方式 [concat(拼接降级)|llm(LLM 综合摘要)]
+      structured_sections: G4 schema 化 4 段画像（主题/进行中事项/
+        行为偏好/近期状态）。llm 综合版本填；concat 降级版本保持空 dict。
+        强 schema 比四段提示稳，下游可机器消费各段（"行为偏好高亮"等
+        读路径零成本用例）。
     """
 
     summary_id: str
@@ -84,6 +88,7 @@ class SummaryEntry:
     latest_source_timestamp: datetime | None
     summary_state: SummaryState = SummaryState.ACTIVE
     summary_kind: str = "concat"
+    structured_sections: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass

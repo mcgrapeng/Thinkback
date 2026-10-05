@@ -334,6 +334,8 @@ class MemoryItem(BaseModel):
 
     ``layer`` 表示来源层级（L1/L2/L3），``content`` 为脱敏后正文。
     L3 召回额外提供 ``memory_id`` 与 ``score``，用于调用方做来源回溯和置信度筛选。
+    ``recall_count`` / ``last_recalled_at`` 仅 L3 有值，用于 S1 强度排序
+    (recency × frequency)。
     """
 
     layer: str = Field(description="记忆来源层级：L1、L2 或 L3。")
@@ -348,6 +350,15 @@ class MemoryItem(BaseModel):
     )
     score: float | None = Field(default=None, description="L3 语义检索分数；非 L3 可为空。")
     metadata: dict[str, Any] = Field(default_factory=dict, description="召回项附加元数据。")
+    recall_count: int = Field(
+        default=0,
+        ge=0,
+        description="累计召回次数；非 L3 为 0。S1 强度排序 (recency × frequency) 输入。",
+    )
+    last_recalled_at: datetime | None = Field(
+        default=None,
+        description="最近一次召回时间；非 L3 为 None。S1 强度排序 (recency × frequency) 输入。",
+    )
 
 
 class ManagedMemoryItem(BaseModel):

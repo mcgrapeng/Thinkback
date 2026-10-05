@@ -572,6 +572,11 @@ class Mem0LibraryMemoryBackend:
             return self._memory_client
 
     def _build_memory_client(self) -> Any:
+        # S7: mem0 v2 把 "事实抽取明细"（add/update/delete 的审计链路）
+        # 落本地 SQLite (history_db_path)。多副本部署下每个副本的 history.db
+        # 独立持有 —— 副本 A 写入的事实抽取明细只在 A 可见，跨副本审计需
+        # 走 LLM trace / 上游调用方日志（这次落实 S7 文档化，不改 mem0 行为）。
+        # Pod 重建后 history 归零；属于"已知边界"而非"bug"。
         history_db_path = self.config.get("history_db_path")
         if isinstance(history_db_path, str) and history_db_path:
             Path(history_db_path).expanduser().parent.mkdir(parents=True, exist_ok=True)

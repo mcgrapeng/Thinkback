@@ -109,7 +109,7 @@ Environment variable notes:
 | `MEMORY_EMBEDDING_DIMS` | Embedding 向量维度，必须与服务端输出一致。 |
 | `MEMORY_LLM_MODEL` | LLM 模型名称。 |
 | `MEMORY_EMBEDDING_MODEL` | Embedding 模型名称。 |
-| `MEM0_HISTORY_DB_PATH` | Mem0 Library 本地历史数据库路径，需要进程可写。 |
+| `MEM0_HISTORY_DB_PATH` | Mem0 Library 本地历史数据库路径，需要进程可写。**多副本边界**：每个副本独立持有 SQLite，Pod 重建后 history 归零；事实抽取的跨副本审计走上游 trace 而非 history.db（已知边界，S7）。 |
 | `MEMORY_L3_WRITE_MODE` | L3 写入模式；`async` 表示后台抽取长期记忆。 |
 | `MEMORY_L2_LLM_ENABLED` | L2 是否启用 LLM 综合摘要（P0）。关闭则保持拼接式降级实现（V1 行为）。 |
 | `MEMORY_L2_REFRESH_INTERVAL_ROUNDS` | L2 去抖间隔：每会话累计 N 个 append 触发一次后台 LLM 刷新（首轮立即）。 |

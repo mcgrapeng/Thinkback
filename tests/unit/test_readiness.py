@@ -201,3 +201,79 @@ def test_readiness_engine_is_isolated_from_business_pool() -> None:
 
     assert engine_module.readiness_engine is not engine_module.engine
     assert engine_module.readiness_engine.pool.__class__ is NullPool
+
+
+@pytest.mark.asyncio
+async def test_check_milvus_fails_when_collection_missing_v3_bm25_fields(monkeypatch) -> None:
+    """S8 (W-3 落地): 旧 schema (id/vectors/metadata) 缺 text/sparse → readiness not_ready，
+    阻断 mem0 BM25 混合检索静默降级为纯向量。
+    """
+
+    class FakeMilvusClient:
+        def __init__(self, *, uri: str, token: str, db_name: str) -> None:
+            _ = (uri, token, db_name)
+
+        def list_collections(self) -> object:
+            return []
+
+        def describe_collection(self, name: str) -> object:
+            return {
+                "fields": [
+                    {"name": "id", "type": "Int64"},
+                    {"name": "vectors", "type": "FloatVector"},
+                    {"name": "metadata", "type": "JSON"},
+                ],
+            }
+
+    monkeypatch.setattr(readiness, "MilvusClient", FakeMilvusClient)
+    monkeypatch.setattr(
+        readiness,
+        "settings",
+        Settings(
+            openai_api_key="openai-secret",
+            milvus_url="http://milvus.example.internal:19530",
+            memory_milvus_collection="thinkback",
+        ),
+    )
+
+    payload = await readiness.check_milvus()
+
+    assert payload["status"] == "not_ready"
+    assert "v3 BM25" in payload["detail"]
+
+
+@pytest.mark.asyncio
+async def test_check_milvus_ready_when_collection_has_v3_fields(monkeypatch) -> None:
+    """S8 正例：v3 schema (含 text + sparse) → readiness ready。"""
+
+    class FakeMilvusClient:
+        def __init__(self, *, uri: str, token: str, db_name: str) -> None:
+            _ = (uri, token, db_name)
+
+        def list_collections(self) -> object:
+            return []
+
+        def describe_collection(self, name: str) -> object:
+            return {
+                "fields": [
+                    {"name": "id", "type": "Int64"},
+                    {"name": "vectors", "type": "FloatVector"},
+                    {"name": "text", "type": "VarChar"},
+                    {"name": "sparse", "type": "SparseVector"},
+                ],
+            }
+
+    monkeypatch.setattr(readiness, "MilvusClient", FakeMilvusClient)
+    monkeypatch.setattr(
+        readiness,
+        "settings",
+        Settings(
+            openai_api_key="openai-secret",
+            milvus_url="http://milvus.example.internal:19530",
+            memory_milvus_collection="thinkback",
+        ),
+    )
+
+    payload = await readiness.check_milvus()
+
+    assert payload == {"status": "ready", "detail": "ok"}

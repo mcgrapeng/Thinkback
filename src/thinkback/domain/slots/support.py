@@ -128,6 +128,53 @@ def source_has_any(source_text: str, markers: tuple[str, ...]) -> bool:
     return any(marker.lower() in lowered_source for marker in markers)
 
 
+# L3 抽取前廉价过滤（LightMem 风格"感觉过滤"）：
+# 把"LLM 抽取"塞在确定性闸门后，避免每轮全量送 mem0。
+# 设计取舍：
+# - **留空（默认）= 不闸门，所有轮都送 mem0**。向后兼容。
+# - **非空 allowed_slots = 闸门启用**：只对"明确有 slot 价值的轮"才 send，
+#   其他轮只落 L1/L2（避免 Milvus 沉淀不可召回的暗数据，消灭 B-4）。
+# - ``force_extract=true`` metadata 始终强制抽取。
+# 系统安全门（fail-closed）已被 append 主路径拦下，到达这里的就是 §5 的判定目标。
+_MIN_BYTES_FOR_EXTRACTION = 24
+_FORCE_EXTRACT_KEY = "force_extract"
+
+
+def should_extract_to_l3(
+    *,
+    messages: list[dict[str, Any]],
+    metadata: dict[str, Any] | None,
+    allowed_slots: list[str] | None = None,
+) -> bool:
+    """S5: L3 抽取前的廉价过滤层。
+
+    闸门策略（任一命中即抽取）：
+    - ``force_extract`` metadata 显式强制 → 始终 True
+    - ``allowed_slots`` 留空 → 闸门禁用（向后兼容：所有轮都过 mem0）
+    - ``allowed_slots`` 非空 + slot 命中 → True
+    - ``allowed_slots`` 非空 + 长消息（≥ MIN_BYTES） → True
+    - 其他 → False（只落 L1/L2）
+    """
+    if metadata and metadata.get(_FORCE_EXTRACT_KEY) is True:
+        return True
+    if not allowed_slots:
+        return True  # 默认放行（保留旧行为）
+    from thinkback.domain.slots.canonical import memory_conflict_slot
+    from thinkback.domain.slots.query_slots import query_conflict_slot
+
+    source_text = " ".join(
+        str(message.get("content", ""))
+        for message in messages
+        if message.get("role") == "user"
+    )
+    if memory_conflict_slot(source_text) is not None:
+        return True
+    if query_conflict_slot(source_text) is not None:
+        return True
+    total_bytes = len(source_text.encode("utf-8"))
+    return total_bytes >= _MIN_BYTES_FOR_EXTRACTION
+
+
 def memory_supported_by_source(
     memory_text: str,
     l3_metadata: dict[str, Any],
