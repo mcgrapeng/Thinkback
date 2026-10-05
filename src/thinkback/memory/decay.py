@@ -135,10 +135,21 @@ class MemoryDecaySweeper:
         # 槽位保护：关键事实记忆由槽位系统治理
         if memory_conflict_slot(memory.memory_text) is not None:
             return False
-        # 足够老（valid_at 缺失的遗留行按 created 语义处理：视为不可判老，跳过）
+        # 足够老（valid_at 缺失的遗留行按 created 语义处理：视为不可判老，跳过）。
+        # S3-P3: asyncpg 默认可能返回 naive datetime；归一化 UTC 后比较。
         valid_at = getattr(memory, "valid_at", None)
-        if valid_at is None or valid_at > min_valid_at:
+        if valid_at is None:
             return False
-        # 久未被召回（从未召回过 → last_recalled_at 为 None 视为"久未"）
+        if valid_at.tzinfo is None:
+            valid_at = valid_at.replace(tzinfo=UTC)
+        if valid_at > min_valid_at:
+            return False
+        # 久未被召回（从未召回过 → last_recalled_at 为 None 视为"久未"）。
+        # S3-P3: asyncpg 默认可能返回 naive datetime；归一化 UTC 后比较。
         last_recalled = getattr(memory, "last_recalled_at", None)
-        return last_recalled is None or last_recalled <= max_last_recalled
+        if last_recalled is None:
+            return True
+        if last_recalled.tzinfo is None:
+            last_recalled = last_recalled.replace(tzinfo=UTC)
+        result: bool = last_recalled <= max_last_recalled
+        return result

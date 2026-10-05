@@ -573,11 +573,17 @@ L2 更新 (缓存失效)
             if l3_slot_reserved:
                 self._l3.release_write_slot()
                 l3_slot_reserved = False
-            task.status = TaskStatus.FAILED
-            task.last_error = str(exc)
-            self.repository.save_task(task)
+            captured_exc = exc
             append_log.bind(task_id=task.task_id, error_type=type(exc).__name__).warning(
                 "memory append failed"
+            )
+
+            def mark_failed(t: TaskEntry) -> None:
+                t.status = TaskStatus.FAILED
+                t.last_error = str(captured_exc)
+
+            self._mutate_task_with_retry(
+                task.task_id, mark_failed, log_context={"stage": "append_failed"}
             )
             raise
 
@@ -955,36 +961,42 @@ L2 更新 (缓存失效)
         except Exception as exc:
             # 关机竞态下 repository 可能已关闭：终态写丢失不能让回调抛异常
             # （异常会被线程池吞掉），显式记录损失，任务由读路径自愈兜底。
+            captured_exc = exc
+
+            def mark_async_failed(t: TaskEntry) -> None:
+                t.status = TaskStatus.FAILED
+                t.last_error = str(captured_exc)
+
             try:
-                with self._task_status_lock:
-                    task = self.repository.get_task(task_id)
-                    if task is None:
-                        async_log.warning("memory l3 async write task missing")
-                        return
-                    task.status = TaskStatus.FAILED
-                    task.last_error = str(exc)
-                    self.repository.save_task(task)
+                # S3-P3: async L3 终态写走 _mutate_task_with_retry，跨副本
+                # CAS 冲突时重读快照重放（替代裸 save_task）。
+                self._mutate_task_with_retry(
+                    task_id, mark_async_failed, log_context={"stage": "async_l3_failed"}
+                )
             except Exception:  # noqa: BLE001
-                async_log.bind(error_type=type(exc).__name__).error(
+                async_log.bind(error_type=type(captured_exc).__name__).error(
                     "memory l3 async write failed; task final state not persisted "
                     "(repository unavailable, task stays RUNNING until reclaimed)"
                 )
                 return
-            async_log.bind(error_type=type(exc).__name__).warning("memory l3 async write failed")
+            async_log.bind(error_type=type(captured_exc).__name__).warning(
+                "memory l3 async write failed"
+            )
             return
         try:
-            with self._task_status_lock:
-                task = self.repository.get_task(task_id)
-                if task is None:
-                    async_log.warning("memory l3 async write task missing")
-                    return
-                task.status = TaskStatus.COMPLETED
-                task.last_error = None
-                task.result = {
+
+            def mark_async_completed(t: TaskEntry) -> None:
+                t.status = TaskStatus.COMPLETED
+                t.last_error = None
+                t.result = {
                     "round_id": source_refs[0].get("round_id") if source_refs else None,
                     "l3_events": [self._redact_event(event) for event in l3_events],
                 }
-                self.repository.save_task(task)
+
+            # S3-P3: async L3 COMPLETED 终态写走 CAS 重放。
+            self._mutate_task_with_retry(
+                task_id, mark_async_completed, log_context={"stage": "async_l3_completed"}
+            )
         except Exception:  # noqa: BLE001
             async_log.error(
                 "memory l3 async write completed; task final state not persisted "
@@ -1730,22 +1742,34 @@ L2 更新 (缓存失效)
                 l3_scope_id=l3_scope_id,
             )
         except Exception as exc:
-            task.status = TaskStatus.FAILED
-            task.last_error = str(exc)
-            self.repository.save_task(task)
+            captured_exc = exc
             update_log.bind(task_id=task.task_id, error_type=type(exc).__name__).warning(
                 "memory update failed"
             )
+
+            def mark_failed(t: TaskEntry) -> None:
+                t.status = TaskStatus.FAILED
+                t.last_error = str(captured_exc)
+
+            self._mutate_task_with_retry(
+                task.task_id, mark_failed, log_context={"stage": "update_failed"}
+            )
             raise
 
-        task.status = TaskStatus.COMPLETED
-        task.result = {
-            "memory_id": updated_memory.memory_id,
-            "content_fingerprint": content_fingerprint,
-            "memory_type": updated_memory.memory_type,
-            "summary_state": SummaryState.DIRTY.value,
-        }
-        self.repository.save_task(task)
+        # S3-P2: update 终态写走 _mutate_task_with_retry，跨副本 CAS 冲突时
+        # 重读快照重放。status=COMPLETED 是幂等转换。
+        def finalize_update(t: TaskEntry) -> None:
+            t.status = TaskStatus.COMPLETED
+            t.result = {
+                "memory_id": updated_memory.memory_id,
+                "content_fingerprint": content_fingerprint,
+                "memory_type": updated_memory.memory_type,
+                "summary_state": SummaryState.DIRTY.value,
+            }
+
+        self._mutate_task_with_retry(
+            task.task_id, finalize_update, log_context={"stage": "update_final"}
+        )
         item = self._managed_memory_item(updated_memory)
         update_log.bind(task_id=task.task_id, status=task.status.value).info(
             "memory update completed"
@@ -2027,46 +2051,56 @@ L2 更新 (缓存失效)
                         request_metadata={},
                     )
         except Exception as exc:
-            with self._task_status_lock:
-                # 重新读取后再写：重建体内已提交的清理回调会并发改写同一任务，
-                # 用陈旧快照直接覆盖会丢失计数；FAILED 是操作级终态，必须保留。
-                task = self.repository.get_task(task.task_id) or task
-                task.status = TaskStatus.FAILED
-                task.last_error = str(exc)
-                self.repository.save_task(task)
+            captured_exc = exc
+
+            def mark_rebuild_failed(t: TaskEntry) -> None:
+                t.status = TaskStatus.FAILED
+                t.last_error = str(captured_exc)
+
+            self._mutate_task_with_retry(
+                task.task_id,
+                mark_rebuild_failed,
+                log_context={"stage": "rebuild_failed"},
+            )
             rebuild_log.bind(task_id=task.task_id, error_type=type(exc).__name__).warning(
                 "memory rebuild failed"
             )
             raise
-        with self._task_status_lock:
-            current_task = self.repository.get_task(task.task_id)
-            if current_task is not None and (
-                current_task.status is TaskStatus.FAILED
-                or current_task.status is TaskStatus.COMPLETED
+
+        # S3-P2: rebuild 终态写走 _mutate_task_with_retry，跨副本 CAS 冲突时
+        # 重读快照重放。mutate 内部基于最新任务状态决定 status：
+        # 保留另一副本已 FAILED 的终态；按 pending_cleanup_tasks 决定
+        # RUNNING vs COMPLETED。
+        def finalize_rebuild(t: TaskEntry) -> None:
+            if (
+                t.status is TaskStatus.FAILED
+                or t.status is TaskStatus.COMPLETED
             ):
-                task = current_task
-                pending_cleanup_tasks = 0
+                pending_cleanup_local = 0
             else:
-                task = current_task or task
-                registered_pending_cleanup_tasks = int(task.result.get("pending_cleanup_tasks", 0))
-                if registered_pending_cleanup_tasks:
-                    pending_cleanup_tasks = registered_pending_cleanup_tasks
-                    task.status = TaskStatus.RUNNING
+                registered_local = int(t.result.get("pending_cleanup_tasks", 0))
+                if registered_local:
+                    t.status = TaskStatus.RUNNING
+                    pending_cleanup_local = registered_local
                 else:
-                    pending_cleanup_tasks = 0
-                    task.status = TaskStatus.COMPLETED
-            task.result = {
-                **task.result,
+                    t.status = TaskStatus.COMPLETED
+                    pending_cleanup_local = 0
+            t.result = {
+                **t.result,
                 "rebuilt_l2": request.rebuild_l2,
                 "rebuilt_l3": request.rebuild_l3,
                 "session_id": request.session_id,
                 "history_version": request.history_version,
                 "l3_replay_status": "deferred" if l3_extract_task_ids else "completed",
                 "l3_extract_task_ids": l3_extract_task_ids,
-                "pending_cleanup_tasks": pending_cleanup_tasks,
+                "pending_cleanup_tasks": pending_cleanup_local,
             }
-            self.repository.save_task(task)
-            task = self.repository.get_task(task.task_id) or task
+
+        task = self._mutate_task_with_retry(
+            task.task_id,
+            finalize_rebuild,
+            log_context={"stage": "rebuild_final"},
+        ) or task
         rebuild_log.bind(
             status=task.status.value,
             task_id=task.task_id,
@@ -3051,7 +3085,13 @@ L2 更新 (缓存失效)
         stale_ids = []
         for entry in entries:
             last_recalled: datetime | None = getattr(entry, "last_recalled_at", None)
-            if last_recalled is None or last_recalled < cutoff:
+            if last_recalled is None:
+                stale_ids.append(entry.memory_id)
+                continue
+            # S3-P3: asyncpg 默认可能返回 naive datetime；归一化 UTC 后比较。
+            if last_recalled.tzinfo is None:
+                last_recalled = last_recalled.replace(tzinfo=UTC)
+            if last_recalled < cutoff:
                 stale_ids.append(entry.memory_id)
         if not stale_ids:
             return

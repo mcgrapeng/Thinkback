@@ -188,9 +188,7 @@ def build_default_composer_with(
     返回 ``(拼接视图, 结构化 4 段画像)``；G4 落地后下游可机器消费各段。
     """
 
-    def compose(
-        rounds: list[JournalEntry], previous_summary: str | None
-    ) -> SummaryComposerResult:
+    def compose(rounds: list[JournalEntry], previous_summary: str | None) -> SummaryComposerResult:
         user_prompt = build_structured_summary_user_prompt(rounds, previous_summary)
         raw = complete(L2_STRUCTURED_SUMMARY_SYSTEM_PROMPT, user_prompt)
         sections = parse_summary_sections(raw)
@@ -205,20 +203,32 @@ def parse_summary_sections(raw: str) -> dict[str, str]:
 
     优先尝试 JSON 解析（强 schema 路径）；失败时回退到【】标记的弱解析，
     容错处理弱模型返回的自由文本（与之前 V2 行为兼容）。
+
+    4 段 schema 固定：主题 / 进行中事项 / 行为偏好 / 近期状态。LLM 返回的
+    其他 key 一律丢弃（防止 prompt 漂移引入噪声 key）；非字符串 value
+    （json 数字/null）转为 "" 或丢弃，保证下游机器消费安全。
     """
     import json
     import re
 
+    known_keys = ("主题", "进行中事项", "行为偏好", "近期状态")
     candidate = raw.strip()
     if candidate.startswith("{"):
         try:
             parsed = json.loads(candidate)
             if isinstance(parsed, dict):
-                return {str(key): str(value) for key, value in parsed.items()}
+                sections: dict[str, str] = {}
+                for key in known_keys:
+                    if key in parsed and isinstance(parsed[key], str):
+                        sections[key] = parsed[key]
+                if sections:
+                    return sections
+                # JSON 解析成功但 known_keys 全空（LLM 返回了其他字段），回退
+                # 到【】解析以保留旧模型行为；不回退会让 LLM 输出彻底丢失。
         except json.JSONDecodeError:
             pass
-    sections: dict[str, str] = {}
-    for key in ("主题", "进行中事项", "行为偏好", "近期状态"):
+    sections = {}
+    for key in known_keys:
         match = re.search(rf"【{key}】\s*([^\n【]+)", raw)
         if match:
             sections[key] = match.group(1).strip()

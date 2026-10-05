@@ -81,17 +81,11 @@ class MetricsRegistry:
         lines.append("# HELP thinkback_request_total Request outcomes (since process start).")
         lines.append("# TYPE thinkback_request_total counter")
         for kind, value in snap.items():
-            lines.append(
-                f'thinkback_request_total{{kind="{kind}"}} {int(value["count"])}'
-            )
-        lines.append(
-            "# HELP thinkback_request_per_minute Rolling 5min per-minute rate."
-        )
+            lines.append(f'thinkback_request_total{{kind="{kind}"}} {int(value["count"])}')
+        lines.append("# HELP thinkback_request_per_minute Rolling 5min per-minute rate.")
         lines.append("# TYPE thinkback_request_per_minute gauge")
         for kind, value in snap.items():
-            lines.append(
-                f'thinkback_request_per_minute{{kind="{kind}"}} {value["per_minute"]}'
-            )
+            lines.append(f'thinkback_request_per_minute{{kind="{kind}"}} {value["per_minute"]}')
         return "\n".join(lines) + "\n"
 
     def _snapshot_text(self, *, now: float | None = None) -> str:
