@@ -37,6 +37,10 @@ def _strength(item: MemoryItem, now: datetime | None = None) -> float:
 
     非 L3（无 memory_id）固定返回 0.5 — 不参与排序但保留字典序位置。
     L3 但从未被召回（recall_count=0）也固定返回 0.5。
+
+    鲁棒性：``last_recalled_at`` 与 ``now`` 可能因 asyncpg 默认行为
+    返回 naive datetime。两侧都强制带 UTC tzinfo 后再做差，避免
+    "can't subtract naive from aware" TypeError。
     """
     if item.layer != "L3" or item.memory_id is None:
         return 0.5
@@ -46,6 +50,8 @@ def _strength(item: MemoryItem, now: datetime | None = None) -> float:
     if last is None:
         return 0.5
     current = now if now is not None else datetime.now(UTC)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=UTC)
     if last.tzinfo is None:
         last = last.replace(tzinfo=UTC)
     hours_since = max(0.0, (current - last).total_seconds() / 3600.0)
@@ -76,12 +82,9 @@ def dedupe_and_clip(
             elif item_pri == existing_pri:
                 existing_strength = _strength(existing, now)
                 item_strength = _strength(item, now)
-                if (
-                    item_strength > existing_strength
-                    or (
-                        item_strength == existing_strength
-                        and (item.score or 0.0) > (existing.score or 0.0)
-                    )
+                if item_strength > existing_strength or (
+                    item_strength == existing_strength
+                    and (item.score or 0.0) > (existing.score or 0.0)
                 ):
                     deduped[normalized] = item
 

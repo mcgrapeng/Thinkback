@@ -205,10 +205,6 @@ async def _collection_has_v3_schema(client: Any, collection_name: str) -> bool:
         # collection 不存在或 pymilvus 版本不支持 describe_collection —— 视为 OK。
         return True
     fields = describe.get("fields", []) if isinstance(describe, dict) else []
-    has_text = any(
-        isinstance(field, dict) and field.get("name") == "text" for field in fields
-    )
-    has_sparse = any(
-        isinstance(field, dict) and field.get("name") == "sparse" for field in fields
-    )
+    has_text = any(isinstance(field, dict) and field.get("name") == "text" for field in fields)
+    has_sparse = any(isinstance(field, dict) and field.get("name") == "sparse" for field in fields)
     return has_text and has_sparse
