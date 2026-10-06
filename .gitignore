@@ -219,7 +219,6 @@ __marimo__/
 docs/superpowers
 .idea/
 .mem0/
-docs/memory/report
 .claude
 .qwen
 .serena
@@ -229,5 +228,8 @@ docs/memory/report
 web/node_modules/
 web/dist/
 web/tsconfig.tsbuildinfo
+docs/memory/report
 docs/report
 .shots
+.mimocode
+.superpowers

@@ -21,7 +21,7 @@ Thinkback 让 AI 助手与智能体拥有跨会话的持久记忆。它把短期
 [![Type checked](https://img.shields.io/badge/type%20checked-mypy%20strict-blue.svg)](https://mypy.readthedocs.io)
 
 [English](README.md) · [中文](README.zh-CN.md) ·
-[文档](docs/report/ARCHITECTURE.md) ·
+[文档](docs/ARCHITECTURE.md) ·
 [报告问题](https://github.com/mcgrapeng/Thinkback/issues) ·
 [功能请求](https://github.com/mcgrapeng/Thinkback/issues)
 
@@ -310,7 +310,7 @@ API 运行后，交互式 OpenAPI 文档位于 `/docs`。
 接入真实 L3 后端（Mem0 + Milvus + embedding 调用）时，p95 大致落在
 **50–200 ms** 区间，取决于你的网络与模型端点 —— 这些数字仍需在你的部署上实测。
 细节与完整生产就绪清单见
-[生产就绪报告](docs/memory/report/2026-09-30_thinkback_production_readiness.md)。
+[架构报告](docs/ARCHITECTURE.md)。
 
 ## 配置
 
@@ -381,11 +381,11 @@ make hooks-install # 安装 pre-commit 钩子
 
 | 文档 | 内容 |
 | --- | --- |
-| [架构报告](docs/report/ARCHITECTURE.md) | 层级、组件、数据流、API、数据库 schema |
+| [架构报告](docs/ARCHITECTURE.md) | 层级、组件、数据流、API、数据库 schema |
 | [三层记忆设计](docs/memory/) | 设计理念与层级边界 |
-| [gRPC 指南](docs/report/GRPC.md) | Proto 定义与服务用法 |
+| [gRPC 指南](docs/GRPC.md) | Proto 定义与服务用法 |
 | [管理台](docs/admin/) | 运维界面、后台任务、评测脚本 |
-| [调试报告](docs/report/DEBUG_REPORT.md) | 已知边界情况与处理方式 |
+| [架构报告](docs/ARCHITECTURE.md) | 已知边界情况与处理方式 |
 | [`.env.example`](.env.example) | 完整配置参考 |
 
 ## 贡献

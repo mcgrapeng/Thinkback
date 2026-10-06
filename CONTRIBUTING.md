@@ -89,8 +89,9 @@ tests use in-memory repositories and a fake memory backend.
 
 ## Reporting Security Issues
 
-Please do **not** open a public issue for security vulnerabilities. See
-[SECURITY.md](SECURITY.md) for reporting instructions.
+Please do **not** open a public issue for security vulnerabilities. Instead, report them
+privately via [GitHub Security Advisories](https://github.com/mcgrapeng/Thinkback/security/advisories/new)
+and we will respond before any public disclosure.
 
 ## Code of Conduct
 
@@ -188,7 +189,9 @@ make fmt          # ruff 格式化
 
 ## 安全问题
 
-请**不要**公开提交安全漏洞 Issue，报告方式见 [SECURITY.md](SECURITY.md)。
+请**不要**公开提交安全漏洞 Issue。请通过
+[GitHub Security Advisories](https://github.com/mcgrapeng/Thinkback/security/advisories/new)
+私下报告，我们会在公开披露前响应。
 
 ## 行为准则
 
