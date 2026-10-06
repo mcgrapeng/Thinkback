@@ -24,7 +24,7 @@ PostgreSQL and Milvus.
 [![Type checked](https://img.shields.io/badge/type%20checked-mypy%20strict-blue.svg)](https://mypy.readthedocs.io)
 
 [English](README.md) · [中文](README.zh-CN.md) ·
-[Docs](docs/report/ARCHITECTURE.md) ·
+[Docs](docs/ARCHITECTURE.md) ·
 [Report Bug](https://github.com/mcgrapeng/Thinkback/issues) ·
 [Request Feature](https://github.com/mcgrapeng/Thinkback/issues)
 
@@ -324,7 +324,7 @@ With a real L3 backend (Mem0 + Milvus + embedding calls) p95 lands roughly in th
 **50–200 ms** band depending on your network and model endpoints — those numbers still
 need to be measured against your own deployment. Details and the full production-readiness
 checklist live in the
-[production readiness report](docs/memory/report/2026-09-30_thinkback_production_readiness.md).
+the [architecture report](docs/ARCHITECTURE.md).
 
 ## Configuration
 
@@ -399,11 +399,11 @@ backend stand in for PostgreSQL, Milvus, and LLM calls. See
 
 | Document | Contents |
 | --- | --- |
-| [Architecture Report](docs/report/ARCHITECTURE.md) | Layers, components, data flow, API, DB schema |
+| [Architecture Report](docs/ARCHITECTURE.md) | Layers, components, data flow, API, DB schema |
 | [Three-Layer Memory Design](docs/memory/) | Design rationale and layer boundaries |
-| [gRPC Guide](docs/report/GRPC.md) | Proto definitions and service usage |
+| [gRPC Guide](docs/GRPC.md) | Proto definitions and service usage |
 | [Admin Dashboard](docs/admin/) | Ops UI, background tasks, evaluation scripts |
-| [Debug Report](docs/report/DEBUG_REPORT.md) | Known edge cases and their resolutions |
+| [Architecture Report](docs/ARCHITECTURE.md) | Known edge cases and their resolutions |
 | [`.env.example`](.env.example) | Full configuration reference |
 
 ## Contributing
