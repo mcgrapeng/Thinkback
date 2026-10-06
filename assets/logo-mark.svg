@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" role="img" aria-label="thinkback">
+  <defs>
+    <linearGradient id="tb-m" x1="2" y1="2" x2="14" y2="14" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#22d3ee"/>
+      <stop offset="100%" stop-color="#6366f1"/>
+    </linearGradient>
+  </defs>
+  <circle cx="8" cy="8" r="6" fill="none" stroke="url(#tb-m)" stroke-width="2"/>
+  <circle cx="8" cy="8" r="1.5" fill="url(#tb-m)"/>
+</svg>

@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 160" role="img" aria-label="thinkback — Memory service for conversation assistants">
+  <defs>
+    <linearGradient id="tb-bg" x1="20" y1="20" x2="100" y2="100" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#22d3ee"/>
+      <stop offset="100%" stop-color="#6366f1"/>
+    </linearGradient>
+  </defs>
+
+  <!-- logo: scaled copy of main logo, placed at (20, 20) -->
+  <g transform="translate(20,20) scale(1.0)">
+    <path d="M 28.4 28.4 A 44 44 0 1 1 91.6 28.4"
+          fill="none" stroke="url(#tb-bg)" stroke-width="10" stroke-linecap="round"/>
+    <path d="M 91.6 28.4 L 102.6 33.4 L 97.6 17.4 Z" fill="url(#tb-bg)"/>
+    <circle cx="60" cy="60" r="9" fill="url(#tb-bg)"/>
+  </g>
+
+  <!-- wordmark + tagline, right of logo -->
+  <text x="170" y="80"
+        font-family="Inter, system-ui, -apple-system, 'Segoe UI', sans-serif"
+        font-size="48" font-weight="700" fill="#0a0a0a">thinkback</text>
+  <text x="170" y="115"
+        font-family="Inter, system-ui, -apple-system, 'Segoe UI', sans-serif"
+        font-size="18" font-weight="400" fill="#6b7280">Memory service for conversation assistants</text>
+</svg>
