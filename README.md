@@ -1,52 +1,51 @@
-<p align="center">
-  <a href="docs/report/ARCHITECTURE.md">
-    <img src="assets/banner.svg" alt="thinkback — Memory Layer for Conversation Assistants" width="880px">
-  </a>
-</p>
+<div align="center">
 
-<p align="center">
-  <a href="docs/report/ARCHITECTURE.md"><img alt="Architecture" src="https://img.shields.io/badge/architecture-docs-22d3ee?style=for-the-badge"></a>
-  <a href="docs/admin/"><img alt="Admin" src="https://img.shields.io/badge/admin-dashboard-6366f1?style=for-the-badge"></a>
-  <a href="#license"><img alt="License" src="https://img.shields.io/badge/license-internal-lightgrey?style=for-the-badge"></a>
-  <a href="#quickstart"><img alt="Status" src="https://img.shields.io/badge/status-P0%20stable-emerald?style=for-the-badge"></a>
-</p>
-
-<p align="center">
-  <a href="docs/report/ARCHITECTURE.md">📚 Documentation</a>
-  ·
-  <a href="docs/admin/">🎛️ Admin Dashboard</a>
-  ·
-  <a href="docs/memory/">🧠 Memory Design</a>
-  ·
-  <a href="#quickstart">🚀 Quickstart</a>
-</p>
-
-<br/>
+![thinkback banner](assets/banner.svg)
 
 # thinkback
 
-**thinkback** is the memory layer for conversation assistants. It stores per-session short-term context in PostgreSQL, maintains an LLM-debounced session summary, and extracts user-level long-term memory that can be recalled across newly created sessions via Mem0 + Milvus.
+**Memory Layer for Personalized AI Conversations**
 
-Built for production: HTTP + gRPC dual protocol, OpenAI-compatible LLM/embedding endpoints, Kubernetes-native health probes, Pydantic v2 + mypy strict.
+thinkback gives AI assistants and agents intelligent, persistent memory across conversations. It remembers user preferences, learns from past interactions, and recalls relevant context when needed — enabling personalized AI that improves over time.
 
-## Key Features & Use Cases
+Built on a **three-layer memory architecture** with PostgreSQL, Milvus, and Mem0.
 
-**Memory Architecture**
+<br>
 
-- **Three-layer memory model** — short-term rounds → session summary → cross-session recall, with one-way data flow between layers
-- **PostgreSQL + Milvus dual-store** — durable rows in PG, vectors in Milvus; each layer picks the right store
-- **Mem0-orchestrated L3** — extraction, semantic search, update, and delete unified through Mem0 Library
-- **Decay & governance** — idle memories are suppressed (not deleted) with audit trail; protected critical facts are immune
+[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
+[![Python](https://img.shields.io/badge/python-3.12%2B-blue.svg)](pyproject.toml)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.135-009688.svg)](https://fastapi.tiangolo.com)
+[![Mem0](https://img.shields.io/badge/Mem0-2.0-purple.svg)](https://mem0.ai)
+[![Code style](https://img.shields.io/badge/code%20style-ruff-black.svg)](https://docs.astral.sh/ruff/)
+[![Type checked](https://img.shields.io/badge/type%20checked-mypy%20strict-blue.svg)](https://mypy.readthedocs.io)
 
-**Production-grade**
+[English](README.md) · [中文](README.zh-CN.md) · [Report Bug](https://github.com/your-org/thinkback/issues) · [Request Feature](https://github.com/your-org/thinkback/issues)
+
+</div>
+
+---
+
+## ✨ Features
+
+### 🧠 Three-Layer Memory Architecture
+
+thinkback organizes memory into three distinct layers, each optimized for its role:
+
+- **L1 — Short-term context** — per-round messages in PostgreSQL; append-only, last-N rounds
+- **L2 — Session summary** — per-session context with LLM-debounced refresh; one LLM call per N rounds
+- **L3 — User memory** — cross-session facts in Milvus vectors via Mem0; semantic recall across newly created sessions
+
+Layers flow one-way; **no cross-write** — Mem0 owns L3 storage entirely. Read [Architecture Report](docs/report/ARCHITECTURE.md) for full details.
+
+### ⚡ Production-Ready
 
 - **HTTP + gRPC dual protocol** — FastAPI and grpc share one Pydantic schema; pick the protocol your client prefers
 - **Strictly typed end-to-end** — Pydantic v2 + mypy strict; no `Any` at the API boundary
-- **OpenAI-compatible LLM/embedding endpoints** — bring your own URL and model name; works with any `/v1` OpenAI-compatible API
-- **Kubernetes-native** — health, liveness, and readiness probes; orphan-task recovery on cold start
+- **OpenAI-compatible endpoints** — bring your own LLM/embedding URLs; works with any `/v1`-compatible API (OpenAI, DashScope, vLLM, etc.)
+- **Kubernetes-native** — health, liveness, readiness probes; orphan-task recovery on cold start
 - **Deterministic test suite** — in-memory + Mem0-fake backends; integration + 5-round pressure scenarios
 
-**Applications**
+### 🎯 Use Cases
 
 - **Conversation assistants** — context-rich, stateful chat with session-spanning memory
 - **Customer support bots** — recall past tickets, user preferences, and historical context
@@ -54,49 +53,79 @@ Built for production: HTTP + gRPC dual protocol, OpenAI-compatible LLM/embedding
 - **Multi-session personalization** — user memory carries into newly created sessions
 - **Self-hosted AI infrastructure** — fully on-prem, no external LLM call required
 
-## 🚀 Quickstart Guide
-
-### Local Development
+## 📦 Installation
 
 ```bash
-# 1. Start local infra (PostgreSQL + Milvus)
+pip install thinkback
+```
+
+Or with [Poetry](https://python-poetry.org):
+
+```bash
+poetry add thinkback
+```
+
+Or built from source (Self-Hosted Service):
+
+```bash
+git clone https://github.com/your-org/thinkback.git
+cd thinkback
+poetry install
+```
+
+### Requirements
+
+- Python 3.12+
+- PostgreSQL 14+
+- Milvus 2.x
+- OpenAI-compatible LLM endpoint (OpenAI, DashScope, vLLM, etc.)
+- OpenAI-compatible embedding endpoint
+
+## 🚀 Quick Start
+
+Use the Python client SDK against an existing thinkback service:
+
+```python
+from thinkback import MemoryClient
+
+client = MemoryClient()  # reads THINKBACK_URL from env
+
+# Add a memory from a conversation
+client.add(
+    messages=[
+        {"role": "user", "content": "I prefer dark mode and vim keybindings."},
+        {"role": "assistant", "content": "Noted. I'll remember that."},
+    ],
+    user_id="alice",
+    session_id="support-001",
+)
+
+# Recall relevant memories
+memories = client.search(
+    query="What does Alice prefer?",
+    user_id="alice",
+    top_k=3,
+)
+for m in memories.results:
+    print(f"- {m['memory']}")
+```
+
+### Run the Service Yourself
+
+```bash
+# Start local dependencies (PostgreSQL + Milvus)
 make docker-up
 
-# 2. Install + configure
-poetry install
-cp .env.example .env  # fill OPENAI_API_KEY, MILVUS_URL, ...
+# Configure
+cp .env.example .env  # fill in OPENAI_API_KEY, MILVUS_URL, ...
 
-# 3. Run + test
+# Run + test
 make run        # http://localhost:8000
 make tests      # deterministic suite
+make real-tests # 5-round pressure against real Mem0 + Milvus + LLM
 ```
 
-### Docker Stack (everything in one command)
-
-```bash
-docker compose up   # PostgreSQL + Milvus + thinkback service
-```
-
-### Kubernetes Deployment
-
-```bash
-make k8s-apply      # apply manifests in k8s/
-```
-
-### Health Check
-
-```bash
-curl http://localhost:8000/health
-curl http://localhost:8000/health/live
-curl http://localhost:8000/health/ready
-```
-
-### Real LLM Pressure Test (optional)
-
-```bash
-make docker-up
-make real-tests     # 5-round pressure against real Mem0 + Milvus + LLM
-```
+Health check: `curl http://localhost:8000/health/ready`
 
 ## 🏗️ Architecture
 
@@ -110,23 +139,25 @@ flowchart LR
     L3 -.->|recall| L1
 ```
 
-Three layers, one-way flow; **Mem0 owns L3 storage entirely** — the service never bypasses Mem0 to write Milvus directly. See [Architecture report](docs/report/ARCHITECTURE.md) for layers, components, data flow, API design, and DB schema.
+Read the full [Architecture Report](docs/report/ARCHITECTURE.md) for layers, components, data flow, API design, and DB schema.
 
 ## ⚙️ Configuration
 
-Core variables — see [`.env.example`](.env.example) for the full list with notes.
+Configuration is via environment variables. See [`.env.example`](.env.example) for the full list with notes.
 
 | Variable | Purpose |
 | --- | --- |
 | `OPENAI_API_KEY` | LLM extraction key |
 | `MEMORY_LLM_BASE_URL` | OpenAI-compatible LLM endpoint |
+| `MEMORY_LLM_MODEL` | LLM model name |
 | `MEMORY_EMBEDDING_BASE_URL` | Embedding endpoint |
 | `MEMORY_EMBEDDING_API_KEY` | Embedding key (空 if no auth) |
+| `MEMORY_EMBEDDING_MODEL` | Embedding model name |
 | `MILVUS_URL` | Vector store URL |
 | `MILVUS_USER` / `MILVUS_PASSWORD` | Milvus credentials (空 if no auth) |
+| `POSTGRES_HOST` / `POSTGRES_PORT` | PostgreSQL host and port |
 | `MEMORY_MILVUS_COLLECTION` | Collection name (L3) |
 | `MEMORY_L3_WRITE_MODE` | `async` for background extraction |
-| `POSTGRES_*` | PostgreSQL host/port/user/password/database |
 
 ## 📁 Project Layout
 
@@ -145,14 +176,40 @@ src/thinkback
 
 Dependency direction: `api/rpc → memory → infra → domain`. Domain depends on nothing else.
 
-## 📚 Documentation & Support
+## 🧪 Development
 
-- [Architecture report](docs/report/ARCHITECTURE.md) — layers · components · data flow · API · schema
-- [Three-layer memory design](docs/memory/) — design rationale · boundary · scope
-- [Admin dashboard](docs/admin/) — ops UI · gRPC server · real-tests · eval scripts
-- [Debug report](docs/report/DEBUG_REPORT.md) — known edge cases and resolutions
+```bash
+make tests         # deterministic test suite
+make real-tests    # 5-round pressure (needs real Mem0 + Milvus + LLM)
+make lint          # ruff
+make typecheck     # mypy strict
+make fmt           # ruff format
+```
+
+## 🤝 Contributing
+
+We welcome issues and pull requests. See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+
+## 📚 Documentation
+
+- [Architecture Report](docs/report/ARCHITECTURE.md) — layers, components, data flow, API, schema
+- [Three-Layer Memory Design](docs/memory/) — design rationale and boundary
+- [Admin Dashboard](docs/admin/) — ops UI, gRPC server, real-tests, eval scripts
+- [Debug Report](docs/report/DEBUG_REPORT.md) — known edge cases and resolutions
 - [`.env.example`](.env.example) — full configuration reference
 
-## ⚖️ License
+## 📜 License
 
-Internal use — Thinkback VPC. Not for public distribution.
+Apache License 2.0 — see [LICENSE](LICENSE) for details.
+
+## 🙏 Acknowledgments
+
+- [Mem0](https://mem0.ai) — the memory layer underneath
+- [Milvus](https://milvus.io) — the vector database
+- [FastAPI](https://fastapi.tiangolo.com) — the HTTP framework
+- [Pydantic](https://docs.pydantic.dev) — the data validation backbone
+- [uv](https://github.com/astral-sh/uv) — the package manager
+
+---
+
+<sub>Built for AI infrastructure teams who need a self-hosted, observable, type-safe memory service.</sub>
