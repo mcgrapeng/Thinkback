@@ -2,8 +2,6 @@
 
 ![Thinkback banner](assets/banner.svg)
 
-# Thinkback
-
 **面向 AI 会话的自托管记忆服务 · Self-hosted memory service for AI conversations**
 
 Thinkback 让 AI 助手与智能体拥有跨会话的持久记忆。它把短期上下文、会话摘要与长期用户事实

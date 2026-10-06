@@ -2,8 +2,6 @@
 
 ![Thinkback banner](assets/banner.svg)
 
-# Thinkback
-
 **Self-hosted memory service for AI conversations**
 
 Thinkback gives AI assistants and agents persistent memory across conversations. It keeps
