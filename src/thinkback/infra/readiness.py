@@ -104,19 +104,19 @@ async def check_mem0_library() -> dict[str, str]:
     生产/预发环境必须配置，否则返回 not_ready 让 readiness 失败。
     """
 
-    if not settings.openai_api_key:
+    if not settings.llm_api_key:
         if settings.environment == "development":
-            logger.debug("mem0 library readiness check skipped: OPENAI_API_KEY not configured")
-            return {"status": "ready", "detail": "skipped: OPENAI_API_KEY not configured"}
-        logger.warning("mem0 library readiness check failed: OPENAI_API_KEY not configured")
-        return {"status": "not_ready", "detail": "OPENAI_API_KEY is required"}
+            logger.debug("mem0 library readiness check skipped: LLM key not configured")
+            return {"status": "ready", "detail": "skipped: LLM key not configured"}
+        logger.warning("mem0 library readiness check failed: LLM key not configured")
+        return {"status": "not_ready", "detail": "MEMORY_LLM_KEY is required"}
     logger.debug("mem0 library readiness check started")
     try:
         from openai import OpenAI
 
         def _probe_llm() -> None:
             client = OpenAI(
-                api_key=settings.openai_api_key,
+                api_key=settings.llm_api_key or "not-required",
                 base_url=settings.memory_llm_base_url or None,
             )
             try:
@@ -135,7 +135,7 @@ async def check_mem0_library() -> dict[str, str]:
 async def check_milvus() -> dict[str, str]:
     """检查 Milvus 向量库连接 + collection schema 与 BM25 兼容。
 
-    L3 在没 OPENAI_API_KEY 时直接 skip（开发环境）；
+    L3 在没 LLM key 时直接 skip（开发环境）；
     生产环境要求 LLM 凭据齐全，否则 not_ready。
 
     S8 (W-3 落地): mem0 v2 混合检索（BM25 + 向量）依赖 v3 schema（含 ``text``
@@ -146,12 +146,12 @@ async def check_milvus() -> dict[str, str]:
     名 + 迁移存量数据。
     """
 
-    if not settings.openai_api_key:
+    if not settings.llm_api_key:
         if settings.environment == "development":
-            logger.debug("milvus readiness check skipped: L3 disabled (no OPENAI_API_KEY)")
-            return {"status": "ready", "detail": "skipped: L3 disabled (no OPENAI_API_KEY)"}
-        logger.warning("milvus readiness check failed: OPENAI_API_KEY not configured")
-        return {"status": "not_ready", "detail": "OPENAI_API_KEY is required"}
+            logger.debug("milvus readiness check skipped: L3 disabled (no LLM key)")
+            return {"status": "ready", "detail": "skipped: L3 disabled (no LLM key)"}
+        logger.warning("milvus readiness check failed: LLM key not configured")
+        return {"status": "not_ready", "detail": "MEMORY_LLM_KEY is required"}
     if MilvusClient is None:
         logger.warning("milvus readiness check skipped")
         return {"status": "not_ready", "detail": "pymilvus is not installed"}

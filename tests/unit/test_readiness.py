@@ -39,7 +39,7 @@ async def test_collect_readiness_checks_mem0_library_and_milvus(monkeypatch) -> 
         readiness,
         "settings",
         Settings(
-            openai_api_key="openai-secret",
+            memory_llm_key="openai-secret",
             milvus_url="http://milvus.example.internal:19530",
         ),
     )
@@ -91,7 +91,7 @@ async def test_check_milvus_uses_configured_endpoint_for_diagnostics_only(monkey
         readiness,
         "settings",
         Settings(
-            openai_api_key="openai-secret",
+            memory_llm_key="openai-secret",
             milvus_url="http://milvus.example.internal:19530",
             milvus_user="milvus-user",
             milvus_password="milvus-secret",
@@ -131,7 +131,7 @@ async def test_check_mem0_library_does_not_write_probe_memory(monkeypatch) -> No
         def close(self) -> None:
             FakeOpenAIClient.closed = True
 
-    monkeypatch.setattr(readiness, "settings", Settings(openai_api_key="openai-secret"))
+    monkeypatch.setattr(readiness, "settings", Settings(memory_llm_key="openai-secret"))
 
     import openai as _openai_module
 
@@ -144,9 +144,9 @@ async def test_check_mem0_library_does_not_write_probe_memory(monkeypatch) -> No
 
 
 @pytest.mark.asyncio
-async def test_l3_dependencies_skipped_when_openai_api_key_missing(monkeypatch) -> None:
-    """本地最小依赖闭环：未配 OPENAI_API_KEY 时 mem0 / milvus 自动跳过，readiness 仍 ready。"""
-    monkeypatch.setattr(readiness, "settings", Settings(openai_api_key=""))
+async def test_l3_dependencies_skipped_when_memory_llm_key_missing(monkeypatch) -> None:
+    """本地最小依赖闭环：未配 MEMORY_LLM_KEY 时 mem0 / milvus 自动跳过，readiness 仍 ready。"""
+    monkeypatch.setattr(readiness, "settings", Settings(memory_llm_key=""))
 
     class FailMilvusClient:
         def __init__(self, *args, **kwargs) -> None:  # type: ignore[no-untyped-def]
@@ -164,10 +164,10 @@ async def test_l3_dependencies_skipped_when_openai_api_key_missing(monkeypatch) 
 
 
 @pytest.mark.asyncio
-async def test_production_readiness_fails_when_openai_api_key_missing(monkeypatch) -> None:
+async def test_production_readiness_fails_when_memory_llm_key_missing(monkeypatch) -> None:
     """生产环境缺 L3 LLM 凭据时不能把 Mem0/Milvus 依赖标成 ready。"""
     monkeypatch.setattr(
-        readiness, "settings", Settings(environment="production", openai_api_key="")
+        readiness, "settings", Settings(environment="production", memory_llm_key="")
     )
 
     class FailMilvusClient:
@@ -182,9 +182,9 @@ async def test_production_readiness_fails_when_openai_api_key_missing(monkeypatc
     milvus_payload = await readiness.check_milvus()
 
     assert mem0_payload["status"] == "not_ready"
-    assert "OPENAI_API_KEY" in mem0_payload["detail"]
+    assert "MEMORY_LLM_KEY" in mem0_payload["detail"]
     assert milvus_payload["status"] == "not_ready"
-    assert "OPENAI_API_KEY" in milvus_payload["detail"]
+    assert "MEMORY_LLM_KEY" in milvus_payload["detail"]
 
 
 def test_readiness_engine_is_isolated_from_business_pool() -> None:
@@ -230,7 +230,7 @@ async def test_check_milvus_fails_when_collection_missing_v3_bm25_fields(monkeyp
         readiness,
         "settings",
         Settings(
-            openai_api_key="openai-secret",
+            memory_llm_key="openai-secret",
             milvus_url="http://milvus.example.internal:19530",
             memory_milvus_collection="thinkback",
         ),
@@ -268,7 +268,7 @@ async def test_check_milvus_ready_when_collection_has_v3_fields(monkeypatch) -> 
         readiness,
         "settings",
         Settings(
-            openai_api_key="openai-secret",
+            memory_llm_key="openai-secret",
             milvus_url="http://milvus.example.internal:19530",
             memory_milvus_collection="thinkback",
         ),

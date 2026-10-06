@@ -417,7 +417,7 @@ def _render_open_item_rows(executed_phases: set[str], phase_results: dict[str, A
         )
     return [
         f"| 10-15 分钟 baseline | {baseline_status} | {baseline_detail} |",
-        f"| 10 分钟 P0 soak test | {soak_status} | {soak_detail} |",
+        f"| 10 分钟 P0 soak tests | {soak_status} | {soak_detail} |",
         f"| 15-30 分钟 50 并发 stress | {stress_status} | {stress_detail} |",
         f"| 100 并发 spike | {spike_status} | {spike_detail} |",
         f"| Mem0/Milvus/Postgres/Redis 故障注入 | {fault_status} | {fault_detail} |",

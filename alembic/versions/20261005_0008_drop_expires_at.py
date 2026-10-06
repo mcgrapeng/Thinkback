@@ -8,6 +8,7 @@ Create Date: 2026-10-05
 but the Celery-based sweeper was removed (no Redis/Celery in stack) and the
 column was never read or written. Schema name-space should be reclaimed.
 """
+
 from collections.abc import Sequence
 
 import sqlalchemy as sa

@@ -235,7 +235,7 @@ def test_memory_service_can_use_mem0_library_backend_from_settings(monkeypatch) 
         "settings",
         Settings(
             _env_file="/tmp/thinkback-missing-tests.env",
-            openai_api_key="openai-secret",
+            memory_llm_key="llm-secret",
             memory_llm_base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
             memory_embedding_base_url="http://embedding.example.internal:7345/v1",
             memory_embedding_api_key="",
@@ -252,7 +252,7 @@ def test_memory_service_can_use_mem0_library_backend_from_settings(monkeypatch) 
     service = dependencies.get_memory_service()
 
     assert isinstance(service.backend, Mem0LibraryMemoryBackend)
-    assert service.backend.config["llm"]["config"]["api_key"] == "openai-secret"
+    assert service.backend.config["llm"]["config"]["api_key"] == "llm-secret"
     assert (
         service.backend.config["llm"]["config"]["openai_base_url"]
         == "https://dashscope.aliyuncs.com/compatible-mode/v1"
@@ -300,14 +300,14 @@ def test_memory_routes_call_sync_service_in_threadpool() -> None:
 
 
 def test_real_validation_script_uses_sql_repository_not_in_memory() -> None:
-    source = Path("script/real_mem0_pressure.py").read_text(encoding="utf-8")
+    source = Path("tests/script/real_mem0_pressure.py").read_text(encoding="utf-8")
 
     assert "SqlAlchemyMemoryRepository" in source
     assert "InMemoryMemoryRepository" not in source
 
 
 def test_real_validation_script_reuses_configurable_mem0_backend() -> None:
-    source = Path("script/real_mem0_pressure.py").read_text(encoding="utf-8")
+    source = Path("tests/script/real_mem0_pressure.py").read_text(encoding="utf-8")
 
     assert "get_memory_backend(settings)" in source
     assert "Mem0HttpMemoryBackend" not in source
@@ -326,11 +326,11 @@ def test_real_validation_preflight_reports_missing_config_and_dependency_statuse
     real_mem0_pressure.check_milvus = ready
 
     report = real_mem0_pressure.build_preflight_report(
-        Settings(openai_api_key="", milvus_url="http://localhost:19530")
+        Settings(memory_llm_key="", milvus_url="http://localhost:19530")
     )
 
     assert report["ready"] is False
-    assert report["missing_config"] == ["OPENAI_API_KEY"]
+    assert report["missing_config"] == ["MEMORY_LLM_KEY"]
     assert report["dependencies"]["database"]["status"] == "ready"
     assert report["dependencies"]["milvus"]["status"] == "ready"
 
@@ -350,19 +350,19 @@ def test_real_validation_preflight_error_includes_actionable_statuses() -> None:
 
     try:
         real_mem0_pressure.assert_preflight_ready(
-            Settings(openai_api_key="", milvus_url="http://localhost:19530")
+            Settings(memory_llm_key="", milvus_url="http://localhost:19530")
         )
     except RuntimeError as exc:
         message = str(exc)
-        assert "missing_config=OPENAI_API_KEY" in message
+        assert "missing_config=MEMORY_LLM_KEY" in message
         assert "database=not_ready(authentication failed)" in message
         assert "milvus=ready" in message
     else:
-        raise AssertionError("expected missing OPENAI_API_KEY to fail preflight")
+        raise AssertionError("expected missing MEMORY_LLM_KEY to fail preflight")
 
 
 def test_real_validation_script_does_not_keep_legacy_preflight_error_text() -> None:
-    source = Path("script/real_mem0_pressure.py").read_text(encoding="utf-8")
+    source = Path("tests/script/real_mem0_pressure.py").read_text(encoding="utf-8")
 
     assert "real validation requires:" not in source
 
@@ -374,7 +374,7 @@ def test_real_validation_cli_reports_preflight_failure_without_traceback(
 
     def fail_preflight() -> None:
         raise real_mem0_pressure.PreflightError(
-            "real validation preflight failed: missing_config=OPENAI_API_KEY"
+            "real validation preflight failed: missing_config=MEMORY_LLM_KEY"
         )
 
     monkeypatch.setattr(real_mem0_pressure, "main", fail_preflight)
@@ -383,7 +383,7 @@ def test_real_validation_cli_reports_preflight_failure_without_traceback(
 
     captured = capsys.readouterr()
     assert exit_code == 2
-    assert "missing_config=OPENAI_API_KEY" in captured.err
+    assert "missing_config=MEMORY_LLM_KEY" in captured.err
     assert "Traceback" not in captured.err
 
 

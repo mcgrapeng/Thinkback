@@ -422,7 +422,9 @@ class SqlAlchemyMemoryRepository(L1CacheMixin):
         descending: bool = False,
     ) -> list[JournalEntry]:
         return self._run(
-            self._list_rounds(user_id, memory_scope_id, session_id, limit=limit, descending=descending)
+            self._list_rounds(
+                user_id, memory_scope_id, session_id, limit=limit, descending=descending
+            )
         )
 
     async def _list_rounds(
@@ -456,11 +458,7 @@ class SqlAlchemyMemoryRepository(L1CacheMixin):
                 index_col.nulls_first(),
                 round_id_col.asc(),
             )
-        stmt = (
-            select(SummaryRoundJournalRecord)
-            .where(and_(*filters))
-            .order_by(*order_by)
-        )
+        stmt = select(SummaryRoundJournalRecord).where(and_(*filters)).order_by(*order_by)
         if limit is not None:
             stmt = stmt.limit(limit)
         async with self.session_factory() as session:

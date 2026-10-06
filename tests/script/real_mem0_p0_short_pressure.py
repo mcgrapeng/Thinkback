@@ -219,8 +219,8 @@ def main() -> None:
     args = _parse_args()
     load_dotenv()
     settings = Settings()
-    if not settings.openai_api_key or not settings.milvus_url:
-        raise RuntimeError("OPENAI_API_KEY and MILVUS_URL are required")
+    if not settings.memory_llm_key or not settings.milvus_url:
+        raise RuntimeError("MEMORY_LLM_KEY and MILVUS_URL are required")
 
     started_at = datetime.now(UTC).isoformat()
     suite_id = f"p0-short-{datetime.now(UTC).strftime('%Y%m%dT%H%M%S')}-{uuid4().hex[:8]}"

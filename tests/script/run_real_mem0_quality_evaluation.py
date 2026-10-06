@@ -14,7 +14,7 @@ from typing import Any
 
 REPORT_PREFIX = "thinkback首版主链路质量评测报告"
 DEFAULT_DOCS_DIR = Path("docs/memory/report")
-QUALITY_SCRIPT = Path("script/real_mem0_quality_regression.py")
+QUALITY_SCRIPT = Path("tests/script/real_mem0_quality_regression.py")
 
 _METRIC_SPECS: tuple[tuple[str, str, bool], ...] = (
     ("case_pass_rate", "higher", True),

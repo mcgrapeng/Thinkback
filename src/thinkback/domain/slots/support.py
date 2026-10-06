@@ -163,9 +163,7 @@ def should_extract_to_l3(
     from thinkback.domain.slots.query_slots import query_conflict_slot
 
     source_text = " ".join(
-        str(message.get("content", ""))
-        for message in messages
-        if message.get("role") == "user"
+        str(message.get("content", "")) for message in messages if message.get("role") == "user"
     )
     if memory_conflict_slot(source_text) is not None:
         return True

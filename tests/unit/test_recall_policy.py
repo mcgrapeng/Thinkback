@@ -151,7 +151,6 @@ def test_strength_handles_naive_datetime_inputs() -> None:
     """S1-P2: asyncpg 默认可能返回 naive datetime；_strength 必须两侧归一化 UTC
     后再做时间差，否则 "can't subtract naive from aware" TypeError。
     """
-    from datetime import timezone as tz
 
     naive = _now().replace(tzinfo=None)
     item = MemoryItem(
@@ -203,9 +202,7 @@ def test_parse_summary_sections_falls_back_to_regex_when_json_only_has_unknown_k
     """S6-P2: JSON 成功但全是噪声字段时，回退到【】regex 而不是丢弃。"""
     from thinkback.memory.l2_refresh import parse_summary_sections
 
-    parsed = parse_summary_sections(
-        '{"unknown": "x"}\n【主题】hello\n【行为偏好】foo'
-    )
+    parsed = parse_summary_sections('{"unknown": "x"}\n【主题】hello\n【行为偏好】foo')
     assert parsed == {"主题": "hello", "行为偏好": "foo"}
 
 
@@ -213,8 +210,9 @@ def test_touch_recalled_entries_handles_naive_last_recalled_at() -> None:
     """S3-P3: _touch_recalled_entries 接受 naive datetime（asyncpg 默认行为），
     不应抛 can't compare naive/aware。
     """
-    from datetime import UTC, datetime, timedelta
     from dataclasses import dataclass
+    from datetime import UTC, datetime, timedelta
+
     from thinkback.memory.service import MemoryService
 
     @dataclass

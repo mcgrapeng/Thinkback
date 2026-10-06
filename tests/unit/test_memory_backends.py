@@ -135,7 +135,7 @@ def test_openai_compatible_embedding_omits_dimensions_and_uses_dummy_key(monkeyp
             observed["client_kwargs"] = kwargs
             self.embeddings = FakeEmbeddings()
 
-    monkeypatch.setenv("OPENAI_API_KEY", "llm-secret")
+    monkeypatch.setenv("MEMORY_LLM_KEY", "llm-secret")
     monkeypatch.setattr(embeddings, "OpenAI", FakeOpenAI)
 
     embedder = OpenAICompatibleEmbeddingNoDimensions(

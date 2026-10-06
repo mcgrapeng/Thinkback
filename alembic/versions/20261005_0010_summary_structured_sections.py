@@ -8,6 +8,7 @@ Create Date: 2026-10-05
 （主题/进行中事项/行为偏好/近期状态）。llm 综合版本填；concat 降级
 版本保持空 dict。下游可机器消费各段（"行为偏好高亮"等读路径零成本用例）。
 """
+
 from collections.abc import Sequence
 
 import sqlalchemy as sa
