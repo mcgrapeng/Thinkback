@@ -1,24 +1,33 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 160" role="img" aria-label="thinkback — Memory service for conversation assistants">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 880 220" role="img" aria-label="thinkback — Memory Layer for Conversation Assistants">
   <defs>
-    <linearGradient id="tb-bg" x1="20" y1="20" x2="100" y2="100" gradientUnits="userSpaceOnUse">
+    <linearGradient id="tb-bg" x1="0" y1="0" x2="120" y2="120" gradientUnits="userSpaceOnUse">
       <stop offset="0%" stop-color="#22d3ee"/>
       <stop offset="100%" stop-color="#6366f1"/>
     </linearGradient>
+    <linearGradient id="tb-bg-soft" x1="0" y1="0" x2="880" y2="220" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#22d3ee" stop-opacity="0.06"/>
+      <stop offset="100%" stop-color="#6366f1" stop-opacity="0.06"/>
+    </linearGradient>
   </defs>
 
-  <!-- logo: scaled copy of main logo, placed at (20, 20) -->
-  <g transform="translate(20,20) scale(1.0)">
-    <path d="M 28.4 28.4 A 44 44 0 1 1 91.6 28.4"
-          fill="none" stroke="url(#tb-bg)" stroke-width="10" stroke-linecap="round"/>
-    <path d="M 91.6 28.4 L 102.6 33.4 L 97.6 17.4 Z" fill="url(#tb-bg)"/>
-    <circle cx="60" cy="60" r="9" fill="url(#tb-bg)"/>
+  <!-- soft background wash -->
+  <rect width="880" height="220" fill="url(#tb-bg-soft)"/>
+
+  <!-- logo: 3 concentric circles, scaled to 160×160 -->
+  <g transform="translate(40,30)">
+    <circle cx="80" cy="80" r="64" fill="none" stroke="url(#tb-bg)" stroke-width="5" opacity="0.35"/>
+    <circle cx="80" cy="80" r="42" fill="none" stroke="url(#tb-bg)" stroke-width="8" opacity="0.7"/>
+    <circle cx="80" cy="80" r="18" fill="url(#tb-bg)"/>
   </g>
 
-  <!-- wordmark + tagline, right of logo -->
-  <text x="170" y="80"
+  <!-- wordmark + tagline -->
+  <text x="240" y="115"
         font-family="Inter, system-ui, -apple-system, 'Segoe UI', sans-serif"
-        font-size="48" font-weight="700" fill="#0a0a0a">thinkback</text>
-  <text x="170" y="115"
+        font-size="56" font-weight="800" fill="#0a0a0a" letter-spacing="-1.5">thinkback</text>
+  <text x="242" y="155"
         font-family="Inter, system-ui, -apple-system, 'Segoe UI', sans-serif"
-        font-size="18" font-weight="400" fill="#6b7280">Memory service for conversation assistants</text>
+        font-size="18" font-weight="500" fill="#6b7280">Memory Layer for Conversation Assistants</text>
+  <text x="242" y="180"
+        font-family="Inter, system-ui, -apple-system, 'Segoe UI', sans-serif"
+        font-size="13" font-weight="400" fill="#9ca3af">三层记忆 · PostgreSQL + Milvus + Mem0</text>
 </svg>
