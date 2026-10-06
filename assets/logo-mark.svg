@@ -1,11 +1,23 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" role="img" aria-label="thinkback">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-label="Thinkback">
+  <title>Thinkback</title>
   <defs>
-    <linearGradient id="tb-m" x1="0" y1="0" x2="16" y2="16" gradientUnits="userSpaceOnUse">
-      <stop offset="0%" stop-color="#22d3ee"/>
-      <stop offset="100%" stop-color="#6366f1"/>
+    <linearGradient id="tb-mark" x1="14" y1="22" x2="108" y2="110" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#22D3EE"/>
+      <stop offset="100%" stop-color="#4F46E5"/>
     </linearGradient>
   </defs>
-  <rect x="1.5" y="1.5" width="13" height="13" rx="2.5" ry="2.5" fill="none" stroke="url(#tb-m)" stroke-width="1.2" opacity="0.45"/>
-  <rect x="4" y="4" width="8" height="8" rx="1.5" ry="1.5" fill="none" stroke="url(#tb-m)" stroke-width="1.5" opacity="0.75"/>
-  <rect x="6.5" y="6.5" width="3" height="3" rx="0.8" ry="0.8" fill="url(#tb-m)"/>
+  <!--
+    Thinkback mark — "recall echo".
+    Three left-facing chevrons fading into the past: the present turn (solid)
+    and the echoes of memory behind it. Reads as "back" at a glance and as
+    layered depth up close.
+  -->
+  <g transform="translate(-5,0)">
+    <path d="M 97 30 L 59 64 L 97 98" fill="none" stroke="url(#tb-mark)" stroke-width="15"
+          stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M 71 40 L 43 64 L 71 88" fill="none" stroke="url(#tb-mark)" stroke-width="13"
+          stroke-linecap="round" stroke-linejoin="round" opacity="0.55"/>
+    <path d="M 48 50 L 28 64 L 48 78" fill="none" stroke="url(#tb-mark)" stroke-width="11"
+          stroke-linecap="round" stroke-linejoin="round" opacity="0.32"/>
+  </g>
 </svg>

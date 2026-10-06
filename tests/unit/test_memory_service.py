@@ -753,9 +753,7 @@ def test_active_memories_filters_by_memory_scope_id() -> None:
         )
     )
     l3_texts = [item.content for item in response.items if item.layer == "L3"]
-    assert not any("tenant data" in t for t in l3_texts), (
-        f"recall 跨 scope 泄漏: {l3_texts}"
-    )
+    assert not any("tenant data" in t for t in l3_texts), f"recall 跨 scope 泄漏: {l3_texts}"
 
 
 def test_l2_refresher_maybe_submit_invokes_composer_when_due() -> None:
@@ -790,17 +788,13 @@ def test_l2_refresher_maybe_submit_invokes_composer_when_due() -> None:
     )
 
     # 第一次 append → refresher 应立刻 due（首次作用域无 llm 摘要）
-    service.append(
-        make_append(round_id="r-l2-1", content="我养了一只猫，名字叫麻薯")
-    )
+    service.append(make_append(round_id="r-l2-1", content="我养了一只猫，名字叫麻薯"))
 
     # 等后台任务完成
     service._l2_refresher.drain(timeout=5)
 
     # composer 至少被调一次
-    assert len(composer_calls) >= 1, (
-        f"L2 composer 没被调度，composer_calls={composer_calls}"
-    )
+    assert len(composer_calls) >= 1, f"L2 composer 没被调度，composer_calls={composer_calls}"
 
     # summary 应被刷新为 llm 版
     summary = repo.get_summary("user-1", "session-1")
@@ -822,9 +816,7 @@ def test_update_memory_refreshes_valid_at_so_backfill_picks_user_edit() -> None:
     service = MemoryService(repository=repository, backend=backend)
 
     # 1) append 一条 P0 槽位事实（valid_at 为 append 时间）
-    service.append(
-        make_append(round_id="round-pet-old", content="我养了一只猫，名字叫麻薯。")
-    )
+    service.append(make_append(round_id="round-pet-old", content="我养了一只猫，名字叫麻薯。"))
     memory = next(
         memory
         for memory in repository.active_memories("user-1", "thinkback")
@@ -6774,9 +6766,6 @@ def test_concurrent_l3_cleanup_completions_do_not_lose_pending_count() -> None:
     assert task.status is TaskStatus.COMPLETED
 
 
-
-
-
 # ---------------------------------------------------------------------------
 # H-1 回归测试：P0 pet_name source_text 校验必须拒绝裸 substring 误命中
 # 防止 "cat" 匹配 "catastrophe"、"狗" 匹配 "招财猫" 等场景污染本地索引。
@@ -7021,9 +7010,7 @@ def test_context_terms_marker_set_dedup() -> None:
 
 def test_should_skip_backend_search_truth_table() -> None:
     """S4: 抽出的 _should_skip_backend_search 真值表完整覆盖（4 行）。"""
-    items_with_l3 = [
-        MemoryItem(layer="L3", content="x", source="mem0", memory_id="m1")
-    ]
+    items_with_l3 = [MemoryItem(layer="L3", content="x", source="mem0", memory_id="m1")]
     items_no_l3: list[Any] = []
     assert MemoryService._should_skip_backend_search("preferred_nickname", items_with_l3) is True
     assert MemoryService._should_skip_backend_search("preferred_nickname", items_no_l3) is True
@@ -7636,7 +7623,9 @@ def test_backend_update_failure_does_not_corrupt_index() -> None:
 
     # 本地索引反映新内容（已先于 backend 提交）
     current = next(
-        m for m in repository.active_memories("user-1", "thinkback") if m.memory_id == memory.memory_id
+        m
+        for m in repository.active_memories("user-1", "thinkback")
+        if m.memory_id == memory.memory_id
     )
     assert current.memory_text == "用户改名了"
     assert current.memory_text != original_text

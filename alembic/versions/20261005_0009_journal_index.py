@@ -8,6 +8,7 @@ Create Date: 2026-10-05
 读最近 L1_CACHE_LIMIT 行。原 schema 上只有 session_id 单列索引，长生命周期 session
 在缓存 miss 路径下做全量扫描后排序。补充复合索引让缓存回源失效路径退化为索引扫描。
 """
+
 from collections.abc import Sequence
 
 from alembic import op

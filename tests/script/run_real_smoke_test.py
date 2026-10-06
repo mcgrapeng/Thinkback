@@ -20,7 +20,6 @@
 from __future__ import annotations
 
 import json
-import os
 import sys
 import time
 from dataclasses import dataclass
@@ -34,21 +33,18 @@ from mem0 import Memory as Mem0Client
 
 from thinkback.memory.backends.mem0_library import (
     Mem0LibraryMemoryBackend,
-    register_mem0_embedder_provider,
     disable_mem0_telemetry,
+    register_mem0_embedder_provider,
 )
 from thinkback.memory.repositories import InMemoryMemoryRepository
 from thinkback.memory.schemas import (
     AppendMemoryRequest,
-    DeleteMemoryRequest,
-    DeleteScope,
     MemoryMessage,
     MessageRole,
     RecallIntent,
     RecallMemoryRequest,
 )
 from thinkback.memory.service import MemoryService
-
 
 REPORT_DIR = Path("docs/memory/report")
 
@@ -162,12 +158,16 @@ def check_mem0_embedder_round_trip() -> CheckResult:
 
     from thinkback.memory.embeddings import OpenAICompatibleEmbeddingNoDimensions
 
-    config = type("Cfg", (), {
-        "model": EMBEDDING_MODEL,
-        "embedding_dims": EMBEDDING_DIMS,
-        "api_key": "placeholder",
-        "openai_base_url": EMBEDDING_BASE_URL,
-    })()
+    config = type(
+        "Cfg",
+        (),
+        {
+            "model": EMBEDDING_MODEL,
+            "embedding_dims": EMBEDDING_DIMS,
+            "api_key": "placeholder",
+            "openai_base_url": EMBEDDING_BASE_URL,
+        },
+    )()
     embedder = OpenAICompatibleEmbeddingNoDimensions(config)
     vec = embedder.embed("测试中文 embedding 维度")
     elapsed_ms = (time.perf_counter() - start) * 1000
@@ -218,7 +218,10 @@ def check_real_mem0_add_search_delete_round_trip() -> CheckResult:
         # LLM 抽取路径：append 一句复杂陈述，让 zhiman38_27b 抽取事实
         backend.add(
             [
-                {"role": "user", "content": "我养了一只猫，名字叫麻薯。我现在住在上海徐汇区。我叫小鹏。"},
+                {
+                    "role": "user",
+                    "content": "我养了一只猫，名字叫麻薯。我现在住在上海徐汇区。我叫小鹏。",
+                },
                 {"role": "assistant", "content": "好的，记下了。"},
             ],
             user_id="user-real-llm",
@@ -266,7 +269,14 @@ def check_real_mem0_add_search_delete_round_trip() -> CheckResult:
         all_texts = pet_texts + loc_texts + nick_texts
         has_pet_fact = any(("猫" in t or "麻薯" in t or "Mashu" in t) for t in all_texts)
         has_loc_fact = any(
-            ("上海" in t or "徐汇" in t or "北京" in t or "Shanghai" in t or "Beijing" in t or "Xuhui" in t)
+            (
+                "上海" in t
+                or "徐汇" in t
+                or "北京" in t
+                or "Shanghai" in t
+                or "Beijing" in t
+                or "Xuhui" in t
+            )
             for t in all_texts
         )
         has_nick_fact = any(("小鹏" in t or "Xiaopeng" in t) for t in all_texts)
@@ -396,10 +406,7 @@ def check_real_thinkback_service_round_trip() -> CheckResult:
         return CheckResult(
             "check_real_thinkback_service_round_trip",
             passed,
-            (
-                f"nick={nick_texts} pet={pet_texts} loc={loc_texts} "
-                f"backend_pet={backend_pet_texts}"
-            ),
+            (f"nick={nick_texts} pet={pet_texts} loc={loc_texts} backend_pet={backend_pet_texts}"),
             elapsed_ms,
         )
     except Exception as exc:
@@ -451,7 +458,10 @@ def main(argv: list[str]) -> int:
     checks: list[tuple[str, Any]] = [
         ("check_mem0_embedder_round_trip", check_mem0_embedder_round_trip),
         ("check_milvus_collection_can_be_built", check_milvus_collection_can_be_built),
-        ("check_real_mem0_add_search_delete_round_trip", check_real_mem0_add_search_delete_round_trip),
+        (
+            "check_real_mem0_add_search_delete_round_trip",
+            check_real_mem0_add_search_delete_round_trip,
+        ),
         ("check_real_thinkback_service_round_trip", check_real_thinkback_service_round_trip),
     ]
     results: list[CheckResult] = []
@@ -460,7 +470,12 @@ def main(argv: list[str]) -> int:
         try:
             r = fn()
         except Exception as exc:
-            r = CheckResult(name=name, passed=False, detail=f"raised: {type(exc).__name__}: {exc}", elapsed_ms=0.0)
+            r = CheckResult(
+                name=name,
+                passed=False,
+                detail=f"raised: {type(exc).__name__}: {exc}",
+                elapsed_ms=0.0,
+            )
         results.append(r)
         marker = "✅" if r.passed else "❌"
         print(f"  {marker} {r.elapsed_ms:.1f}ms — {r.detail[:150]}")

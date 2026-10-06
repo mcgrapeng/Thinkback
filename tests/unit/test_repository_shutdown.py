@@ -28,9 +28,10 @@ def test_run_rejects_closed_repository_without_leaking_coroutine() -> None:
 
     repository = SqlAlchemyMemoryRepository()
     repository.close()
-    with pytest.raises(RuntimeError, match="closed"), warnings.catch_warnings(
-        record=True
-    ) as record:
+    with (
+        pytest.raises(RuntimeError, match="closed"),
+        warnings.catch_warnings(record=True) as record,
+    ):
         warnings.simplefilter("always")
         repository.reclaim_stale_running_tasks(max_age_seconds=60.0)
     gc.collect()

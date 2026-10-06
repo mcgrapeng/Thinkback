@@ -70,7 +70,7 @@ def build_structured_summary_user_prompt(
         for message in entry.messages:
             if message.get("role") == "user" and str(message.get("content", "")).strip():
                 lines.append(f"user: {str(message['content']).strip()}")
-    lines.append('\n请输出更新后的 JSON 画像。')
+    lines.append("\n请输出更新后的 JSON 画像。")
     return "\n".join(lines)
 
 

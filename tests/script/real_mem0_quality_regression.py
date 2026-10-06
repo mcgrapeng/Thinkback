@@ -772,8 +772,8 @@ def _assert_deleted_rebuild_does_not_inflate(
 def main() -> None:
     load_dotenv()
     settings = Settings()
-    if not settings.openai_api_key or not settings.milvus_url:
-        raise RuntimeError("OPENAI_API_KEY and MILVUS_URL are required")
+    if not settings.memory_llm_key or not settings.milvus_url:
+        raise RuntimeError("MEMORY_LLM_KEY and MILVUS_URL are required")
     base_url = os.environ.get("THINKBACK_MEMORY_API_URL", "http://127.0.0.1:8000")
     repository = SqlAlchemyMemoryRepository()
     scope = _new_scope()
@@ -908,7 +908,7 @@ def main() -> None:
 
     active_after_append = _active_memories(repository, scope)
     # 等 L3 后台写入完成（async 模式下避免 recall 跑赢 append）
-    drained_status = _wait_for_l3_drain(base_url, scope)
+    _wait_for_l3_drain(base_url, scope)
     _assert_no_duplicate_backend_ids(active_after_append)
     _assert_nickname_converged(repository, scope)
     _assert_active_memories_do_not_contain_forbidden(

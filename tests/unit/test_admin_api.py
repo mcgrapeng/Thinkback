@@ -124,6 +124,7 @@ def test_admin_overview_includes_by_classification_source_type_and_throughput() 
 
     # 在仓储里塞不同 classification / source_type 的记录
     from thinkback.domain.enums import DataClassification, SourceType
+
     repo = service.repository
     repo.add_memory_index(
         backend_memory_id="b-class-1",
@@ -353,9 +354,9 @@ def test_admin_memory_source_backlinks_journal_round() -> None:
     assert body["rounds"][0]["round_id"] == "r1"
     assert body["rounds"][0]["messages"][0]["content"] == "我平时最喜欢喝拿铁咖啡"
 
-    other_id = client.get("/admin/api/memories", params={"user_id": "user-2"}).json()[
-        "items"
-    ][0]["memory_id"]
+    other_id = client.get("/admin/api/memories", params={"user_id": "user-2"}).json()["items"][0][
+        "memory_id"
+    ]
     assert client.get(f"/admin/api/memories/{other_id}/source").json()["rounds"] == []
 
     assert client.get("/admin/api/memories/missing/source").status_code == 404
@@ -428,7 +429,10 @@ def test_admin_update_audit_does_not_leak_content() -> None:
     assert secret_content not in str(audit_detail)
     # 必须留可审计的指纹与长度
     assert audit_detail["content_length"] == len(secret_content)
-    assert isinstance(audit_detail["content_sha256"], str) and len(audit_detail["content_sha256"]) == 64
+    assert (
+        isinstance(audit_detail["content_sha256"], str)
+        and len(audit_detail["content_sha256"]) == 64
+    )
     assert audit_detail["operation_id"] == "op-admin-upd-1"
 
 

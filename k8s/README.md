@@ -46,7 +46,7 @@ kubectl apply -f k8s/secret.example.yaml
 | `MILVUS_DATABASE` | Milvus database 名称。 |
 | `MILVUS_USER` | Milvus 用户名；无鉴权时可为空。 |
 | `MILVUS_PASSWORD` | Milvus 密码；无鉴权时可为空。 |
-| `OPENAI_API_KEY` | LLM API key；生产必须通过 Secret 注入。 |
+| `MEMORY_LLM_KEY` | LLM API key；生产必须通过 Secret 注入。 |
 | `MEMORY_LLM_BASE_URL` | OpenAI-compatible LLM endpoint 地址。 |
 | `MEMORY_EMBEDDING_BASE_URL` | OpenAI-compatible Embedding endpoint 地址。 |
 | `MEMORY_EMBEDDING_API_KEY` | Embedding API key；当前 endpoint 不需要鉴权时留空。 |

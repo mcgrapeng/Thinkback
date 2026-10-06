@@ -48,8 +48,8 @@ def _run_check(check: object) -> dict[str, str]:
 
 def build_preflight_report(settings: Settings) -> dict[str, object]:
     missing_config = []
-    if not settings.openai_api_key:
-        missing_config.append("OPENAI_API_KEY")
+    if not settings.memory_llm_key:
+        missing_config.append("MEMORY_LLM_KEY")
     if not settings.milvus_url:
         missing_config.append("MILVUS_URL")
 

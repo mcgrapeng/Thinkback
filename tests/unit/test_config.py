@@ -5,7 +5,7 @@ EMPTY_ENV_FILE = "/tmp/thinkback-missing-tests.env"
 
 def test_settings_defaults_are_thinkback_baseline(monkeypatch) -> None:
     for variable in [
-        "OPENAI_API_KEY",
+        "MEMORY_LLM_KEY",
         "POSTGRES_DATABASE",
         "POSTGRES_HOST",
         "POSTGRES_PORT",
@@ -49,7 +49,8 @@ def test_settings_defaults_are_thinkback_baseline(monkeypatch) -> None:
     assert settings.milvus_database == "default"
     assert settings.milvus_user == ""
     assert settings.milvus_password == ""
-    assert settings.openai_api_key == ""
+    assert settings.memory_llm_key == ""
+    assert settings.llm_api_key == ""
     assert settings.memory_llm_base_url == "https://dashscope.aliyuncs.com/compatible-mode/v1"
     assert settings.memory_embedding_base_url == "http://embedding.example.internal:7345/v1"
     assert settings.memory_embedding_api_key == ""
@@ -109,30 +110,41 @@ def test_settings_derived_urls(monkeypatch) -> None:
     settings = Settings(_env_file=EMPTY_ENV_FILE, postgres_password="postgres")
 
     assert (
-        settings.database_url
-        == "postgresql+asyncpg://postgres:postgres@localhost:5432/thinkback"
+        settings.database_url == "postgresql+asyncpg://postgres:postgres@localhost:5432/thinkback"
     )
+
+
+def test_llm_api_key_returns_memory_llm_key(
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("MEMORY_LLM_KEY", raising=False)
+
+    settings = Settings(_env_file=EMPTY_ENV_FILE)
+    assert settings.llm_api_key == ""
+
+    settings = Settings(_env_file=EMPTY_ENV_FILE, memory_llm_key="dedicated-key")
+    assert settings.llm_api_key == "dedicated-key"
 
 
 def test_production_environment_does_not_read_local_dotenv(tmp_path, monkeypatch) -> None:
     (tmp_path / ".env").write_text(
         "APP_NAME=leaked-local-name\n"
         "POSTGRES_DATABASE=leaked-local-db\n"
-        "OPENAI_API_KEY=leaked-local-key\n",
+        "MEMORY_LLM_KEY=leaked-local-key\n",
         encoding="utf-8",
     )
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("ENVIRONMENT", "production")
     monkeypatch.delenv("APP_NAME", raising=False)
     monkeypatch.delenv("POSTGRES_DATABASE", raising=False)
-    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("MEMORY_LLM_KEY", raising=False)
 
     settings = Settings()
 
     assert settings.environment == "production"
     assert settings.app_name == "thinkback"
     assert settings.postgres_database == "thinkback"
-    assert settings.openai_api_key == ""
+    assert settings.memory_llm_key == ""
 
 
 def test_settings_does_not_expose_legacy_memory_api_keys_field() -> None:

@@ -1551,11 +1551,14 @@ L2 更新 (缓存失效)
                     "pending_cleanup_tasks": pending_cleanup_tasks,
                 }
 
-            task = self._mutate_task_with_retry(
-                task.task_id,
-                finalize_delete,
-                log_context={"stage": "delete_final"},
-            ) or task
+            task = (
+                self._mutate_task_with_retry(
+                    task.task_id,
+                    finalize_delete,
+                    log_context={"stage": "delete_final"},
+                )
+                or task
+            )
         delete_log.bind(
             status=task.status.value,
             task_id=task.task_id,
@@ -2072,10 +2075,7 @@ L2 更新 (缓存失效)
         # 保留另一副本已 FAILED 的终态；按 pending_cleanup_tasks 决定
         # RUNNING vs COMPLETED。
         def finalize_rebuild(t: TaskEntry) -> None:
-            if (
-                t.status is TaskStatus.FAILED
-                or t.status is TaskStatus.COMPLETED
-            ):
+            if t.status is TaskStatus.FAILED or t.status is TaskStatus.COMPLETED:
                 pending_cleanup_local = 0
             else:
                 registered_local = int(t.result.get("pending_cleanup_tasks", 0))
@@ -2096,11 +2096,14 @@ L2 更新 (缓存失效)
                 "pending_cleanup_tasks": pending_cleanup_local,
             }
 
-        task = self._mutate_task_with_retry(
-            task.task_id,
-            finalize_rebuild,
-            log_context={"stage": "rebuild_final"},
-        ) or task
+        task = (
+            self._mutate_task_with_retry(
+                task.task_id,
+                finalize_rebuild,
+                log_context={"stage": "rebuild_final"},
+            )
+            or task
+        )
         rebuild_log.bind(
             status=task.status.value,
             task_id=task.task_id,
@@ -3144,9 +3147,7 @@ L2 更新 (缓存失效)
         return [newest]
 
     @staticmethod
-    def _should_skip_backend_search(
-        query_slot: str | None, items: list[MemoryItem]
-    ) -> bool:
+    def _should_skip_backend_search(query_slot: str | None, items: list[MemoryItem]) -> bool:
         """是否跳过 mem0 backend.search？
 
         真值表（query_slot 是否命中 P0 槽位，items 中是否已含 L3 命中）：

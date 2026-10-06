@@ -40,9 +40,7 @@ def test_openapi_schema_does_not_expose_internal_scope_fields(client) -> None:
     # 从路径与组件两个维度排除后再断言。
     document = response.json()
     business_paths = {
-        path: value
-        for path, value in document["paths"].items()
-        if not path.startswith("/admin")
+        path: value for path, value in document["paths"].items() if not path.startswith("/admin")
     }
     business_schemas = {
         name: component

@@ -73,10 +73,16 @@ class Settings(BaseSettings):
     milvus_password: str = ""
 
     # ── 记忆后端 ──────────────────────────────────────────────────────
-    openai_api_key: str = Field(default="", description="OpenAI API key for Mem0 Library")
+    memory_llm_key: str = Field(
+        default="",
+        description="LLM API key; optional — leave empty when the endpoint needs no auth",
+    )
     memory_llm_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
     memory_embedding_base_url: str = "http://embedding.example.internal:7345/v1"
-    memory_embedding_api_key: str = ""
+    memory_embedding_api_key: str = Field(
+        default="",
+        description="Embedding API key; optional — leave empty when the endpoint needs no auth",
+    )
     memory_milvus_collection: str = "thinkback"
     memory_embedding_dims: int = 1024
     memory_llm_model: str = "qwen-plus-latest"
@@ -225,6 +231,15 @@ class Settings(BaseSettings):
         if self.milvus_user and self.milvus_password:
             return f"{self.milvus_user}:{self.milvus_password}"
         return ""
+
+    @property
+    def llm_api_key(self) -> str:
+        """LLM 调用使用的 API key。
+
+        来自 ``MEMORY_LLM_KEY``；为空表示端点无需鉴权，调用方按 ``or "not-required"`` 兜底。
+        """
+
+        return self.memory_llm_key
 
     @field_validator("log_level")
     @classmethod

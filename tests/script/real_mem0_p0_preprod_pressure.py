@@ -621,7 +621,9 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--report-dir", default="docs/memory/report")
     parser.add_argument("--output-dir", default="docs/memory/report")
     parser.add_argument("--python-executable", default=sys.executable)
-    parser.add_argument("--short-pressure-script", default="script/real_mem0_p0_short_pressure.py")
+    parser.add_argument(
+        "--short-pressure-script", default="tests/script/real_mem0_p0_short_pressure.py"
+    )
     parser.add_argument("--duration-phase", choices=["baseline", "stress", "soak"])
     parser.add_argument("--target-duration-seconds", type=int)
     parser.add_argument("--max-iterations", type=int, default=0)

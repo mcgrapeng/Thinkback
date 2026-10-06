@@ -1,11 +1,24 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" role="img" aria-label="thinkback">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 470 128" role="img" aria-label="Thinkback">
+  <title>Thinkback</title>
   <defs>
-    <linearGradient id="tb-g" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#22d3ee"/>
-      <stop offset="100%" stop-color="#6366f1"/>
+    <linearGradient id="tb-lockup" x1="14" y1="22" x2="108" y2="110" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#22D3EE"/>
+      <stop offset="100%" stop-color="#4F46E5"/>
     </linearGradient>
   </defs>
-  <rect x="10" y="10" width="100" height="100" rx="20" ry="20" fill="none" stroke="url(#tb-g)" stroke-width="5" opacity="0.35"/>
-  <rect x="28" y="28" width="64" height="64" rx="14" ry="14" fill="none" stroke="url(#tb-g)" stroke-width="7" opacity="0.7"/>
-  <rect x="48" y="48" width="24" height="24" rx="6" ry="6" fill="url(#tb-g)"/>
+
+  <!-- mark: recall echo -->
+  <g transform="translate(-5,0)">
+    <path d="M 97 30 L 59 64 L 97 98" fill="none" stroke="url(#tb-lockup)" stroke-width="15"
+          stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M 71 40 L 43 64 L 71 88" fill="none" stroke="url(#tb-lockup)" stroke-width="13"
+          stroke-linecap="round" stroke-linejoin="round" opacity="0.55"/>
+    <path d="M 48 50 L 28 64 L 48 78" fill="none" stroke="url(#tb-lockup)" stroke-width="11"
+          stroke-linecap="round" stroke-linejoin="round" opacity="0.32"/>
+  </g>
+
+  <!-- wordmark -->
+  <text x="132" y="82"
+        font-family="Inter, ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif"
+        font-size="62" font-weight="800" letter-spacing="-2.2" fill="#0B1220">Thinkback</text>
 </svg>

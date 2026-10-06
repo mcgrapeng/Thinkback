@@ -281,8 +281,8 @@ password authentication failed for user "postgres"
 `make real-test` 面向本地或受控验证环境，直接构造真实 `SqlAlchemyMemoryRepository`
 和真实 Mem0 Library 后端运行 5 轮主链路，不经过 HTTP API。
 HTTP 部署后的 smoke test 应另行通过 `/memory/*` 接口执行。
-质量回归使用 `script/real_mem0_quality_regression.py` / `script/run_real_mem0_quality_evaluation.py`；
-性能稳定性使用 `script/real_mem0_stability_preprod.py` 和 P0 压测脚本；
+质量回归使用 `tests/script/real_mem0_quality_regression.py` / `tests/script/run_real_mem0_quality_evaluation.py`；
+性能稳定性使用 `tests/script/real_mem0_stability_preprod.py` 和 P0 压测脚本；
 当前仓库不再维护独立质量评测方案、报告字段、报告模板或性能稳定性方案文档。
 质量、性能与稳定性口径应以脚本输出、脚本内报告字段和发布归档为准。
 具体评测报告如果由 CI、发布流程或人工归档生成，应随发布记录保存。
@@ -387,7 +387,7 @@ thinkback 当前主链路采用 `MEMORY_L3_WRITE_MODE=async`，业务可见性�
 | 调用方需要确认 L3 已沉淀 | 通过任务态查询 | 轮询 `GET /memory/tasks/{task_id}` 或 `GET /memory/l3/background-status`；`l3_replay_status=completed` 才代表 L3 沉淀完成 |
 
 这条边界是当前首版的明确取舍：append 接口的延迟优先保证对话流不被外部 LLM/Embedding 抖动拖死，代价是 L3 跨会话可见性不是同步契约。
-真实压测样本和 SLO 基线由 `script/real_mem0_p0_*` 脚本采集，调用方按这条 SLO 设计上游对话编排逻辑，不要假设记忆服务做了同步等待。
+真实压测样本和 SLO 基线由 `tests/script/real_mem0_p0_*` 脚本采集，调用方按这条 SLO 设计上游对话编排逻辑，不要假设记忆服务做了同步等待。
 
 ### 2.3 开发侧交付物
 
@@ -413,8 +413,8 @@ thinkback 当前主链路采用 `MEMORY_L3_WRITE_MODE=async`，业务可见性�
 | 单元和静态检查 | `poetry run pytest -q`、`poetry run ruff check src test script alembic`、`poetry run mypy src` |
 | 部署参考 | `docs/memory/Thinkback记忆服务部署与运维交付文档.md` |
 | 架构参考 | `docs/memory/Thinkback记忆三层架构.md`、`docs/memory/Thinkback记忆三层工程实现与运行边界.md` |
-| 性能稳定性验证入口 | `script/real_mem0_stability_preprod.py`、`script/real_mem0_p0_*` |
-| 质量回归验证入口 | `script/real_mem0_quality_regression.py`、`script/run_real_mem0_quality_evaluation.py` |
+| 性能稳定性验证入口 | `tests/script/real_mem0_stability_preprod.py`、`tests/script/real_mem0_p0_*` |
+| 质量回归验证入口 | `tests/script/real_mem0_quality_regression.py`、`tests/script/run_real_mem0_quality_evaluation.py` |
 | 评测报告归档 | 由 CI、发布流程或人工归档提供，路径写入发布准入记录 |
 
 已退役的评测和压测方案文档不再作为交付物。

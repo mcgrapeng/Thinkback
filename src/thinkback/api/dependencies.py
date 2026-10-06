@@ -84,7 +84,7 @@ def get_l2_summary_composer(config: Settings | None = None) -> SummaryComposer |
         return None
     client = OpenAICompatibleLLMClient(
         base_url=current_settings.memory_llm_base_url,
-        api_key=current_settings.openai_api_key or "not-required",
+        api_key=current_settings.llm_api_key or "not-required",
         model=current_settings.memory_llm_model,
         timeout_seconds=current_settings.memory_l2_llm_timeout_seconds,
         max_tokens=current_settings.memory_l2_llm_max_tokens,
@@ -111,7 +111,7 @@ def get_memory_backend(config: Settings | None = None) -> MemoryBackend:
     )
     backend_log.debug("memory backend initialization started")
     mem0_config = build_mem0_library_config(
-        llm_api_key=current_settings.openai_api_key,
+        llm_api_key=current_settings.llm_api_key or "not-required",
         llm_base_url=current_settings.memory_llm_base_url,
         embedding_api_key=current_settings.memory_embedding_api_key,
         embedding_base_url=current_settings.memory_embedding_base_url,

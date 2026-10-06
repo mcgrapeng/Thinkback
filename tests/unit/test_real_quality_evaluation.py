@@ -542,12 +542,14 @@ def test_real_quality_runner_default_report_dir_is_memory_report() -> None:
 
 
 def test_quality_report_entrypoints_use_memory_report_directory_and_current_docs() -> None:
-    runner = Path("script/run_real_mem0_quality_evaluation.py").read_text(encoding="utf-8")
-    operations = Path("docs/memory/Thinkback记忆服务部署与运维交付文档.md").read_text(encoding="utf-8")
+    runner = Path("tests/script/run_real_mem0_quality_evaluation.py").read_text(encoding="utf-8")
+    operations = Path("docs/memory/Thinkback记忆服务部署与运维交付文档.md").read_text(
+        encoding="utf-8"
+    )
 
     assert 'DEFAULT_DOCS_DIR = Path("docs/memory/report")' in runner
-    assert "script/run_real_mem0_quality_evaluation.py" in operations
-    assert "script/real_mem0_quality_regression.py" in operations
+    assert "tests/script/run_real_mem0_quality_evaluation.py" in operations
+    assert "tests/script/real_mem0_quality_regression.py" in operations
     assert "由 CI、发布流程或人工归档提供，路径写入发布准入记录" in operations
     assert "默认写入 `docs/`" not in operations
     assert "默认目录是 `docs/`" not in operations
@@ -560,22 +562,24 @@ def test_p0_pressure_defaults_and_docs_use_memory_report_directory() -> None:
     scripts = "\n".join(
         Path(path).read_text(encoding="utf-8")
         for path in [
-            "script/real_mem0_p0_short_pressure.py",
-            "script/real_mem0_p0_preprod_pressure.py",
-            "script/real_mem0_p0_fault_injection.py",
-            "script/real_mem0_p0_representative_replay.py",
+            "tests/script/real_mem0_p0_short_pressure.py",
+            "tests/script/real_mem0_p0_preprod_pressure.py",
+            "tests/script/real_mem0_p0_fault_injection.py",
+            "tests/script/real_mem0_p0_representative_replay.py",
         ]
     )
-    operations = Path("docs/memory/Thinkback记忆服务部署与运维交付文档.md").read_text(encoding="utf-8")
+    operations = Path("docs/memory/Thinkback记忆服务部署与运维交付文档.md").read_text(
+        encoding="utf-8"
+    )
 
     assert 'default="docs/memory/report"' in scripts
     assert 'default="docs/reports"' not in scripts
-    assert "script/real_mem0_stability_preprod.py" in operations
+    assert "tests/script/real_mem0_stability_preprod.py" in operations
 
 
 def test_stability_preprod_compat_entrypoint_runs_as_script_help() -> None:
     completed = subprocess.run(
-        [sys.executable, "script/real_mem0_stability_preprod.py", "--help"],
+        [sys.executable, "tests/script/real_mem0_stability_preprod.py", "--help"],
         check=False,
         capture_output=True,
         text=True,
@@ -638,7 +642,7 @@ def test_real_quality_runner_writes_failure_report_without_child_json(tmp_path) 
         quality_report=None,
         post_delete_report=None,
         stdout="",
-        stderr="RuntimeError: OPENAI_API_KEY and MILVUS_URL are required",
+        stderr="RuntimeError: MEMORY_LLM_KEY and MILVUS_URL are required",
     )
 
     artifacts = write_quality_evaluation_report_artifacts(tmp_path, current)
@@ -647,7 +651,7 @@ def test_real_quality_runner_writes_failure_report_without_child_json(tmp_path) 
     assert current["passed"] is False
     assert current["failure_phase"] == "environment_or_execution"
     assert "| 最终结论 | 未通过 |" in markdown
-    assert "OPENAI_API_KEY and MILVUS_URL are required" in markdown
+    assert "MEMORY_LLM_KEY and MILVUS_URL are required" in markdown
 
 
 def test_real_quality_runner_cli_exits_nonzero_when_report_fails(monkeypatch, tmp_path) -> None:
@@ -660,7 +664,7 @@ def test_real_quality_runner_cli_exits_nonzero_when_report_fails(monkeypatch, tm
         quality_report=None,
         post_delete_report=None,
         stdout="",
-        stderr="RuntimeError: OPENAI_API_KEY and MILVUS_URL are required",
+        stderr="RuntimeError: MEMORY_LLM_KEY and MILVUS_URL are required",
     )
     artifacts = run_real_mem0_quality_evaluation.write_quality_evaluation_report_artifacts(
         tmp_path, failing_report
@@ -1671,36 +1675,36 @@ def test_preprod_phase_command_maps_p0_metric_document_scenarios() -> None:
         "baseline",
         report_dir="docs/reports",
         python_executable=".venv/bin/python",
-        script_path="script/real_mem0_p0_short_pressure.py",
+        script_path="tests/script/real_mem0_p0_short_pressure.py",
     )
     stress = _phase_command(
         "stress",
         report_dir="docs/reports",
         python_executable=".venv/bin/python",
-        script_path="script/real_mem0_p0_short_pressure.py",
+        script_path="tests/script/real_mem0_p0_short_pressure.py",
     )
     spike = _phase_command(
         "spike",
         report_dir="docs/reports",
         python_executable=".venv/bin/python",
-        script_path="script/real_mem0_p0_short_pressure.py",
+        script_path="tests/script/real_mem0_p0_short_pressure.py",
     )
     soak_probe = _phase_command(
         "soak_probe",
         report_dir="docs/reports",
         python_executable=".venv/bin/python",
-        script_path="script/real_mem0_p0_short_pressure.py",
+        script_path="tests/script/real_mem0_p0_short_pressure.py",
     )
     soak = _phase_command(
         "soak",
         report_dir="docs/reports",
         python_executable=".venv/bin/python",
-        script_path="script/real_mem0_p0_short_pressure.py",
+        script_path="tests/script/real_mem0_p0_short_pressure.py",
     )
 
     assert baseline == [
         ".venv/bin/python",
-        "script/real_mem0_p0_short_pressure.py",
+        "tests/script/real_mem0_p0_short_pressure.py",
         "--recall-concurrency",
         "10",
         "--recall-requests",
@@ -1803,7 +1807,7 @@ def test_failed_duration_child_report_is_auditable() -> None:
     report = _failed_duration_child_report(
         phase="soak",
         iteration=191,
-        command=["python", "script/real_mem0_p0_short_pressure.py"],
+        command=["python", "tests/script/real_mem0_p0_short_pressure.py"],
         error="returned non-zero exit status 1",
     )
 
@@ -1822,7 +1826,7 @@ def test_duration_child_command_captures_output_to_log_file(tmp_path) -> None:
     (report_dir / "p0-short-child.json").write_text(json.dumps(child_report), encoding="utf-8")
     command = [
         ".venv/bin/python",
-        "script/real_mem0_p0_short_pressure.py",
+        "tests/script/real_mem0_p0_short_pressure.py",
         "--report-dir",
         str(report_dir),
     ]
@@ -1873,7 +1877,7 @@ def test_spike_phase_commands_model_recovery_curve() -> None:
     commands = _spike_phase_commands(
         report_dir="docs/reports",
         python_executable=".venv/bin/python",
-        script_path="script/real_mem0_p0_short_pressure.py",
+        script_path="tests/script/real_mem0_p0_short_pressure.py",
     )
 
     assert [command[command.index("--recall-concurrency") + 1] for command in commands] == [
@@ -2182,7 +2186,7 @@ def test_fault_injection_wait_for_readiness_uses_probe_timeout(monkeypatch) -> N
         observed_probe_timeouts.append(timeout_seconds)
         return 200, {"status": "ready", "dependencies": {}}
 
-    monkeypatch.setattr("script.real_mem0_p0_fault_injection._readiness", fake_readiness)
+    monkeypatch.setattr("tests.script.real_mem0_p0_fault_injection._readiness", fake_readiness)
 
     status_code, payload = _wait_for_readiness(
         "http://127.0.0.1:9999",
