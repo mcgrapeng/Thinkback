@@ -249,7 +249,7 @@ export function OverviewPage() {
       value: String(failed),
       tone: failed > 0 ? ("warning" as const) : ("neutral" as const),
       suffix: failed > 0 ? "needs attention" : "all clear",
-      delta: prevValues?.failed,
+      delta: prevValues ? failed - prevValues.failed : undefined,
     },
     {
       label: "L3 QUEUE",
@@ -349,7 +349,7 @@ export function OverviewPage() {
               <span className="text-base text-foreground-muted">stable</span>
             )}
             <span className="text-sm text-foreground-muted">
-              since last sync · {secondsToNext}s 前
+              next refresh · {secondsToNext}s
             </span>
           </div>
         </div>
@@ -629,7 +629,7 @@ export function OverviewPage() {
           </CardHeader>
           <CardContent className="p-0">
             <table className="w-full text-sm">
-              <tbody>
+              <tbody className="divide-y divide-[#f5f2ec]">
                 {data.recent_audit_actions.map((action) => (
                   <tr
                     key={action.audit_id}
