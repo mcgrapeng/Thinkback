@@ -1,7 +1,7 @@
 /** 总览页：KPI → 需关注 → 服务身份 → 4 张分布图 → L3 + 5min 吞吐 → 治理快览。
  * 设计原则与历史决策见 docs/admin/overview.md */
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link } from "@tanstack/react-router";
 import {
   Activity,
@@ -18,6 +18,7 @@ import {
 import { toast } from "sonner";
 import { useHealthDetail, useOverview, useReclaimOrphanTasks } from "@/api/queries";
 import { PageHeader } from "@/components/page-header";
+import { StatusBadge } from "@/components/status-badge";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -25,6 +26,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import { useCountUp } from "@/lib/use-count-up";
+
+type OverviewSnapshot = { ACTIVE: number; running: number; failed: number };
 
 const TASK_STATUS_ORDER = [
   { key: "running", label: "运行中", bar: "bg-info" },
@@ -218,21 +221,22 @@ export function OverviewPage() {
   const { data, isPending, isError, error, refetch, dataUpdatedAt } = useOverview();
   const health = useHealthDetail();
   const reclaim = useReclaimOrphanTasks();
-  const [prevValues, setPrevValues] = useState<Record<string, number> | null>(null);
   const [secondsToNext, setSecondsToNext] = useState(REFETCH_SECONDS);
+  // delta 计算：每次 fetch 把"上次成功的 snapshot"作为 prev，下一次 fetch 时再换。
+  // 用 ref 保存"上次成功值"，state 保存"当前 prev(供渲染读取)"，避免 prev 永远是当前值的 bug。
+  const lastSnapshotRef = useRef<OverviewSnapshot | null>(null);
+  const [prevValues, setPrevValues] = useState<OverviewSnapshot | null>(null);
 
   useEffect(() => {
     if (!data) return;
-    const snapshot = {
+    const snapshot: OverviewSnapshot = {
       ACTIVE: data.memories.ACTIVE ?? 0,
       running: data.tasks.running ?? 0,
       failed: (data.tasks.failed ?? 0) + (data.tasks.dead_letter ?? 0),
     };
-    if (prevValues !== null) setPrevValues(snapshot);
-    const t = setTimeout(() => setPrevValues(snapshot), 100);
-    return () => clearTimeout(t);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dataUpdatedAt]);
+    setPrevValues(lastSnapshotRef.current);
+    lastSnapshotRef.current = snapshot;
+  }, [dataUpdatedAt, data]);
 
   useEffect(() => {
     const startedAt = dataUpdatedAt || Date.now();
@@ -393,16 +397,7 @@ export function OverviewPage() {
                   >
                     {truncateMiddle(task.task_id, 16, 8)}
                   </Link>
-                  <Badge
-                    variant={task.status === "dead_letter" ? "warning" : "error"}
-                    className={cn(
-                      task.status === "dead_letter"
-                        ? "bg-violet text-violet-foreground"
-                        : "bg-destructive text-destructive-foreground",
-                    )}
-                  >
-                    {task.status}
-                  </Badge>
+                  <StatusBadge status={task.status} />
                   <span className="text-xs text-foreground-muted">{task.op_type}</span>
                 </div>
                 {task.last_error ? (

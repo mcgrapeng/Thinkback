@@ -10,6 +10,7 @@ import {
 } from "@tanstack/react-router";
 import { Toaster } from "sonner";
 import { Layout } from "@/components/layout";
+import { ErrorBoundary } from "@/components/error-boundary";
 import { OverviewPage } from "@/pages/overview";
 import { TasksPage } from "@/pages/tasks";
 import { MemoriesPage } from "@/pages/memories";
@@ -92,9 +93,11 @@ const queryClient = new QueryClient({
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    <QueryClientProvider client={queryClient}>
-      <RouterProvider router={router} />
-      <Toaster richColors position="top-center" />
-    </QueryClientProvider>
+    <ErrorBoundary>
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+        <Toaster richColors position="top-center" />
+      </QueryClientProvider>
+    </ErrorBoundary>
   </StrictMode>,
 );

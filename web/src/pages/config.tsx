@@ -43,7 +43,7 @@ const GROUP_ALIASES: Record<string, string> = {
 };
 
 function groupOf(name: string): string {
-  const head = name.split("_", 1)[0];
+  const head = name.split("_", 1)[0].toLowerCase();
   return GROUP_LABELS[head] ? head : "general";
 }
 
