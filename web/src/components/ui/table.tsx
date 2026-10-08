@@ -5,8 +5,8 @@ import { cn } from "@/lib/utils";
 
 function Table({ className, ...props }: React.ComponentProps<"table">) {
   return (
-    <div className="w-full overflow-x-auto rounded-xl border border-border bg-card shadow-xs">
-      <table className={cn("w-full caption-bottom text-sm", className)} {...props} />
+    <div className="w-full overflow-x-auto rounded-2xl border border-[#ebe7df] bg-card shadow-xs">
+      <table className={cn("w-full caption-bottom text-[15px]", className)} {...props} />
     </div>
   );
 }
@@ -23,7 +23,7 @@ function TableRow({ className, ...props }: React.ComponentProps<"tr">) {
   return (
     <tr
       className={cn(
-        "relative border-b border-border-muted transition-colors hover:bg-background-muted/60 data-[state=selected]:bg-background-muted",
+        "relative border-b border-[#f5f2ec] transition-colors hover:bg-[#fdf8ed] data-[state=selected]:bg-background-muted",
         className,
       )}
       {...props}
@@ -36,7 +36,7 @@ function TableHead({ className, ...props }: React.ComponentProps<"th">) {
     <th
       scope="col"
       className={cn(
-        "sticky top-0 z-10 h-12 bg-background-subtle px-4 text-left align-middle text-sm font-medium text-foreground-muted",
+        "sticky top-0 z-10 h-11 bg-background-subtle px-5 text-left align-middle text-xs font-medium uppercase tracking-wider text-foreground-muted",
         className,
       )}
       {...props}
@@ -45,7 +45,7 @@ function TableHead({ className, ...props }: React.ComponentProps<"th">) {
 }
 
 function TableCell({ className, ...props }: React.ComponentProps<"td">) {
-  return <td className={cn("px-4 py-3 align-middle text-sm", className)} {...props} />;
+  return <td className={cn("px-5 py-4 align-middle", className)} {...props} />;
 }
 
 export { Table, TableHeader, TableBody, TableRow, TableHead, TableCell };
