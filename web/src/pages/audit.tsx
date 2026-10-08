@@ -62,7 +62,12 @@ function ActionBadge({ action }: { action: string }) {
 export function AuditPage() {
   const [action, setAction] = useState("all");
   const [expanded, setExpanded] = useState<string | null>(null);
-  const { data, isPending, isError } = useAudit(action === "all" ? undefined : action);
+  const [limit, setLimit] = useState(50);
+  const { data, isPending, isError } = useAudit({
+    action: action === "all" ? undefined : action,
+    limit,
+  });
+  const isFull = (data?.length ?? 0) >= limit;
 
   return (
     <div className="space-y-6">
@@ -70,20 +75,35 @@ export function AuditPage() {
         title="审计日志"
         description="治理台操作留痕 · 只读不可篡改"
         actions={
-          <div className="w-40">
-            <label className="sr-only" htmlFor="audit-action">
-              动作筛选
-            </label>
-            <Select value={action} onValueChange={setAction}>
-              <SelectTrigger id="audit-action" aria-label="按动作筛选">
+          <div className="flex items-center gap-2">
+            <div className="w-40">
+              <label className="sr-only" htmlFor="audit-action">
+                动作筛选
+              </label>
+              <Select value={action} onValueChange={setAction}>
+                <SelectTrigger id="audit-action" aria-label="按动作筛选">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {ACTION_OPTIONS.map((option) => (
+                    <SelectItem key={option.value} value={option.value}>
+                      {option.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <Select
+              value={String(limit)}
+              onValueChange={(v) => setLimit(Number(v))}
+            >
+              <SelectTrigger className="w-28" aria-label="每页条数">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                {ACTION_OPTIONS.map((option) => (
-                  <SelectItem key={option.value} value={option.value}>
-                    {option.label}
-                  </SelectItem>
-                ))}
+                <SelectItem value="50">50 / 页</SelectItem>
+                <SelectItem value="100">100 / 页</SelectItem>
+                <SelectItem value="200">200 / 页</SelectItem>
               </SelectContent>
             </Select>
           </div>
@@ -193,6 +213,25 @@ export function AuditPage() {
                 </CardContent>
               </Card>
             ))}
+          </div>
+          <div
+            className="flex flex-wrap items-center justify-between gap-2 text-xs text-foreground-muted"
+            aria-live="polite"
+          >
+            <span>
+              已显示 <span className="font-mono tabular-nums">{data.length}</span> 条
+              {isFull ? " · 可能还有更多" : " · 已到底"}
+            </span>
+            {isFull ? (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setLimit((n) => n + 50)}
+                aria-label="加载更多审计记录"
+              >
+                加载更多（+50）
+              </Button>
+            ) : null}
           </div>
         </>
       ) : (

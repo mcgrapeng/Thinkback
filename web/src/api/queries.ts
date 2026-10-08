@@ -70,10 +70,10 @@ export function useMemorySource(memoryId: string | null) {
   });
 }
 
-export function useAudit(action: string | undefined) {
+export function useAudit(params: { action?: string; limit?: number }) {
   return useQuery({
-    queryKey: ["admin", "audit", action ?? "all"],
-    queryFn: () => api.audit({ action: action || undefined, limit: 100 }),
+    queryKey: ["admin", "audit", params.action ?? "all", params.limit ?? 100],
+    queryFn: () => api.audit({ action: params.action || undefined, limit: params.limit }),
   });
 }
 
