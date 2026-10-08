@@ -7,7 +7,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type * as React from "react";
 import { Link } from "@tanstack/react-router";
-import { AlertTriangle, ChevronLeft, ChevronRight, Loader2, Search, X } from "lucide-react";
+import { AlertTriangle, ChevronLeft, ChevronRight, Loader2, Search } from "lucide-react";
 import { toast } from "sonner";
 import { useMemories, useMemorySource, type MemoryFilters } from "@/api/queries";
 import type { AdminMemoryItem } from "@/api/client";
