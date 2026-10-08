@@ -24,6 +24,7 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@/components/ui/sheet";
+import { CommandPalette } from "@/components/command-palette";
 
 const NAV_GROUPS = [
   {
@@ -234,6 +235,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
           {children}
         </main>
       </div>
+      <CommandPalette />
     </div>
   );
 }
