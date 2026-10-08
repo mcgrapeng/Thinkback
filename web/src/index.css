@@ -14,10 +14,10 @@
    soft = 徽章底色（低透明度同色相），strong = 条形/圆点等非文字图形。 */
 :root {
   /* 背景 */
-  --background: #ffffff;
-  --background-subtle: #f9fafb;
-  --background-muted: #f3f4f6;
-  --background-strong: #e5e7eb;
+  --background: #fdfcf8;        /* 暖白主底 */
+  --background-subtle: #f8f6f0;  /* 暖米黄副底 */
+  --background-muted: #f5f2ec;   /* 卡片 hover / 装饰 */
+  --background-strong: #ebe7df; /* 暖棕灰分隔线 */
   --background-inverse: #101828;
   /* 前景（intense → soft 五档） */
   --foreground-intense: #101828;
@@ -26,9 +26,9 @@
   --foreground-muted: #6a7282;
   --foreground-soft: #99a1af;
   /* 边框（muted → intense 五档） */
-  --border-muted: #f3f4f6;
-  --border: #e5e7eb;
-  --border-strong: #d1d5dc;
+  --border-muted: #f5f2ec;
+  --border: #ebe7df;
+  --border-strong: #d6cfbe;
   --border-emphasis: #99a1af;
   --border-intense: #6a7282;
   /* 主色（黑白）与控件 */
@@ -152,9 +152,10 @@
   --font-sans: "Geist Sans", -apple-system, "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif;
   --font-mono: "Geist Mono", ui-monospace, "SF Mono", "JetBrains Mono", monospace;
   /* 阴影（appica 规格：subtle 上浮感，暗色加深一档边框代替） */
-  --shadow-xs: 0 1px 2px rgb(16 24 40 / 0.05);
-  --shadow-sm: 0 2px 8px -2px rgb(16 24 40 / 0.08);
-  --shadow-md: 0 4px 12px -2px rgb(16 24 40 / 0.1);
+  --shadow-xs: 0 1px 2px rgb(60 41 17 / 0.05);
+  --shadow-sm: 0 2px 12px -2px rgb(60 41 17 / 0.06);
+  --shadow-md: 0 6px 20px -4px rgb(60 41 17 / 0.08);
+  --shadow-lg: 0 12px 32px -8px rgb(60 41 17 / 0.12);
 }
 
 @layer base {
