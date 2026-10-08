@@ -1,4 +1,4 @@
-/** 总览页：KPI → 需关注 → 服务身份 → 4 张分布图 → L3 + 5min 吞吐 → 治理快览。
+/** 总览页：Hero KPI → System Pulse → Needs Attention → 服务身份 → 4 张分布 → L3 + 5min 吞吐 → 治理快览。
  * 设计原则与历史决策见 docs/admin/overview.md */
 
 import { useEffect, useRef, useState } from "react";
@@ -59,78 +59,6 @@ const SOURCE_TYPE_ORDER = [
   { key: "system_migration", label: "系统迁移", bar: "bg-violet" },
 ] as const;
 
-function StatTile({
-  label,
-  value,
-  format = String,
-  hint,
-  tone = "default",
-  to,
-  prev,
-}: {
-  label: string;
-  value: number;
-  format?: (n: number) => string;
-  hint?: string;
-  tone?: "default" | "error";
-  to?: string;
-  prev?: number;
-}) {
-  const animated = useCountUp(value);
-  const delta = prev !== undefined ? value - prev : 0;
-  const card = (
-    <Card className={cn("h-full", to && "transition-shadow hover:shadow-md")}>
-      <CardContent className="p-4">
-        <dl className="space-y-1.5">
-          <div className="flex items-center justify-between">
-            <dt className="text-xs text-foreground-muted">{label}</dt>
-            {delta !== 0 ? (
-              <span
-                className={cn(
-                  "flex items-center gap-0.5 text-xs tabular-nums",
-                  delta > 0 ? "text-error" : "text-success",
-                )}
-                aria-label={delta > 0 ? `增加 ${delta}` : `减少 ${-delta}`}
-              >
-                {delta > 0 ? <ArrowUp aria-hidden="true" className="size-3" /> : <ArrowDown aria-hidden="true" className="size-3" />}
-                {Math.abs(delta)}
-              </span>
-            ) : null}
-          </div>
-          <dd
-            className={cn(
-              "text-4xl font-semibold leading-none tracking-tight tabular-nums",
-              tone === "error" ? "text-error" : "text-foreground-intense",
-            )}
-          >
-            {format(animated)}
-          </dd>
-          {hint ? (
-            <dd
-              className={cn(
-                "text-xs",
-                tone === "error" ? "text-error" : "text-foreground-muted",
-              )}
-            >
-              {hint}
-            </dd>
-          ) : null}
-        </dl>
-      </CardContent>
-    </Card>
-  );
-  if (!to) return card;
-  return (
-    <Link
-      to={to}
-      aria-label={`查看${label}详情`}
-      className="block rounded-xl focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--ring)]"
-    >
-      {card}
-    </Link>
-  );
-}
-
 function DistributionBars({
   title,
   description,
@@ -154,8 +82,13 @@ function DistributionBars({
   return (
     <Card className={className}>
       <CardHeader className="pb-2">
-        <CardTitle className="text-sm">{title}</CardTitle>
-        <CardDescription className="text-xs">{description} · 共 {total}</CardDescription>
+        <div className="flex items-baseline justify-between gap-3">
+          <CardTitle className="text-sm">{title}</CardTitle>
+          <p className="text-2xl font-semibold tabular-nums text-foreground-intense">
+            {total.toLocaleString()}
+          </p>
+        </div>
+        <CardDescription className="text-xs">{description}</CardDescription>
       </CardHeader>
       <CardContent>
         <ul className="space-y-2.5">
@@ -167,7 +100,7 @@ function DistributionBars({
                 <span className="w-20 shrink-0 text-xs text-foreground-muted">{row.label}</span>
                 <span
                   aria-hidden="true"
-                  className="h-1.5 flex-1 overflow-hidden rounded-full bg-background-strong"
+                  className="h-1 flex-1 overflow-hidden rounded-full bg-background-strong"
                 >
                   <span
                     className={cn("block h-full rounded-full", row.bar)}
@@ -185,7 +118,7 @@ function DistributionBars({
               <span className="w-20 shrink-0 text-xs text-foreground-muted">其他</span>
               <span
                 aria-hidden="true"
-                className="h-1.5 flex-1 overflow-hidden rounded-full bg-background-strong"
+                className="h-1 flex-1 overflow-hidden rounded-full bg-background-strong"
               >
                 <span
                   className="block h-full rounded-full bg-neutral-strong"
@@ -249,6 +182,10 @@ export function OverviewPage() {
     return () => clearInterval(id);
   }, [dataUpdatedAt]);
 
+  // Hero KPI count-up：data 不可达时用 0 占位,加载完后从 0 缓动到真实值
+  const activeMemories = data?.memories.ACTIVE ?? 0;
+  const animatedActive = useCountUp(activeMemories);
+
   if (isPending) {
     return (
       <div aria-busy="true" className="space-y-4">
@@ -282,6 +219,9 @@ export function OverviewPage() {
     );
   }
 
+  // Hooks 必须在 early return 之前调用(Rules of Hooks)
+  // data 不可达时 useCountUp 用 0 占位,数据加载后会从 0 缓动到真实值
+
   const failed = (data.tasks.failed ?? 0) + (data.tasks.dead_letter ?? 0);
   const failedTasks = data.recent_failed_tasks ?? [];
   const queueUsed = data.l3.max_pending_tasks - data.l3.available_capacity;
@@ -294,8 +234,41 @@ export function OverviewPage() {
     ? Math.round(throughput.append_fail.count / (throughput.append_ok.count + throughput.append_fail.count) * 100)
     : 0;
 
+  const activeDelta = prevValues?.ACTIVE !== undefined ? activeMemories - prevValues.ACTIVE : 0;
+
+  const pulses = [
+    {
+      label: "RUNNING",
+      value: String(data.tasks.running ?? 0),
+      suffix: "tasks",
+      tone: "neutral" as const,
+      delta: prevValues?.running !== undefined ? data.tasks.running! - prevValues.running : undefined,
+    },
+    {
+      label: "FAILED",
+      value: String(failed),
+      tone: failed > 0 ? ("warning" as const) : ("neutral" as const),
+      suffix: failed > 0 ? "needs attention" : "all clear",
+      delta: prevValues?.failed,
+    },
+    {
+      label: "L3 QUEUE",
+      value: `${queueUsed}/${data.l3.max_pending_tasks}`,
+      suffix: `${queuePct}% used`,
+      tone: "neutral" as const,
+      delta: undefined,
+    },
+    {
+      label: "UPTIME",
+      value: formatUptime(health.data?.uptime_seconds ?? 0),
+      suffix: health.data ? "stable" : "—",
+      tone: "neutral" as const,
+      delta: undefined,
+    },
+  ];
+
   return (
-    <div className="space-y-4">
+    <div className="space-y-6">
       <PageHeader
         title="总览"
         actions={
@@ -349,72 +322,147 @@ export function OverviewPage() {
         }
       />
 
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        {[
-          { label: "有效记忆", value: data.memories.ACTIVE ?? 0, to: "/memories", prev: prevValues?.ACTIVE },
-          { label: "运行中任务", value: data.tasks.running ?? 0, to: "/tasks?tab=running", prev: prevValues?.running },
-          { label: "失败 + 死信", value: failed, hint: failed > 0 ? "需要关注" : undefined, tone: (failed > 0 ? "error" : "default") as "default" | "error", to: "/tasks?tab=failed", prev: prevValues?.failed },
-          { label: "L3 队列", value: queueUsed, format: (n: number) => `${n}/${data.l3.max_pending_tasks}`, hint: `${queuePct}% · ${data.l3.write_mode}`, tone: (data.l3.available_capacity === 0 ? "error" : "default") as "default" | "error" },
-        ].map((tile, i) => (
-          <div key={tile.label} className="animate-fade-up" style={{ animationDelay: `${i * 50}ms` }}>
-            <StatTile {...tile} />
+      {/* HERO: 单一 96px 数字作为"今天的头条事实" */}
+      <section className="animate-editorial-fade-up pt-2">
+        <p className="section-label mb-3">ACTIVE MEMORIES · 实时索引</p>
+        <div className="flex items-baseline gap-6 flex-wrap">
+          <span className="text-display-xl text-foreground-intense">
+            {animatedActive.toLocaleString()}
+          </span>
+          <div className="flex flex-col gap-1">
+            {activeDelta !== 0 ? (
+              <span
+                className={cn(
+                  "flex items-center gap-1 text-base font-medium tabular-nums",
+                  activeDelta > 0 ? "text-error" : "text-success",
+                )}
+                aria-label={activeDelta > 0 ? `增加 ${activeDelta}` : `减少 ${-activeDelta}`}
+              >
+                {activeDelta > 0 ? (
+                  <ArrowUp aria-hidden="true" className="size-4" />
+                ) : (
+                  <ArrowDown aria-hidden="true" className="size-4" />
+                )}
+                {Math.abs(activeDelta)}
+              </span>
+            ) : (
+              <span className="text-base text-foreground-muted">stable</span>
+            )}
+            <span className="text-sm text-foreground-muted">
+              since last sync · {secondsToNext}s 前
+            </span>
           </div>
-        ))}
-      </div>
+        </div>
+        <p className="mt-3 max-w-2xl text-base text-foreground-muted leading-relaxed">
+          当前已索引 {activeMemories.toLocaleString()} 条有效记忆，覆盖{" "}
+          {data.by_classification.normal?.toLocaleString() ?? 0} 条普通记忆与{" "}
+          {data.by_classification.personal?.toLocaleString() ?? 0} 条个人偏好。
+        </p>
+      </section>
 
-      {hasFailedTasks || failed > 0 ? (
-        <Card className="animate-fade-up border-error-strong/40 bg-error-soft/30" style={{ animationDelay: "200ms" }}>
-          <CardHeader className="border-b border-error-strong/30 pb-3">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <CardTitle className="flex items-center gap-2 text-base text-error">
-                <AlertTriangle aria-hidden="true" className="size-4" /> 需关注
-              </CardTitle>
-              <Link
-                to="/tasks"
-                search={{ tab: failedTasks[0]?.status === "dead_letter" ? "dead_letter" : "failed" }}
-                className="text-xs text-foreground-intense hover:underline"
+      <div className="editorial-rule my-10" />
+
+      {/* SYSTEM PULSE: 4 个 48px 副 KPI */}
+      <section className="animate-editorial-fade-up" style={{ animationDelay: "80ms" }}>
+        <p className="section-label mb-5">SYSTEM PULSE · 系统脉搏</p>
+        <div className="grid grid-cols-2 gap-8 lg:grid-cols-4">
+          {pulses.map((pulse, i) => (
+            <div
+              key={pulse.label}
+              className="space-y-2 animate-editorial-fade-up"
+              style={{ animationDelay: `${120 + i * 80}ms` }}
+            >
+              <p className="section-label">{pulse.label}</p>
+              <p
+                className={cn(
+                  "text-display-md tabular-nums",
+                  pulse.tone === "warning" ? "text-error" : "text-foreground-intense",
+                )}
               >
-                查看全部 →
-              </Link>
+                {pulse.value}
+              </p>
+              <p className="flex items-center gap-2 text-sm text-foreground-muted">
+                <span>{pulse.suffix}</span>
+                {pulse.delta !== undefined && pulse.delta !== 0 ? (
+                  <span
+                    className={cn(
+                      "flex items-center text-xs tabular-nums",
+                      pulse.delta > 0 ? "text-error" : "text-success",
+                    )}
+                    aria-label={pulse.delta > 0 ? `增加 ${pulse.delta}` : `减少 ${-pulse.delta}`}
+                  >
+                    {pulse.delta > 0 ? (
+                      <ArrowUp aria-hidden="true" className="size-3" />
+                    ) : (
+                      <ArrowDown aria-hidden="true" className="size-3" />
+                    )}
+                    {Math.abs(pulse.delta)}
+                  </span>
+                ) : null}
+              </p>
             </div>
-            <CardDescription className="text-xs">
-              {failedTasks.length} 条样本
-              {failed > failedTasks.length ? ` · 还有 ${failed - failedTasks.length} 条未显示` : ""}
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-1.5">
+          ))}
+        </div>
+      </section>
+
+      {/* NEEDS ATTENTION: 纵向 editorial 列表 */}
+      {hasFailedTasks || failed > 0 ? (
+        <section
+          className="animate-editorial-fade-up"
+          style={{ animationDelay: "200ms" }}
+        >
+          <div className="mb-4 flex items-baseline justify-between">
+            <p className="section-label">NEEDS ATTENTION · 需关注</p>
+            <Link
+              to="/tasks"
+              search={{
+                tab: failedTasks[0]?.status === "dead_letter" ? "dead_letter" : "failed",
+              }}
+              className="text-sm text-foreground-emphasis hover:underline"
+            >
+              {failed} item{failed !== 1 ? "s" : ""} →
+            </Link>
+          </div>
+          <ul className="divide-y divide-[#f5f2ec] border-y border-[#f5f2ec]">
             {failedTasks.slice(0, 5).map((task) => (
-              <div
+              <li
                 key={task.task_id}
-                className="flex items-baseline justify-between gap-3 rounded-md bg-background px-3 py-2"
+                className="flex items-center justify-between gap-4 py-3 group"
               >
-                <div className="flex min-w-0 flex-1 items-baseline gap-2">
+                <div className="flex min-w-0 flex-1 items-center gap-4">
+                  <span
+                    aria-hidden="true"
+                    className="block size-1.5 shrink-0 rounded-full bg-error"
+                  />
                   <Link
                     to="/tasks"
-                    search={{ tab: task.status === "dead_letter" ? "dead_letter" : "failed" }}
-                    className="truncate font-mono text-xs text-foreground-emphasis hover:underline"
+                    search={{
+                      tab: task.status === "dead_letter" ? "dead_letter" : "failed",
+                    }}
+                    className="truncate font-mono text-sm text-foreground-emphasis hover:underline"
                     title={task.task_id}
                   >
                     {truncateMiddle(task.task_id, 16, 8)}
                   </Link>
                   <StatusBadge status={task.status} />
-                  <span className="text-xs text-foreground-muted">{task.op_type}</span>
+                  <span className="text-sm text-foreground-muted">{task.op_type}</span>
                 </div>
                 {task.last_error ? (
-                  <p
-                    className="hidden max-w-[55%] truncate font-mono text-xs text-error md:block"
+                  <span
+                    className="hidden max-w-[40%] truncate font-mono text-xs text-error md:block"
                     title={task.last_error}
                   >
                     {task.last_error}
-                  </p>
+                  </span>
                 ) : null}
-              </div>
+              </li>
             ))}
-          </CardContent>
-        </Card>
+          </ul>
+        </section>
       ) : null}
 
-      <Card className="animate-fade-up" style={{ animationDelay: "250ms" }}>
+      {/* 服务身份 */}
+      <Card variant="elevated" className="animate-editorial-fade-up" style={{ animationDelay: "250ms" }}>
         <CardHeader className="border-b border-border-muted pb-3">
           <CardTitle className="flex items-center gap-2 text-base">
             <Server aria-hidden="true" className="size-4" /> 服务身份
@@ -495,7 +543,7 @@ export function OverviewPage() {
         </CardContent>
       </Card>
 
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
+      <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 xl:grid-cols-3">
         {[
           { title: "任务状态", description: "实时快照", rows: TASK_STATUS_ORDER, counts: data.tasks, className: undefined as string | undefined },
           { title: "数据分类", description: "合规审计", rows: CLASSIFICATION_ORDER, counts: data.by_classification, className: undefined },
@@ -504,16 +552,16 @@ export function OverviewPage() {
         ].map((cfg, i) => (
           <div
             key={cfg.title}
-            className="animate-fade-up"
-            style={{ animationDelay: `${300 + i * 50}ms` }}
+            className="animate-editorial-fade-up"
+            style={{ animationDelay: `${300 + i * 60}ms` }}
           >
             <DistributionBars {...cfg} />
           </div>
         ))}
       </div>
 
-      <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
-        <Card className="animate-fade-up" style={{ animationDelay: "550ms" }}>
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
+        <Card variant="elevated" className="animate-editorial-fade-up" style={{ animationDelay: "550ms" }}>
           <CardHeader className="border-b border-border-muted pb-3">
             <CardTitle className="flex items-center gap-2 text-base">
               <ListTodo aria-hidden="true" className="size-4" /> L3 后台写
@@ -532,7 +580,7 @@ export function OverviewPage() {
           </CardContent>
         </Card>
 
-        <Card className="animate-fade-up lg:col-span-2" style={{ animationDelay: "600ms" }}>
+        <Card variant="elevated" className="animate-editorial-fade-up lg:col-span-2" style={{ animationDelay: "600ms" }}>
           <CardHeader className="border-b border-border-muted pb-3">
             <CardTitle className="flex items-center gap-2 text-base">
               <Activity aria-hidden="true" className="size-4" /> 5min 吞吐
@@ -564,7 +612,7 @@ export function OverviewPage() {
       </div>
 
       {data.recent_audit_actions?.length ? (
-        <Card className="animate-fade-up" style={{ animationDelay: "650ms" }}>
+        <Card variant="elevated" className="animate-editorial-fade-up" style={{ animationDelay: "650ms" }}>
           <CardHeader className="border-b border-border-muted pb-3">
             <div className="flex items-center justify-between">
               <CardTitle className="text-base">最近治理动作</CardTitle>
@@ -581,18 +629,21 @@ export function OverviewPage() {
           </CardHeader>
           <CardContent className="p-0">
             <table className="w-full text-sm">
-              <tbody className="divide-y divide-border-muted">
+              <tbody>
                 {data.recent_audit_actions.map((action) => (
-                  <tr key={action.audit_id} className="hover:bg-background-muted/50">
-                    <td className="py-2 pl-4 pr-2">
+                  <tr
+                    key={action.audit_id}
+                    className="row-hover-warm border-l-2 border-transparent transition-colors"
+                  >
+                    <td className="py-3.5 pl-4 pr-2">
                       <Badge variant={action.action === "delete" ? "error" : "neutral"}>
                         {action.action}
                       </Badge>
                     </td>
-                    <td className="py-2 pr-2 font-mono text-xs text-foreground-emphasis">
+                    <td className="py-3.5 pr-2 font-mono text-xs text-foreground-emphasis">
                       {truncateMiddle(action.target, 18, 6)}
                     </td>
-                    <td className="py-2 pr-4 text-right text-xs text-foreground-muted tabular-nums">
+                    <td className="py-3.5 pr-4 text-right text-xs text-foreground-muted tabular-nums">
                       {action.created_at
                         ? new Date(action.created_at).toLocaleString("zh-CN", {
                             month: "2-digit",
