@@ -242,7 +242,7 @@ export function OverviewPage() {
       value: String(data.tasks.running ?? 0),
       suffix: "tasks",
       tone: "neutral" as const,
-      delta: prevValues?.running !== undefined ? data.tasks.running! - prevValues.running : undefined,
+      delta: prevValues?.running !== undefined ? (data.tasks.running ?? 0) - prevValues.running : undefined,
     },
     {
       label: "FAILED",
