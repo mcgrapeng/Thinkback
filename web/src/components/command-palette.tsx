@@ -5,7 +5,11 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { Command, Database, ListTodo, Search, Settings, ShieldAlert, ScrollText } from "lucide-react";
-import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
+import {
+  AlertDialog,
+  AlertDialogContent,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 
 type Item =
   | { kind: "memory"; id: string; label: string }
@@ -60,9 +64,9 @@ export function CommandPalette() {
   }, [needle]);
 
   return (
-    <Dialog open={open} onOpenChange={setOpen}>
-      <DialogContent className="max-w-[560px] gap-0 p-0 rounded-3xl border-[#ebe7df] shadow-lg top-[20%] translate-y-0">
-        <DialogTitle className="sr-only">命令面板</DialogTitle>
+    <AlertDialog open={open} onOpenChange={setOpen}>
+      <AlertDialogContent className="max-w-[560px] gap-0 p-0 rounded-3xl border-[#ebe7df] shadow-lg top-[20%] translate-y-0">
+        <AlertDialogTitle className="sr-only">命令面板</AlertDialogTitle>
         <div className="flex items-center gap-3 border-b border-[#f5f2ec] px-5 py-4">
           <Search aria-hidden="true" className="size-5 text-foreground-muted" />
           <input
@@ -104,7 +108,7 @@ export function CommandPalette() {
           <span>RECENT · QUICK NAVIGATION</span>
           <span>↑↓ 选择 · ↵ 跳转</span>
         </div>
-      </DialogContent>
-    </Dialog>
+      </AlertDialogContent>
+    </AlertDialog>
   );
 }
