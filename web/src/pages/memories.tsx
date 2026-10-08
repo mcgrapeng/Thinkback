@@ -1,6 +1,7 @@
-/** P2 记忆浏览器：多用户检索 + 状态筛选 + 详情抽屉（概要/来源反链/操作）。
+/** P2 记忆浏览器:多用户检索 + 状态筛选 + 详情抽屉(概要/来源反链/操作)。
  *
- * 来源反链是本页灵魂：L3 抽取记忆 → journal 原文对照，人工核验「有源」。
+ * 来源反链是本页灵魂:L3 抽取记忆 → journal 原文对照,人工核验「有源」。
+ * Editorial Premium 重做:hero KPI + editorial card 列表 + 分页器。
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -13,15 +14,9 @@ import type { AdminMemoryItem } from "@/api/client";
 import { PageHeader } from "@/components/page-header";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   Sheet,
@@ -31,25 +26,17 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet";
 import { StatusBadge } from "@/components/status-badge";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { findHighlightSegments } from "@/lib/highlight";
-import { formatTime } from "@/lib/utils";
+import { cn, formatTime } from "@/lib/utils";
 
-const STATUS_OPTIONS = [
-  { value: "ALL", label: "全部状态" },
+const STATUS_CHIPS: Array<{ value: string; label: string }> = [
+  { value: "ALL", label: "全部" },
   { value: "ACTIVE", label: "有效" },
   { value: "SUPERSEDED", label: "已取代" },
   { value: "DELETED", label: "已删除" },
   { value: "SUPPRESSED", label: "已抑制" },
-] as const;
+];
 
 const PAGE_SIZE = 50;
 
@@ -95,25 +82,22 @@ function MemoryDetail({ memory }: { memory: AdminMemoryItem }) {
   const source = useMemorySource(memory.memory_id);
   return (
     <div className="flex h-full flex-col overflow-hidden">
-      <SheetHeader className="gap-1 border-b border-border">
-        <SheetTitle>记忆详情</SheetTitle>
-        <p
-          className="truncate font-mono text-xs text-foreground-emphasis"
-          title={memory.memory_id}
-        >
-          {memory.memory_id}
-        </p>
-        <SheetDescription>
+      <SheetHeader className="space-y-3 border-b border-[#f5f2ec] p-8 pb-6">
+        <p className="section-label">MEMORY · {memory.memory_id.slice(-3)}</p>
+        <SheetTitle className="text-3xl font-semibold tracking-tight leading-tight">
+          {memory.memory_text}
+        </SheetTitle>
+        <SheetDescription className="font-mono text-sm">
           {memory.user_id} · {memory.memory_scope_id}
         </SheetDescription>
       </SheetHeader>
       <Tabs defaultValue="summary" className="flex min-h-0 flex-1 flex-col">
-        <TabsList className="mx-4 mt-2 w-fit">
+        <TabsList className="mx-8 mt-4 w-fit">
           <TabsTrigger value="summary">概要</TabsTrigger>
           <TabsTrigger value="source">来源反链</TabsTrigger>
           <TabsTrigger value="ops">操作</TabsTrigger>
         </TabsList>
-        <div className="min-h-0 flex-1 overflow-y-auto p-4">
+        <div className="min-h-0 flex-1 overflow-y-auto p-8">
           <TabsContent value="summary" className="mt-0 space-y-4">
             <dl className="grid grid-cols-2 gap-3">
               <Field label="状态">
@@ -150,12 +134,12 @@ function MemoryDetail({ memory }: { memory: AdminMemoryItem }) {
                 <AlertTriangle aria-hidden="true" />
                 <AlertTitle>无法加载来源回合</AlertTitle>
               </Alert>
-            ) : source.data!.rounds.length === 0 ? (
+            ) : !source.data || source.data.rounds.length === 0 ? (
               <p className="py-6 text-center text-sm text-foreground-muted">
-                无 journal 原文反链（可能来自本地槽位回填或历史数据）
+                无 journal 原文反链(可能来自本地槽位回填或历史数据)
               </p>
             ) : (
-              source.data!.rounds.map((round) => (
+              source.data.rounds.map((round) => (
                 <Card key={round.round_id} className="border-border-muted">
                   <CardContent className="space-y-2 p-3">
                     <p className="flex flex-wrap items-center gap-2 text-xs text-foreground-muted">
@@ -197,7 +181,7 @@ function MemoryDetail({ memory }: { memory: AdminMemoryItem }) {
 
           <TabsContent value="ops" className="mt-0 space-y-3">
             <p className="text-sm text-foreground-muted">
-              治理操作（删除 / 更新）在治理操作台执行，操作将记录审计。
+              治理操作(删除 / 更新)在治理操作台执行,操作将记录审计。
             </p>
             <Button asChild variant="outline" size="sm">
               <Link to="/govern" search={{ memory_id: memory.memory_id, user_id: memory.user_id }}>
@@ -213,7 +197,7 @@ function MemoryDetail({ memory }: { memory: AdminMemoryItem }) {
                     toast.success("已复制记忆 ID");
                   },
                   () => {
-                    toast.error("复制失败：浏览器拒绝访问剪贴板");
+                    toast.error("复制失败:浏览器拒绝访问剪贴板");
                   },
                 );
               }}
@@ -239,7 +223,7 @@ export function MemoriesPage() {
   const trimmedUserId = userIdInput.trim() || undefined;
   const trimmedScope = scopeInput.trim() || undefined;
 
-  // 文本输入 300ms debounce → 自动应用（与 status 即时筛选一致）
+  // 文本输入 300ms debounce → 自动应用
   useEffect(() => {
     const timer = setTimeout(() => {
       setApplied((prev) => {
@@ -252,7 +236,7 @@ export function MemoriesPage() {
     return () => clearTimeout(timer);
   }, [trimmedUserId, trimmedScope]);
 
-  // status 切换立即应用 → 但必须重置 page 到 1（避免分页越界）
+  // status 切换立即应用 → 但必须重置 page 到 1
   useEffect(() => {
     setApplied((prev) => (prev.page === 1 ? prev : { ...prev, page: 1 }));
   }, [statusInput]);
@@ -262,7 +246,7 @@ export function MemoriesPage() {
     statuses: statusInput === "ALL" ? undefined : statusInput,
   });
 
-  // 筛选 / 分页 / 状态变化 → 滚到结果顶部（保持视觉锚点）
+  // 筛选 / 分页 / 状态变化 → 滚到结果顶部
   useEffect(() => {
     if (!data) return;
     const filterKey = `${applied.user_id ?? ""}|${applied.memory_scope_id ?? ""}|${statusInput}|${applied.page}`;
@@ -301,77 +285,112 @@ export function MemoriesPage() {
 
   return (
     <div className="space-y-6">
-      <PageHeader title="记忆浏览器" description="本地索引多用户视图 · 点击行查看详情与来源反链" />
+      <PageHeader
+        title="MEMORY BROWSER · 记忆浏览器"
+        description={
+          data
+            ? `${data.total.toLocaleString()} memories · indexed for retrieval`
+            : "本地索引多用户视图 · 点击行查看详情与来源反链"
+        }
+      />
 
-      <form
-        className="flex flex-col gap-3 sm:flex-row sm:items-center"
-        onSubmit={(event) => {
-          event.preventDefault();
-          applyFilters();
-        }}
-      >
-        <label className="sr-only" htmlFor="filter-user">
-          用户 ID
-        </label>
-        <div className="relative flex-1">
-          <Search
-            aria-hidden="true"
-            className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-foreground-soft"
-          />
-          <Input
-            id="filter-user"
-            className="pl-9"
-            placeholder="用户 ID（留空 = 全量）"
-            value={userIdInput}
-            onChange={(event) => setUserIdInput(event.target.value)}
-          />
-        </div>
-        <label className="sr-only" htmlFor="filter-scope">
-          范围
-        </label>
-        <div className="relative flex-1">
-          <Search
-            aria-hidden="true"
-            className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-foreground-soft"
-          />
-          <Input
-            id="filter-scope"
-            className="pl-9"
-            placeholder="范围（默认全部）"
-            value={scopeInput}
-            onChange={(event) => setScopeInput(event.target.value)}
-          />
-        </div>
-        <label className="sr-only" htmlFor="filter-status">
-          状态
-        </label>
-        <Select value={statusInput} onValueChange={setStatusInput}>
-          <SelectTrigger id="filter-status" aria-label="状态筛选" className="sm:w-44">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {STATUS_OPTIONS.map((option) => (
-              <SelectItem key={option.value} value={option.value}>
-                {option.label}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        <Button type="submit" className="sm:w-28">
-          <Search aria-hidden="true" /> 检索
-        </Button>
-        {hasActiveFilter ? (
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            onClick={clearFilters}
-            aria-label="清空筛选条件"
-          >
-            <X aria-hidden="true" /> 清空
+      {/* HERO: 总数大字 + 搜索 + 状态 chip */}
+      <section className="animate-editorial-fade-up">
+        <p className="section-label mb-3">INDEXED MEMORIES · 索引记忆总数</p>
+        <p className="text-display-md text-foreground-intense tabular-nums">
+          {(data?.total ?? 0).toLocaleString()}
+        </p>
+      </section>
+
+      <div className="editorial-rule" />
+
+      {/* 搜索 + 状态 chip 区 */}
+      <section className="space-y-4 animate-editorial-fade-up" style={{ animationDelay: "80ms" }}>
+        <form
+          className="flex flex-col gap-3 sm:flex-row sm:items-center"
+          onSubmit={(event) => {
+            event.preventDefault();
+            applyFilters();
+          }}
+        >
+          <label className="sr-only" htmlFor="filter-user">
+            用户 ID
+          </label>
+          <div className="relative flex-1">
+            <Search
+              aria-hidden="true"
+              className="pointer-events-none absolute left-4 top-1/2 size-4 -translate-y-1/2 text-foreground-muted"
+            />
+            <Input
+              id="filter-user"
+              className="pl-11 h-11 rounded-xl"
+              placeholder="用户 ID / 记忆 ID / scope..."
+              value={userIdInput}
+              onChange={(event) => setUserIdInput(event.target.value)}
+            />
+          </div>
+          <label className="sr-only" htmlFor="filter-scope">
+            范围
+          </label>
+          <div className="relative flex-1">
+            <Search
+              aria-hidden="true"
+              className="pointer-events-none absolute left-4 top-1/2 size-4 -translate-y-1/2 text-foreground-muted"
+            />
+            <Input
+              id="filter-scope"
+              className="pl-11 h-11 rounded-xl"
+              placeholder="范围(默认全部)"
+              value={scopeInput}
+              onChange={(event) => setScopeInput(event.target.value)}
+            />
+          </div>
+          <Button type="submit" className="sm:w-28">
+            <Search aria-hidden="true" /> 检索
           </Button>
-        ) : null}
-      </form>
+          <button
+            type="button"
+            onClick={() => window.dispatchEvent(new CustomEvent("open-command-palette"))}
+            className="hidden md:flex items-center gap-1.5 rounded-xl border border-border bg-background px-3 h-11 text-xs text-foreground-muted hover:bg-background-muted transition-colors"
+          >
+            <span>Quick switch</span>
+            <kbd className="rounded-md bg-background-muted px-1.5 py-0.5 font-mono text-[10px]">⌘K</kbd>
+          </button>
+        </form>
+
+        <div className="flex flex-wrap items-center gap-2">
+          <p className="section-label mr-2">STATUS</p>
+          {STATUS_CHIPS.map((chip) => {
+            const active = statusInput === chip.value;
+            return (
+              <button
+                key={chip.value}
+                onClick={() => setStatusInput(chip.value)}
+                className={cn(
+                  "relative rounded-xl border px-4 py-1.5 text-sm font-medium transition-colors",
+                  active
+                    ? "border-foreground-intense text-foreground-intense bg-background"
+                    : "border-border text-foreground-muted hover:text-foreground-emphasis hover:bg-background-muted",
+                  active && "shadow-[inset_0_-1px_0_0_var(--foreground-intense)]",
+                )}
+              >
+                {chip.label}
+              </button>
+            );
+          })}
+          {hasActiveFilter ? (
+            <button
+              type="button"
+              onClick={clearFilters}
+              className="text-xs text-foreground-muted underline-offset-2 hover:underline"
+            >
+              清空
+            </button>
+          ) : null}
+        </div>
+      </section>
+
+      <div className="editorial-rule" />
 
       {isError ? (
         <Alert variant="destructive">
@@ -384,7 +403,7 @@ export function MemoriesPage() {
       {isPending && !data ? (
         <div aria-busy="true" className="space-y-2">
           {Array.from({ length: 5 }).map((_, index) => (
-            <Skeleton key={index} className="h-12 rounded-xl" />
+            <Skeleton key={index} className="h-24 rounded-2xl" />
           ))}
         </div>
       ) : null}
@@ -392,66 +411,51 @@ export function MemoriesPage() {
       <div ref={resultsRef} aria-busy={isFetching} aria-live="polite">
         {data ? (
           <>
-            {/* 桌面表格：整行 role=button，键盘 Enter/Space 打开详情（不止记忆 ID 列） */}
-            <div className="hidden md:block">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>记忆 ID</TableHead>
-                    <TableHead>记忆文本</TableHead>
-                    <TableHead>槽位</TableHead>
-                    <TableHead>状态</TableHead>
-                    <TableHead>生效时刻</TableHead>
-                    <TableHead>失效时刻</TableHead>
-                    <TableHead className="text-right">召回</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {data.items.map((item) => (
-                    <TableRow
-                      key={item.memory_id}
-                      tabIndex={0}
-                      role="button"
-                      aria-label={`查看记忆 ${item.memory_id}`}
-                      className="cursor-pointer focus-visible:bg-background-muted focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-[var(--ring)]"
-                      onClick={() => openDetail(item)}
-                      onKeyDown={(event) => onRowKeyDown(event, item)}
-                    >
-                      <TableCell className="max-w-40 font-mono text-xs text-foreground-muted">
-                        <span className="block truncate" title={item.memory_id}>
-                          {item.memory_id}
-                        </span>
-                      </TableCell>
-                      <TableCell className="max-w-72">
-                        <span
-                          className="block truncate text-sm text-foreground-emphasis"
-                          title={item.memory_text}
-                        >
-                          {item.memory_text}
-                        </span>
-                      </TableCell>
-                      <TableCell className="text-xs text-foreground-muted">
-                        {item.conflict_slot ?? "—"}
-                      </TableCell>
-                      <TableCell>
-                        <StatusBadge status={item.memory_status} />
-                      </TableCell>
-                      <TableCell className="text-xs text-foreground-muted">
-                        {formatTime(item.valid_at)}
-                      </TableCell>
-                      <TableCell className="text-xs text-foreground-muted">
-                        {formatTime(item.invalid_at)}
-                      </TableCell>
-                      <TableCell className="text-right font-mono text-xs tabular-nums">
-                        {item.recall_count}
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </div>
+            {/* 桌面:editorial card 列表 */}
+            <ul className="hidden md:block divide-y divide-[#f5f2ec] border-t border-b border-[#f5f2ec]">
+              {data.items.map((memory, i) => (
+                <li
+                  key={memory.memory_id}
+                  className="group cursor-pointer row-hover-warm border-l-2 border-transparent pl-4 -ml-4 pr-2 py-5 animate-editorial-fade-up"
+                  style={{ animationDelay: `${i * 40}ms` }}
+                  onClick={() => openDetail(memory)}
+                  onKeyDown={(e) => onRowKeyDown(e, memory)}
+                  tabIndex={0}
+                  role="button"
+                  aria-label={`打开记忆 ${memory.memory_id}`}
+                >
+                  <div className="flex items-baseline gap-3 mb-2">
+                    <span className="section-label text-[10px]">
+                      MEMORY · {memory.memory_id.slice(-3)}
+                    </span>
+                    <span className="font-mono text-xs text-foreground-soft">
+                      {memory.last_recalled_at ? formatTime(memory.last_recalled_at) : "never"}
+                    </span>
+                    <span className="ml-auto text-sm text-foreground-muted tabular-nums">
+                      recalled <strong className="font-semibold text-foreground-intense">{memory.recall_count}×</strong>
+                    </span>
+                  </div>
+                  <p className="text-lg leading-snug text-foreground-intense mb-2 line-clamp-2">
+                    {memory.memory_text}
+                  </p>
+                  <div className="flex flex-wrap items-center gap-3 text-xs text-foreground-muted">
+                    <span className="font-mono">{memory.user_id}</span>
+                    <span aria-hidden="true">·</span>
+                    <span>{memory.memory_scope_id}</span>
+                    {memory.conflict_slot ? (
+                      <>
+                        <span aria-hidden="true">·</span>
+                        <span>{memory.conflict_slot}</span>
+                      </>
+                    ) : null}
+                    <StatusBadge status={memory.memory_status} />
+                    <Badge variant="neutral">{memory.data_classification}</Badge>
+                  </div>
+                </li>
+              ))}
+            </ul>
 
-            {/* 移动卡片（触达 ≥44px） */}
+            {/* 移动卡片(触达 ≥44px) */}
             <div className="space-y-2 md:hidden">
               {data.items.map((item) => (
                 <Card key={item.memory_id} className="border-border-muted">
@@ -462,13 +466,15 @@ export function MemoriesPage() {
                       onClick={() => openDetail(item)}
                     >
                       <span className="flex items-center justify-between gap-2">
-                        <span className="text-sm text-foreground-emphasis">{item.memory_text}</span>
+                        <span className="text-sm text-foreground-emphasis line-clamp-2">{item.memory_text}</span>
                         <StatusBadge status={item.memory_status} />
                       </span>
                       <span className="flex gap-2 text-xs text-foreground-muted">
                         <span>{item.conflict_slot ?? "无槽位"}</span>
                         <span>·</span>
                         <span>{formatTime(item.valid_at)}</span>
+                        <span>·</span>
+                        <span className="font-mono tabular-nums">{item.recall_count}×</span>
                       </span>
                     </button>
                   </CardContent>
@@ -476,9 +482,16 @@ export function MemoriesPage() {
               ))}
             </div>
 
-            <nav className="flex items-center justify-between" aria-label="分页">
+            {/* 分页器 */}
+            <nav className="flex items-center justify-between pt-4" aria-label="分页">
+              <p className="flex items-center gap-2 text-sm tabular-nums text-foreground-muted">
+                {isFetching ? <Loader2 aria-hidden="true" className="size-3.5 animate-spin" /> : null}
+                {totalPages > 1
+                  ? `第 ${applied.page} / ${totalPages} 页 · 共 ${data.total.toLocaleString()} 条`
+                  : `共 ${data.total.toLocaleString()} 条`}
+              </p>
               {totalPages > 1 ? (
-                <>
+                <div className="flex gap-2">
                   <Button
                     variant="outline"
                     size="sm"
@@ -487,12 +500,6 @@ export function MemoriesPage() {
                   >
                     <ChevronLeft aria-hidden="true" /> 上一页
                   </Button>
-                  <p className="flex items-center gap-2 text-sm tabular-nums text-foreground-muted">
-                    {isFetching ? (
-                      <Loader2 aria-hidden="true" className="size-3.5 animate-spin" />
-                    ) : null}
-                    第 {applied.page} / {totalPages} 页 · 共 {data.total} 条
-                  </p>
                   <Button
                     variant="outline"
                     size="sm"
@@ -501,22 +508,15 @@ export function MemoriesPage() {
                   >
                     下一页 <ChevronRight aria-hidden="true" />
                   </Button>
-                </>
-              ) : (
-                <p className="flex w-full items-center justify-center gap-2 text-sm tabular-nums text-foreground-muted">
-                  {isFetching ? (
-                    <Loader2 aria-hidden="true" className="size-3.5 animate-spin" />
-                  ) : null}
-                  共 {data.total} 条
-                </p>
-              )}
+                </div>
+              ) : null}
             </nav>
           </>
         ) : null}
       </div>
 
       <Sheet open={selected !== null} onOpenChange={(open) => (open ? null : setSelected(null))}>
-        <SheetContent className="p-0 sm:max-w-xl">
+        <SheetContent className="p-0">
           {selected ? <MemoryDetail memory={selected} /> : null}
         </SheetContent>
       </Sheet>
