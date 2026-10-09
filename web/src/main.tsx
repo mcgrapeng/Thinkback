@@ -1,4 +1,4 @@
-import { StrictMode, useEffect } from "react";
+import { StrictMode, Suspense, lazy, useEffect } from "react";
 import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
@@ -13,12 +13,23 @@ import { Layout } from "@/components/layout";
 import { ErrorBoundary } from "@/components/error-boundary";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { OverviewPage } from "@/pages/overview";
-import { TasksPage } from "@/pages/tasks";
-import { MemoriesPage } from "@/pages/memories";
-import { GovernPage } from "@/pages/govern";
-import { AuditPage } from "@/pages/audit";
-import { ConfigPage } from "@/pages/config";
+import { SkeletonLines } from "@/components/ui/skeleton";
 import "@/index.css";
+
+const TasksPage = lazy(() => import("@/pages/tasks").then((m) => ({ default: m.TasksPage })));
+const MemoriesPage = lazy(() => import("@/pages/memories").then((m) => ({ default: m.MemoriesPage })));
+const GovernPage = lazy(() => import("@/pages/govern").then((m) => ({ default: m.GovernPage })));
+const AuditPage = lazy(() => import("@/pages/audit").then((m) => ({ default: m.AuditPage })));
+const ConfigPage = lazy(() => import("@/pages/config").then((m) => ({ default: m.ConfigPage })));
+
+function PageFallback() {
+  return (
+    <div aria-busy="true" className="space-y-4">
+      <SkeletonLines count={3} />
+      <div className="h-48 rounded-2xl bg-background-muted animate-shimmer" />
+    </div>
+  );
+}
 
 const rootRoute = createRootRoute({
   component: () => {
@@ -28,7 +39,9 @@ const rootRoute = createRootRoute({
     }, []);
     return (
       <Layout>
-        <Outlet />
+        <Suspense fallback={<PageFallback />}>
+          <Outlet />
+        </Suspense>
       </Layout>
     );
   },

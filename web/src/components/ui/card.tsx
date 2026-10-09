@@ -6,7 +6,7 @@ const cardVariants = cva("rounded-2xl border bg-card text-card-foreground", {
   variants: {
     variant: {
       default: "border-border shadow-xs",
-      elevated: "rounded-3xl border-[#ebe7df] shadow-md transition-shadow hover:shadow-lg",
+      elevated: "rounded-3xl border-border shadow-md transition-shadow hover:shadow-lg",
     },
   },
   defaultVariants: {

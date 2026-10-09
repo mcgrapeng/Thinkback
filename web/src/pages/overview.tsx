@@ -458,7 +458,7 @@ export function OverviewPage() {
               {failed} item{failed !== 1 ? "s" : ""} →
             </Link>
           </div>
-          <ul className="divide-y divide-[#f5f2ec] border-y border-[#f5f2ec]">
+          <ul className="divide-y divide-border-muted border-y border-border-muted">
             {failedTasks.slice(0, 5).map((task) => (
               <li
                 key={task.task_id}

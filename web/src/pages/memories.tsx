@@ -117,7 +117,7 @@ function MemoryDetail({ memory }: { memory: AdminMemoryItem }) {
   const source = useMemorySource(memory.memory_id);
   return (
     <div className="flex h-full flex-col overflow-hidden">
-      <SheetHeader className="space-y-3 border-b border-[#f5f2ec] p-8 pb-6">
+      <SheetHeader className="space-y-3 border-b border-border-muted p-8 pb-6">
         <p className="section-label">MEMORY · {memory.memory_id.slice(-3)}</p>
         <SheetTitle className="text-3xl font-semibold tracking-tight leading-tight">
           {memory.memory_text}
@@ -547,7 +547,7 @@ export function MemoriesPage() {
         {data ? (
           <>
             {/* 桌面:editorial card 列表 */}
-            <ul className="hidden md:block divide-y divide-[#f5f2ec] border-t border-b border-[#f5f2ec]">
+            <ul className="hidden md:block divide-y divide-border-muted border-t border-b border-border-muted">
               {data.items.map((memory, i) => {
                 const isSelected = selectedIds.has(String(i));
                 const isFocused = selectedIndex === i;
@@ -685,7 +685,7 @@ export function MemoriesPage() {
 
       {/* 底部操作条:多选时显示 */}
       {selectedIds.size > 0 ? (
-        <div className="fixed bottom-0 left-0 right-0 z-40 border-t border-[#ebe7df] bg-background/95 backdrop-blur-sm px-6 py-3 flex items-center justify-between animate-editorial-fade-up">
+        <div className="fixed bottom-0 left-0 right-0 z-40 border-t border-border bg-background/95 backdrop-blur-sm px-6 py-3 flex items-center justify-between animate-editorial-fade-up">
           <div className="flex items-center gap-3 text-sm text-foreground-muted">
             <span className="font-mono tabular-nums text-foreground-emphasis">
               {selectedIds.size}
@@ -737,7 +737,7 @@ export function MemoriesPage() {
                 {[compareItems[0], compareItems[1]].map((item, idx) => {
                   const other = idx === 0 ? compareItems[1] : compareItems[0];
                   return (
-                    <div key={idx} className="rounded-2xl border border-[#ebe7df] p-4 space-y-3">
+                    <div key={idx} className="rounded-2xl border border-border p-4 space-y-3">
                       <p className="section-label text-[10px]">
                         {idx === 0 ? "LEFT" : "RIGHT"} · {item.memory_id.slice(-6)}
                       </p>

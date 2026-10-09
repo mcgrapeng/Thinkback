@@ -335,7 +335,7 @@ export function TasksPage() {
           <p className="text-sm text-foreground-muted tabular-nums">
             共 {data.length} 个任务
           </p>
-          <ul className="divide-y divide-[#f5f2ec] border-t border-b border-[#f5f2ec]">
+          <ul className="divide-y divide-border-muted border-t border-b border-border-muted">
             {data.map((task, i) => (
               <TaskCard
                 key={task.task_id}

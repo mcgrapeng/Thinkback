@@ -125,7 +125,7 @@ function TimelineNode({
       </div>
       {/* 右侧:内容卡 */}
       <div className="flex-1 min-w-0">
-        <div className="rounded-2xl border border-[#ebe7df] bg-card p-4 hover:shadow-md transition-shadow">
+        <div className="rounded-2xl border border-border bg-card p-4 hover:shadow-md transition-shadow">
           <div className="flex flex-wrap items-center gap-2 mb-2">
           <Badge variant={tone as "error" | "info" | "violet"}>
               {label}
@@ -223,7 +223,7 @@ export function AuditPage() {
       ) : isPending ? (
         <div aria-busy="true" className="space-y-4 pl-24">
           {Array.from({ length: 3 }).map((_, i) => (
-            <div key={i} className="rounded-2xl border border-[#ebe7df] bg-card p-4 space-y-2">
+            <div key={i} className="rounded-2xl border border-border bg-card p-4 space-y-2">
               <Skeleton className="h-4 w-1/4" />
               <SkeletonLines count={2} />
             </div>

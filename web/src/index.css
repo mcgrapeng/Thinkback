@@ -31,6 +31,8 @@
   --border-strong: #d6cfbe;
   --border-emphasis: #99a1af;
   --border-intense: #6a7282;
+  --border-warm: #e8e2d4;
+  --hover-warm: #fdf8ed;
   /* 主色（黑白）与控件 */
   --primary: #101828;
   --primary-foreground: #ffffff;
@@ -71,6 +73,8 @@
   --border-strong: #364153;
   --border-emphasis: #4a5565;
   --border-intense: #6a7282;
+  --border-warm: #1e2939;
+  --hover-warm: #1a2232;
   --primary: #f3f4f6;
   --primary-foreground: #101828;
   --secondary: #1e2939;
@@ -111,6 +115,8 @@
   --color-border-strong: var(--border-strong);
   --color-border-emphasis: var(--border-emphasis);
   --color-border-intense: var(--border-intense);
+  --color-border-warm: var(--border-warm);
+  --color-hover-warm: var(--hover-warm);
   /* 控件语义 */
   --color-primary: var(--primary);
   --color-primary-foreground: var(--primary-foreground);
