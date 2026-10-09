@@ -112,11 +112,71 @@ flowchart LR
 
 A web UI for inspecting and repairing the memory layer — background task states with retry
 counts and last error, per-user memory browsing with source back-links, governance actions,
-and an audit trail.
+and an audit trail. Powered by React 19 + TanStack Query/Router, designed in Editorial
+Premium style.
+
+### Overview — at-a-glance system health
 
 <div align="center">
-  <img src="assets/screenshots/admin-tasks.jpeg" alt="Thinkback admin dashboard — task monitoring" width="800">
-  <p><em>Task monitoring: every write / extract / rebuild is a state machine, with failures and dead-letters surfaced instead of swallowed.</em></p>
+  <img src="assets/screenshots/01-overview.png" alt="Thinkback overview — 96px hero KPI with sparkline, system pulse, needs attention, and heatmaps" width="100%">
+  <p><em>96px hero KPI with 24h sparkline · System Pulse with 4 sub-KPIs · Needs Attention list · 5min throughput heatmap · Recent governance audit timeline</em></p>
+</div>
+
+### Memory browser — search, source back-link, compare
+
+<div align="center">
+  <img src="assets/screenshots/02-memories-list.png" alt="Memory browser — editorial card list with status chips and 24h sparkline" width="100%">
+  <p><em>Editorial card list with status chips · ⌘K command palette · keyboard nav (j/k/x) · URL deep links</em></p>
+</div>
+
+<div align="center">
+  <img src="assets/screenshots/02-memories-detail.png" alt="Memory detail drawer — fields with tooltips, source back-link, recall history" width="100%">
+  <p><em>Detail drawer: every field has an ⓘ tooltip explaining meaning · source back-link to journal · recall count</em></p>
+</div>
+
+### Tasks — KPI sparklines, state machine, dead-lettering
+
+<div align="center">
+  <img src="assets/screenshots/03-tasks-list.png" alt="Tasks monitoring — 4 KPIs with sparklines, status tabs, task card list" width="100%">
+  <p><em>4 KPIs with sparklines (color-coded: red for FAILED, violet for DEAD LETTER) · status tabs · task cards with retry count</em></p>
+</div>
+
+### Governance — scoped delete with confirmation
+
+<div align="center">
+  <img src="assets/screenshots/04-govern-delete.png" alt="Governance console — delete memory form with scope selector and confirmation" width="100%">
+  <p><em>Delete memory form: scope selector (memory / session / all) · semantic-color left border · confirm dialog · Spinner during execution</em></p>
+</div>
+
+### Integration & mem0 prompt management
+
+<div align="center">
+  <img src="assets/screenshots/07-integration-keys.png" alt="Integration — API Key management with generate dialog" width="100%">
+  <p><em>API Key management: list · generate (one-time plaintext) · revoke (soft delete) · protocol overview · endpoints reference · error codes</em></p>
+</div>
+
+<div align="center">
+  <img src="assets/screenshots/07-integration-prompts.png" alt="mem0 prompt management — architecture overview, configurable prompts, optimization tips" width="100%">
+  <p><em>mem0 深度管理: 4 阶段流水线说明 · custom_instructions / update_memory_prompt / memory_answer_prompt · 调优提示 + 示例</em></p>
+</div>
+
+### Audit timeline + system config
+
+<div align="center">
+  <img src="assets/screenshots/05-audit.png" alt="Audit timeline — color-coded dots, vertical line, expandable JSON details" width="100%">
+  <p><em>Audit timeline: color-coded action dots (delete / update / rebuild) · expandable JSON details · action filter</em></p>
+</div>
+
+<div align="center">
+  <img src="assets/screenshots/06-config.png" alt="System configuration — grouped by category with SECRET badges and search aliases" width="100%">
+  <p><em>System config: grouped by category (PostgreSQL, L2, L3, etc.) · SECRET badges · search aliases (数据库 / 向量库)</em></p>
+</div>
+
+### Mobile-responsive
+
+<div align="center">
+  <img src="assets/screenshots/08-mobile.png" alt="Mobile view — same admin dashboard adapted for narrow screens" width="50%">
+  <p><em>Same dashboard adapted for narrow viewports · mobile-friendly card layout</em></p>
 </div>
 
 ## ✦ Quickstart
