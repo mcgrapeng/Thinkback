@@ -696,45 +696,53 @@ export function OverviewPage() {
                 查看全部 →
               </Link>
             </div>
-            <CardDescription className="text-xs">
-              Top-5 · 更新于{" "}
-              {dataUpdatedAt
-                ? new Date(dataUpdatedAt).toLocaleTimeString("zh-CN", { hour12: false })
-                : "未知"}
+            <CardDescription className="text-xs flex items-center gap-2">
+              Top-5
+              <StaleIndicator updatedAt={dataUpdatedAt} prefix="updated" />
             </CardDescription>
           </CardHeader>
           <CardContent className="p-0">
-            <table className="w-full text-sm">
-              <tbody className="divide-y divide-[#f5f2ec]">
-                {data.recent_audit_actions.map((action) => (
-                  <tr
+            <ol className="relative pl-6 pr-4">
+              {data.recent_audit_actions.map((action, i) => {
+                const tone = action.action === "delete" ? "bg-error" : action.action === "update" ? "bg-info" : "bg-violet";
+                const label = action.action === "delete" ? "删除" : action.action === "update" ? "更新" : "重建";
+                return (
+                  <li
                     key={action.audit_id}
-                    className="row-hover-warm border-l-2 border-transparent transition-colors"
+                    className="relative flex items-center gap-3 py-3 animate-editorial-fade-up"
+                    style={{ animationDelay: `${i * 40}ms` }}
                   >
-                    <td className="py-3.5 pl-4 pr-2">
-                      <Badge variant={action.action === "delete" ? "error" : "neutral"}>
-                        {action.action}
-                      </Badge>
-                    </td>
-                    <td className="py-3.5 pr-2 font-mono text-xs text-foreground-emphasis">
+                    <div className="absolute -left-3.5 top-1/2 -translate-y-1/2 flex flex-col items-center">
+                      <span className={cn("z-10 size-2.5 rounded-full ring-4 ring-background", tone)} />
+                      {i < data.recent_audit_actions.length - 1 ? (
+                        <span className="absolute top-2.5 h-[calc(100%+0.5rem)] w-px bg-border" />
+                      ) : null}
+                    </div>
+                    <Badge variant={action.action === "delete" ? "error" : action.action === "update" ? "info" : "violet"}>
+                      {label}
+                    </Badge>
+                    <Link
+                      to="/audit"
+                      className="flex-1 truncate font-mono text-xs text-foreground-emphasis hover:text-foreground-intense hover:underline"
+                      title={action.target}
+                    >
                       {truncateMiddle(action.target, 18, 6)}
-                    </td>
-                    <td className="py-3.5 pr-4 text-right text-xs text-foreground-muted tabular-nums">
+                    </Link>
+                    <span className="text-xs text-foreground-muted tabular-nums">
                       {action.created_at
                         ? new Date(action.created_at).toLocaleString("zh-CN", {
                             month: "2-digit",
                             day: "2-digit",
                             hour: "2-digit",
                             minute: "2-digit",
-                            second: "2-digit",
                             hour12: false,
                           }).replace(/\//g, "-")
                         : "—"}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+                    </span>
+                  </li>
+                );
+              })}
+            </ol>
           </CardContent>
         </Card>
       ) : null}
