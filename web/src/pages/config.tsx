@@ -1,15 +1,20 @@
-/** P6 系统配置（只读）：分组 key-value + 敏感值脱敏 + 搜索。 */
+/** P6 系统配置:Editorial Premium 重做。
+ *
+ * 分组 key-value + 敏感值脱敏 + 搜索;含 secret 标记(URL/TOKEN/KEY/PASSWORD/SECRET 关键词)。 */
 
 import { useMemo, useState } from "react";
-import { AlertTriangle, SearchX } from "lucide-react";
+import { useSearch } from "@tanstack/react-router";
+import { AlertTriangle, Check, Lock, Search, SearchX } from "lucide-react";
 import { toast } from "sonner";
 import { useConfig } from "@/api/queries";
 import { PageHeader } from "@/components/page-header";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { Skeleton } from "@/components/ui/skeleton";
+import { SkeletonLines } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/empty-state";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { Info } from "lucide-react";
 
 const GROUP_LABELS: Record<string, string> = {
   app: "应用标识",
@@ -28,7 +33,6 @@ const GROUP_LABELS: Record<string, string> = {
   otel: "可观测",
 };
 
-/** 搜索别名：中文关键词 → 分组（搜「数据库」命中 PostgreSQL，搜「向量库」命中 Milvus）。 */
 const GROUP_ALIASES: Record<string, string> = {
   postgres: "数据库 database pg",
   database: "数据库 database",
@@ -42,6 +46,24 @@ const GROUP_ALIASES: Record<string, string> = {
   api: "接口 api",
 };
 
+/** 敏感字段关键词(大写不敏感) */
+const SECRET_PATTERNS = [
+  /password/i,
+  /secret/i,
+  /token/i,
+  /api[_-]?key/i,
+  /credential/i,
+  /private[_-]?key/i,
+];
+
+function isSecret(name: string, value: unknown): boolean {
+  if (SECRET_PATTERNS.some((re) => re.test(name))) return true;
+  if (typeof value === "string") {
+    if (value.includes("***") || value.includes("://") && /:\*\*\*@/.test(value)) return true;
+  }
+  return false;
+}
+
 function groupOf(name: string): string {
   const head = name.split("_", 1)[0].toLowerCase();
   return GROUP_LABELS[head] ? head : "general";
@@ -53,55 +75,100 @@ function renderValue(value: unknown): string {
   return String(value);
 }
 
+function CopyButton({ text, label }: { text: string; label?: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button
+      type="button"
+      className="inline-flex items-center gap-1.5 rounded-md px-1.5 py-0.5 font-mono text-xs text-foreground-emphasis hover:bg-background-muted focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--ring)] transition-colors"
+      title={`${text}（点击复制）`}
+      onClick={() => {
+        void navigator.clipboard?.writeText(text).then(() => {
+          setCopied(true);
+          toast.success(label ? `已复制 ${label}` : "已复制");
+          setTimeout(() => setCopied(false), 1500);
+        });
+      }}
+    >
+      <span className="max-w-[40ch] truncate">{text}</span>
+      {copied ? (
+        <Check aria-hidden="true" className="size-3 text-success" />
+      ) : (
+        <span aria-hidden="true" className="text-foreground-soft text-[10px]">copy</span>
+      )}
+    </button>
+  );
+}
+
 export function ConfigPage() {
+  const search = useSearch({ from: "/config" }) as { q?: string };
   const { data, isPending, isError } = useConfig();
-  const [search, setSearch] = useState("");
+  const [searchInput, setSearchInput] = useState(search.q ?? "");
 
   const groups = useMemo(() => {
     if (!data) return [];
-    const needle = search.trim().toLowerCase();
-    const bucket = new Map<string, Array<{ name: string; value: unknown }>>();
+    const needle = searchInput.trim().toLowerCase();
+    const bucket = new Map<string, Array<{ name: string; value: unknown; secret: boolean }>>();
     for (const field of data.fields) {
       const group = groupOf(field.name);
-      // 搜索命中：字段名 ∪ 分组中文名 ∪ 分组别名
+      const secret = isSecret(field.name, field.value);
       if (
         needle &&
         !field.name.toLowerCase().includes(needle) &&
+        !renderValue(field.value).toLowerCase().includes(needle) &&
         !(GROUP_LABELS[group] ?? "").toLowerCase().includes(needle) &&
         !(GROUP_ALIASES[group] ?? "").toLowerCase().includes(needle)
       ) {
         continue;
       }
-      bucket.set(group, [...(bucket.get(group) ?? []), field]);
+      bucket.set(group, [
+        ...(bucket.get(group) ?? []),
+        { name: field.name, value: field.value, secret },
+      ]);
     }
     return Array.from(bucket.entries()).sort(([a], [b]) => a.localeCompare(b));
-  }, [data, search]);
+  }, [data, searchInput]);
 
   return (
     <div className="space-y-6">
       <PageHeader
-        title="系统配置"
+        title="CONFIG · 系统配置"
         description="运行时只读视图 · 敏感值已脱敏（本端点不回明文）"
         actions={
           data ? (
-            <Badge variant="secondary" className="font-mono">
-              环境：{data.environment}
-            </Badge>
+            <div className="flex items-center gap-2 text-xs">
+              <span className="text-foreground-muted">环境</span>
+              <Badge variant="secondary" className="font-mono">
+                {data.environment}
+              </Badge>
+            </div>
           ) : undefined
         }
       />
 
-      <div className="max-w-sm">
-        <label className="sr-only" htmlFor="config-search">
-          搜索配置项
-        </label>
-        <Input
-          id="config-search"
-          placeholder="搜索配置项名称…"
-          value={search}
-          onChange={(event) => setSearch(event.target.value)}
-        />
-      </div>
+      {/* 搜索 + 别名提示 */}
+      <section className="animate-editorial-fade-up space-y-3">
+        <div className="relative max-w-md">
+          <Search
+            aria-hidden="true"
+            className="pointer-events-none absolute left-4 top-1/2 size-4 -translate-y-1/2 text-foreground-muted"
+          />
+          <Input
+            id="config-search"
+            className="pl-11 h-11 rounded-xl"
+            placeholder="搜索配置项名称 / 别名(如「数据库」「向量库」)…"
+            value={searchInput}
+            onChange={(event) => setSearchInput(event.target.value)}
+            aria-describedby="config-search-hint"
+          />
+        </div>
+        <p id="config-search-hint" className="flex items-center gap-1.5 text-xs text-foreground-muted">
+          <Info aria-hidden="true" className="size-3" />
+          提示:支持中英文搜索 + 分组别名。例如搜「数据库」命中 PostgreSQL,搜「向量库」命中 Milvus。
+        </p>
+      </section>
+
+      <div className="editorial-rule" />
 
       {isError ? (
         <EmptyState
@@ -112,39 +179,57 @@ export function ConfigPage() {
           action={{ label: "重试", onClick: () => window.location.reload() }}
         />
       ) : isPending ? (
-        <div aria-busy="true" className="space-y-3">
-          <Skeleton className="h-40" />
-          <Skeleton className="h-40" />
+        <div aria-busy="true" className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+          {Array.from({ length: 4 }).map((_, i) => (
+            <Card key={i} className="border-[#ebe7df]">
+              <CardHeader className="border-b border-border-muted pb-3">
+                <SkeletonLines count={1} />
+              </CardHeader>
+              <CardContent className="space-y-2">
+                <SkeletonLines count={4} gap={1} />
+              </CardContent>
+            </Card>
+          ))}
         </div>
       ) : (
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-            {groups.map(([group, fields]) => (
-              <Card key={group}>
-                <CardHeader className="border-b border-border-muted pb-3">
-                  <CardTitle className="text-base">{GROUP_LABELS[group] ?? "其他"}</CardTitle>
-                  <CardDescription>{fields.length} 项</CardDescription>
-                </CardHeader>
-              <CardContent>
-                <dl className="space-y-0">
+          {groups.map(([group, fields]) => (
+            <Card key={group} variant="elevated" className="animate-editorial-fade-up">
+              <CardHeader>
+                <CardTitle className="text-base">{GROUP_LABELS[group] ?? "其他"}</CardTitle>
+                <CardDescription>{fields.length} 项</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-0">
+                <dl>
                   {fields.map((field) => (
                     <div
                       key={field.name}
-                      className="flex items-baseline justify-between gap-3 border-b border-border-muted py-2 last:border-0"
+                      className="flex items-center justify-between gap-3 border-b border-[#f5f2ec] py-2.5 last:border-0"
                     >
-                      <dt className="font-mono text-xs text-foreground-muted">{field.name}</dt>
-                      <dd className="max-w-[60%] truncate text-right font-mono text-xs text-foreground-emphasis">
-                        <button
-                          type="button"
-                          className="hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--ring)]"
-                          title={`${field.name} = ${renderValue(field.value)}（点击复制）`}
-                          onClick={() => {
-                            void navigator.clipboard
-                              ?.writeText(`${field.name} = ${renderValue(field.value)}`)
-                              .then(() => toast.success("已复制配置项"));
-                          }}
-                        >
-                          {renderValue(field.value)}
-                        </button>
+                      <dt className="flex items-center gap-1.5 font-mono text-xs text-foreground-muted">
+                        <span>{field.name}</span>
+                        {field.secret ? (
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <span
+                                aria-label="敏感字段"
+                                className="inline-flex items-center gap-0.5 rounded-md bg-warning-soft px-1 py-0.5 text-[10px] font-medium text-warning"
+                              >
+                                <Lock aria-hidden="true" className="size-2.5" />
+                                SECRET
+                              </span>
+                            </TooltipTrigger>
+                            <TooltipContent className="max-w-xs">
+                              敏感字段:值已脱敏,不回明文。
+                            </TooltipContent>
+                          </Tooltip>
+                        ) : null}
+                      </dt>
+                      <dd className="flex items-center gap-2">
+                        <CopyButton
+                          text={`${field.name} = ${renderValue(field.value)}`}
+                          label="配置项"
+                        />
                       </dd>
                     </div>
                   ))}
@@ -157,7 +242,7 @@ export function ConfigPage() {
               <EmptyState
                 icon={SearchX}
                 title="没有匹配的配置项"
-                description="试试别的搜索词，或用别名(如「数据库」命中 PostgreSQL、「向量库」命中 Milvus)。"
+                description="试试别的搜索词,或用别名(如「数据库」命中 PostgreSQL、「向量库」命中 Milvus)。"
               />
             </div>
           ) : null}
