@@ -261,3 +261,67 @@ web/test-results/
 # 根目录级 node_modules(之前只忽略了 web/node_modules/)
 # 用 **/ 模式匹配任何深度的 node_modules,防御未来在 src/ 或 tests/ 下引入
 **/node_modules/
+
+# ─── OS / 编辑器 / 临时文件 ──────────────────────────────────────────────
+# macOS Finder metadata
+.DS_Store
+.AppleDouble
+.LSOverride
+# Windows
+Thumbs.db
+ehthumbs.db
+ehthumbs_vista.db
+Desktop.ini
+# Linux
+*~
+# 编辑器 swap/undo
+*.swp
+*.swo
+*.swn
+# 临时 / 备份文件
+*.tmp
+*.bak
+*.backup
+*.orig
+*.rej
+# 压缩/打包临时文件
+*.tar.gz.tmp
+*.zip.tmp
+
+# ─── 项目特定 ──────────────────────────────────────────────────────────
+# k8s 真实 secret(只有 .example 应该被跟踪)
+k8s/secret.yaml
+k8s/*.local.yaml
+k8s/overlays/local/
+
+# 编辑器/IDE 杂项
+*.iml
+.idea/workspace.xml
+.idea/tasks.xml
+.idea/dictionaries/
+.idea/shelf/
+
+# Lock files(项目用 uv + npm,其他不应被误跟踪)
+yarn.lock
+pnpm-lock.yaml
+bun.lockb
+
+# Python 包管理(项目用 uv)
+Pipfile
+Pipfile.lock
+poetry.lock
+
+# 测试 / 覆盖率输出
+htmlcov/
+.coverage.*
+coverage.xml
+junit.xml
+nosetests.xml
+pytest.xml
+html_report/
+
+# Playwright / 测试输出
+test-results/
+playwright-report/
+blob-report/
+playwright/.cache/
