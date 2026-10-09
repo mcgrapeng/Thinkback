@@ -218,6 +218,21 @@ def create_app() -> FastAPI:
         debug=settings.debug,
     )
     _register_request_middleware(app)
+
+    # 接入协议:限流 + 幂等 + 标准化错误
+    from thinkback.api.errors_standard import register_exception_handlers
+    from thinkback.api.idempotency import IdempotencyMiddleware
+    from thinkback.api.ratelimit import RateLimitMiddleware
+
+    app.add_middleware(IdempotencyMiddleware)
+    app.add_middleware(RateLimitMiddleware)
+    register_exception_handlers(app)
+
+    # 开发环境注册默认 API key
+    if settings.debug:
+        from thinkback.api.auth import init_default_keys
+
+        init_default_keys()
     app.include_router(health_router)
     app.include_router(memory_router)
     # 治理台 M1：只读聚合端点（Bearer 可选鉴权），见 docs/管理后台设计方案。
