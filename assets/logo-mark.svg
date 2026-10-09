@@ -1,44 +1,29 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-label="Thinkback">
   <title>Thinkback</title>
-  <desc>Thinkback mark — three memory layers: round journal, session summary, long-term memory. The outer arc represents recall across time.</desc>
+  <desc>Thinkback mark — three-node memory network: two source nodes connecting down to a violet center node, with the center node ringed in white to mark the present moment.</desc>
   <defs>
-    <linearGradient id="tb-core" x1="40" y1="40" x2="88" y2="88" gradientUnits="userSpaceOnUse">
-      <stop offset="0%" stop-color="#0F172A"/>
-      <stop offset="100%" stop-color="#1E293B"/>
-    </linearGradient>
-    <linearGradient id="tb-mid" x1="32" y1="32" x2="96" y2="96" gradientUnits="userSpaceOnUse">
-      <stop offset="0%" stop-color="#475569"/>
-      <stop offset="100%" stop-color="#64748B"/>
-    </linearGradient>
-    <linearGradient id="tb-out" x1="24" y1="24" x2="104" y2="104" gradientUnits="userSpaceOnUse">
-      <stop offset="0%" stop-color="#94A3B8"/>
-      <stop offset="100%" stop-color="#CBD5E1"/>
-    </linearGradient>
     <linearGradient id="tb-violet" x1="40" y1="88" x2="88" y2="40" gradientUnits="userSpaceOnUse">
       <stop offset="0%" stop-color="#7C3AED"/>
       <stop offset="100%" stop-color="#A78BFA"/>
     </linearGradient>
   </defs>
 
-  <!-- Outer ring (L3 long-term) -->
-  <circle cx="64" cy="64" r="58" fill="none"
-          stroke="url(#tb-out)" stroke-width="3" opacity="0.7"/>
-  <circle cx="64" cy="64" r="58" fill="none"
-          stroke="url(#tb-out)" stroke-width="1" stroke-dasharray="2 4" opacity="0.4"
-          transform="rotate(45 64 64)"/>
+  <!-- Two source nodes (top) — L1/L2 storage -->
+  <circle cx="36" cy="36" r="11" fill="#0F172A"/>
+  <circle cx="92" cy="36" r="11" fill="#0F172A"/>
 
-  <!-- Middle ring (L2 summary) -->
-  <circle cx="64" cy="64" r="42" fill="none"
-          stroke="url(#tb-mid)" stroke-width="2.5" opacity="0.85"/>
+  <!-- Violet center node (bottom) — L3 long-term + the "present" -->
+  <circle cx="64" cy="92" r="14" fill="url(#tb-violet)"/>
+  <!-- White inner ring on violet — marks the focal point -->
+  <circle cx="64" cy="92" r="6.5" fill="none" stroke="#F8FAFC" stroke-width="2.2"/>
+  <!-- Violet dot at the very center — the "present moment" -->
+  <circle cx="64" cy="92" r="3" fill="url(#tb-violet)"/>
 
-  <!-- Core (L1 journal) -->
-  <circle cx="64" cy="64" r="26" fill="url(#tb-core)"/>
-
-  <!-- Recall echo: arrow from inside to outside -->
-  <path d="M 58 54 L 76 64 L 58 74" fill="none" stroke="#F8FAFC"
-        stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/>
-
-  <!-- Violet accent dot (the present moment) -->
-  <circle cx="64" cy="64" r="4" fill="url(#tb-violet)"/>
-  <circle cx="64" cy="64" r="2" fill="#F8FAFC"/>
+  <!-- Three connection lines, two violet (to center) + one subtle between tops -->
+  <line x1="36" y1="36" x2="64" y2="92" stroke="#7C3AED" stroke-width="5"
+        stroke-linecap="round" opacity="0.85"/>
+  <line x1="92" y1="36" x2="64" y2="92" stroke="#7C3AED" stroke-width="5"
+        stroke-linecap="round" opacity="0.85"/>
+  <line x1="36" y1="36" x2="92" y2="36" stroke="#64748B" stroke-width="3.5"
+        stroke-linecap="round" opacity="0.55"/>
 </svg>
