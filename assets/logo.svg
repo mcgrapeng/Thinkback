@@ -1,24 +1,32 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 470 128" role="img" aria-label="Thinkback">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 80" role="img" aria-label="Thinkback">
   <title>Thinkback</title>
   <defs>
-    <linearGradient id="tb-lockup" x1="14" y1="22" x2="108" y2="110" gradientUnits="userSpaceOnUse">
-      <stop offset="0%" stop-color="#22D3EE"/>
-      <stop offset="100%" stop-color="#4F46E5"/>
+    <linearGradient id="tb-wm-core" x1="20" y1="20" x2="60" y2="60" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#0F172A"/>
+      <stop offset="100%" stop-color="#1E293B"/>
+    </linearGradient>
+    <linearGradient id="tb-wm-violet" x1="20" y1="60" x2="60" y2="20" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#7C3AED"/>
+      <stop offset="100%" stop-color="#A78BFA"/>
     </linearGradient>
   </defs>
 
-  <!-- mark: recall echo -->
-  <g transform="translate(-5,0)">
-    <path d="M 97 30 L 59 64 L 97 98" fill="none" stroke="url(#tb-lockup)" stroke-width="15"
-          stroke-linecap="round" stroke-linejoin="round"/>
-    <path d="M 71 40 L 43 64 L 71 88" fill="none" stroke="url(#tb-lockup)" stroke-width="13"
-          stroke-linecap="round" stroke-linejoin="round" opacity="0.55"/>
-    <path d="M 48 50 L 28 64 L 48 78" fill="none" stroke="url(#tb-lockup)" stroke-width="11"
-          stroke-linecap="round" stroke-linejoin="round" opacity="0.32"/>
+  <!-- Logo mark, scaled down -->
+  <g transform="translate(8, 8) scale(0.5)">
+    <circle cx="64" cy="64" r="58" fill="none" stroke="#CBD5E1" stroke-width="3" opacity="0.7"/>
+    <circle cx="64" cy="64" r="42" fill="none" stroke="#64748B" stroke-width="2.5" opacity="0.85"/>
+    <circle cx="64" cy="64" r="26" fill="url(#tb-wm-core)"/>
+    <path d="M 58 54 L 76 64 L 58 74" fill="none" stroke="#F8FAFC" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/>
+    <circle cx="64" cy="64" r="4" fill="url(#tb-wm-violet)"/>
   </g>
 
-  <!-- wordmark -->
-  <text x="132" y="82"
-        font-family="Inter, ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif"
-        font-size="62" font-weight="800" letter-spacing="-2.2" fill="#0B1220">Thinkback</text>
+  <!-- Wordmark: bold sans for "Thinkback" -->
+  <text x="92" y="52" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif"
+        font-size="28" font-weight="700" fill="#0F172A" letter-spacing="-0.5">
+    Thinkback
+  </text>
+  <text x="92" y="68" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif"
+        font-size="10" font-weight="500" fill="#64748B" letter-spacing="0.8">
+    MEMORY LAYER FOR AI
+  </text>
 </svg>
