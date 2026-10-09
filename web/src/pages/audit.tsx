@@ -1,13 +1,17 @@
-/** P5 审计日志：只读，治理动作全留痕。 */
+/** P5 审计日志:Editorial Premium 时间轴视图。
+ *
+ * 每条记录是一条时间轴节点:左侧时间(竖向刻度) + 右侧操作内容(操作者/动作/目标/详情)。 */
 
 import { useState } from "react";
+import { useSearch } from "@tanstack/react-router";
 import { AlertTriangle, ScrollText } from "lucide-react";
 import { toast } from "sonner";
 import { useAudit } from "@/api/queries";
 import { PageHeader } from "@/components/page-header";
-import { Badge } from "@/components/ui/badge";
+import { StaleIndicator } from "@/components/stale-indicator";
+import { Skeleton, SkeletonLines } from "@/components/ui/skeleton";
+import { EmptyState } from "@/components/empty-state";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
 import {
   Select,
   SelectContent,
@@ -15,17 +19,10 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Skeleton } from "@/components/ui/skeleton";
-import { EmptyState } from "@/components/empty-state";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
-import { formatTime } from "@/lib/utils";
+import { Badge } from "@/components/ui/badge";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { Info } from "lucide-react";
+import { cn } from "@/lib/utils";
 
 const ACTION_OPTIONS = [
   { value: "all", label: "全部动作" },
@@ -40,30 +37,133 @@ const ACTION_LABELS: Record<string, string> = {
   rebuild: "重建",
 };
 
-/** 动作徽章语义：删除 → error，其余中性（不借用任务状态色）。 */
-const ACTION_TONES: Record<string, "error" | "neutral"> = {
+const ACTION_TONE: Record<string, "error" | "info" | "violet"> = {
   delete: "error",
-  update: "neutral",
-  rebuild: "neutral",
+  update: "info",
+  rebuild: "violet",
 };
 
-function ActionBadge({ action }: { action: string }) {
-  if (action === "delete") {
-    return (
-      <Badge variant="error" className="bg-destructive text-destructive-foreground">
-        {ACTION_LABELS[action] ?? action}
-      </Badge>
-    );
-  }
-  const tone = ACTION_TONES[action] ?? "neutral";
-  return <Badge variant={tone}>{ACTION_LABELS[action] ?? action}</Badge>;
+const PAGE_SIZE = 50;
+
+function FieldHint({ text }: { text: string }) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <button
+          type="button"
+          aria-label="字段说明"
+          className="inline-flex size-3.5 items-center justify-center rounded-full text-foreground-soft hover:text-foreground-emphasis hover:bg-background-muted transition-colors focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--ring)]"
+        >
+          <Info aria-hidden="true" className="size-3" />
+        </button>
+      </TooltipTrigger>
+      <TooltipContent className="max-w-xs">{text}</TooltipContent>
+    </Tooltip>
+  );
+}
+
+function TimelineNode({
+  createdAt,
+  action,
+  target,
+  operator,
+  detail,
+  isLast,
+  index,
+}: {
+  createdAt: string;
+  action: string;
+  target: string;
+  operator: string;
+  detail: Record<string, unknown>;
+  isLast: boolean;
+  index: number;
+}) {
+  const tone = ACTION_TONE[action] ?? "neutral";
+  const label = ACTION_LABELS[action] ?? action;
+  return (
+    <li
+      className="relative flex gap-4 pb-6 animate-editorial-fade-up"
+      style={{ animationDelay: `${Math.min(index * 30, 400)}ms` }}
+    >
+      {/* 左侧:时间 + 时间轴竖线 */}
+      <div className="flex w-20 shrink-0 flex-col items-end pt-0.5">
+        <time className="font-mono text-xs tabular-nums text-foreground-emphasis" dateTime={createdAt}>
+          {new Date(createdAt).toLocaleTimeString("zh-CN", {
+            hour: "2-digit",
+            minute: "2-digit",
+            second: "2-digit",
+            hour12: false,
+          })}
+        </time>
+        <time className="text-[10px] text-foreground-muted tabular-nums" dateTime={createdAt}>
+          {new Date(createdAt).toLocaleDateString("zh-CN", {
+            month: "2-digit",
+            day: "2-digit",
+          })}
+        </time>
+      </div>
+      {/* 中心:圆点 + 竖线 */}
+      <div className="relative flex flex-col items-center">
+        <span
+          className={cn(
+            "z-10 mt-1.5 size-3 rounded-full ring-4 ring-background",
+            tone === "error" && "bg-error",
+            tone === "info" && "bg-info",
+            tone === "violet" && "bg-violet",
+          )}
+        />
+        {isLast ? null : (
+          <span className="absolute top-4 h-full w-px bg-border" />
+        )}
+      </div>
+      {/* 右侧:内容卡 */}
+      <div className="flex-1 min-w-0">
+        <div className="rounded-2xl border border-[#ebe7df] bg-card p-4 hover:shadow-md transition-shadow">
+          <div className="flex flex-wrap items-center gap-2 mb-2">
+          <Badge variant={tone as "error" | "info" | "violet"}>
+              {label}
+            </Badge>
+            <span className="text-xs text-foreground-muted">
+              由 <span className="font-mono text-foreground-emphasis">{operator}</span> 执行
+            </span>
+            <span className="ml-auto">
+              <FieldHint text="审计日志是只读留痕,所有治理操作都会自动记录到这里,不可篡改。" />
+            </span>
+          </div>
+          <button
+            type="button"
+            className="block w-full truncate text-left font-mono text-sm text-foreground-emphasis hover:text-foreground-intense hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--ring)]"
+            title={`${target}（点击复制）`}
+            onClick={() => {
+              void navigator.clipboard?.writeText(target).then(() =>
+                toast.success("已复制目标 ID"),
+              );
+            }}
+          >
+            {target}
+          </button>
+          {Object.keys(detail).length > 0 ? (
+            <details className="mt-2 group">
+              <summary className="cursor-pointer text-xs text-foreground-muted hover:text-foreground-emphasis select-none">
+                详情 <span className="text-foreground-soft">({Object.keys(detail).length} 字段)</span>
+              </summary>
+              <pre className="mt-2 max-h-60 overflow-auto rounded-lg bg-background-muted p-3 font-mono text-[11px] text-foreground-emphasis">
+                {JSON.stringify(detail, null, 2)}
+              </pre>
+            </details>
+          ) : null}
+        </div>
+      </div>
+    </li>
+  );
 }
 
 export function AuditPage() {
-  const [action, setAction] = useState("all");
-  const [expanded, setExpanded] = useState<string | null>(null);
-  const [limit, setLimit] = useState(50);
-  const { data, isPending, isError } = useAudit({
+  const search = useSearch({ from: "/audit" }) as { action?: string };
+  const [action, setAction] = useState<string>(search.action ?? "all");
+  const [limit, setLimit] = useState(PAGE_SIZE);
+  const { data, isPending, isError, isFetching, dataUpdatedAt, refetch } = useAudit({
     action: action === "all" ? undefined : action,
     limit,
   });
@@ -72,43 +172,38 @@ export function AuditPage() {
   return (
     <div className="space-y-6">
       <PageHeader
-        title="审计日志"
+        title="AUDIT · 审计日志"
         description="治理台操作留痕 · 只读不可篡改"
         actions={
-          <div className="flex items-center gap-2">
-            <div className="w-40">
-              <label className="sr-only" htmlFor="audit-action">
-                动作筛选
-              </label>
-              <Select value={action} onValueChange={setAction}>
-                <SelectTrigger id="audit-action" aria-label="按动作筛选">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {ACTION_OPTIONS.map((option) => (
-                    <SelectItem key={option.value} value={option.value}>
-                      {option.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <Select
-              value={String(limit)}
-              onValueChange={(v) => setLimit(Number(v))}
-            >
-              <SelectTrigger className="w-28" aria-label="每页条数">
+          <div className="flex items-center gap-3">
+            <StaleIndicator updatedAt={dataUpdatedAt} prefix="last sync" />
+            <Select value={action} onValueChange={setAction}>
+              <SelectTrigger className="w-40" aria-label="动作筛选">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="50">50 / 页</SelectItem>
-                <SelectItem value="100">100 / 页</SelectItem>
-                <SelectItem value="200">200 / 页</SelectItem>
+                {ACTION_OPTIONS.map((opt) => (
+                  <SelectItem key={opt.value} value={opt.value}>
+                    {opt.label}
+                  </SelectItem>
+                ))}
               </SelectContent>
             </Select>
+            <Button variant="outline" size="sm" onClick={() => refetch()}>
+              刷新
+            </Button>
           </div>
         }
       />
+
+      <section className="animate-editorial-fade-up flex flex-wrap items-baseline gap-3">
+        <p className="section-label">FILTERED BY</p>
+        <p className="text-sm text-foreground-emphasis">
+          {action === "all" ? "全部动作" : ACTION_LABELS[action] ?? action}
+        </p>
+      </section>
+
+      <div className="editorial-rule" />
 
       {isError ? (
         <EmptyState
@@ -119,122 +214,51 @@ export function AuditPage() {
           action={{ label: "重试", onClick: () => window.location.reload() }}
         />
       ) : isPending ? (
-        <div aria-busy="true" className="space-y-2">
-          {Array.from({ length: 5 }).map((_, index) => (
-            <Skeleton key={index} className="h-10" />
+        <div aria-busy="true" className="space-y-4 pl-24">
+          {Array.from({ length: 3 }).map((_, i) => (
+            <div key={i} className="rounded-2xl border border-[#ebe7df] bg-card p-4 space-y-2">
+              <Skeleton className="h-4 w-1/4" />
+              <SkeletonLines count={2} />
+            </div>
           ))}
         </div>
       ) : data && data.length > 0 ? (
         <>
-          {/* 桌面表格 */}
-          <div className="hidden md:block">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>时间</TableHead>
-                  <TableHead>操作者</TableHead>
-                  <TableHead>动作</TableHead>
-                  <TableHead>目标</TableHead>
-                  <TableHead>详情</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {data.map((item) => (
-                  <TableRow key={item.audit_id}>
-                    <TableCell className="whitespace-nowrap font-mono text-xs">
-                      {formatTime(item.created_at)}
-                    </TableCell>
-                    <TableCell className="text-xs">{item.operator}</TableCell>
-                    <TableCell>
-                      <ActionBadge action={item.action} />
-                    </TableCell>
-                    <TableCell className="max-w-56">
-                      <button
-                        type="button"
-                        className="block w-full truncate text-left font-mono text-xs text-foreground-muted hover:text-foreground-intense hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--ring)]"
-                        title={`${item.target}（点击复制）`}
-                        onClick={() => {
-                          void navigator.clipboard?.writeText(item.target).then(() =>
-                            toast.success("已复制目标 ID"),
-                          );
-                        }}
-                      >
-                        {item.target}
-                      </button>
-                    </TableCell>
-                    <TableCell>
-                      {Object.keys(item.detail).length > 0 ? (
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          aria-expanded={expanded === item.audit_id}
-                          onClick={() =>
-                            setExpanded(expanded === item.audit_id ? null : item.audit_id)
-                          }
-                        >
-                          {expanded === item.audit_id ? "收起" : "展开"}
-                        </Button>
-                      ) : (
-                        <span className="text-xs text-foreground-muted">—</span>
-                      )}
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-            {data
-              .filter((item) => item.audit_id === expanded)
-              .map((item) => (
-                <pre
-                  key={item.audit_id}
-                  className="mt-3 max-h-60 overflow-auto rounded-xl bg-background-muted p-4 font-mono text-xs"
-                >
-                  {JSON.stringify(item.detail, null, 2)}
-                </pre>
-              ))}
-          </div>
-
-          {/* 移动卡片 */}
-          <div className="space-y-2 md:hidden">
-            {data.map((item) => (
-              <Card key={item.audit_id} className="border-border-muted">
-                <CardContent className="p-4">
-                  <div className="flex flex-col gap-1.5">
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="text-xs text-foreground-muted">
-                        {formatTime(item.created_at)}
-                      </span>
-                      <ActionBadge action={item.action} />
-                    </div>
-                    <p className="font-mono text-xs break-all text-foreground-emphasis">
-                      {item.target}
-                    </p>
-                    <p className="text-xs text-foreground-muted">
-                      操作者 {item.operator} · {ACTION_LABELS[item.action] ?? item.action}
-                    </p>
-                  </div>
-                </CardContent>
-              </Card>
+          <ol className="relative" aria-label="审计时间轴">
+            {data.map((item, i) => (
+              <TimelineNode
+                key={item.audit_id}
+                createdAt={item.created_at}
+                action={item.action}
+                target={item.target}
+                operator={item.operator}
+                detail={item.detail}
+                isLast={i === data.length - 1}
+                index={i}
+              />
             ))}
-          </div>
+          </ol>
           <div
-            className="flex flex-wrap items-center justify-between gap-2 text-xs text-foreground-muted"
+            className="flex flex-wrap items-center justify-between gap-2 pl-24 text-xs text-foreground-muted"
             aria-live="polite"
           >
             <span>
               已显示 <span className="font-mono tabular-nums">{data.length}</span> 条
               {isFull ? " · 可能还有更多" : " · 已到底"}
             </span>
-            {isFull ? (
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setLimit((n) => n + 50)}
-                aria-label="加载更多审计记录"
-              >
-                加载更多（+50）
-              </Button>
-            ) : null}
+            <div className="flex items-center gap-3">
+              {isFetching ? <span className="text-foreground-soft">加载中…</span> : null}
+              {isFull ? (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setLimit((n) => n + 50)}
+                  aria-label="加载更多审计记录"
+                >
+                  加载更多(+50)
+                </Button>
+              ) : null}
+            </div>
           </div>
         </>
       ) : (
