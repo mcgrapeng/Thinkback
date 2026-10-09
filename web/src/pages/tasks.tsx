@@ -17,7 +17,6 @@ import { PageHeader } from "@/components/page-header";
 import { StaleIndicator } from "@/components/stale-indicator";
 import { Sparkline } from "@/components/sparkline";
 import { EmptyState } from "@/components/empty-state";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton, SkeletonLines } from "@/components/ui/skeleton";
