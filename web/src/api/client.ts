@@ -51,6 +51,13 @@ export interface OverviewResponse {
   tasks: Record<string, number>;
   by_classification: Record<string, number>;
   by_source_type: Record<string, number>;
+  trends: {
+    active_memories_24h: number[];
+    running_tasks_24h: number[];
+    failed_24h: number[];
+    l3_queue_24h: number[];
+    recall_24h: number[];
+  };
   l3: L3BackgroundStatus;
   throughput_5min: {
     append_ok: { count: number; per_minute: number };

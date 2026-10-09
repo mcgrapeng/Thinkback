@@ -11,6 +11,7 @@ import {
 import { Toaster } from "sonner";
 import { Layout } from "@/components/layout";
 import { ErrorBoundary } from "@/components/error-boundary";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import { OverviewPage } from "@/pages/overview";
 import { TasksPage } from "@/pages/tasks";
 import { MemoriesPage } from "@/pages/memories";
@@ -95,8 +96,10 @@ createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <ErrorBoundary>
       <QueryClientProvider client={queryClient}>
-        <RouterProvider router={router} />
-        <Toaster richColors position="top-center" />
+        <TooltipProvider delayDuration={200}>
+          <RouterProvider router={router} />
+          <Toaster richColors position="top-center" />
+        </TooltipProvider>
       </QueryClientProvider>
     </ErrorBoundary>
   </StrictMode>,

@@ -62,13 +62,23 @@ function useDarkMode() {
 
 function BrandMark({ compact = false }: { compact?: boolean }) {
   return (
-    <div className="flex items-center gap-2">
-      <span
+    <div className="flex items-center gap-2.5">
+      <svg
         aria-hidden="true"
-        className="flex size-6 shrink-0 items-center justify-center rounded-md bg-primary text-xs font-semibold text-primary-foreground"
+        viewBox="0 0 24 24"
+        className="size-7 shrink-0 text-foreground-intense"
+        fill="none"
+        stroke="currentColor"
+        strokeLinecap="round"
       >
-        T
-      </span>
+        <line x1="6" y1="6" x2="12" y2="18" strokeWidth="1.5" stroke="var(--violet-strong)" opacity="0.7" />
+        <line x1="18" y1="6" x2="12" y2="18" strokeWidth="1.5" stroke="var(--violet-strong)" opacity="0.7" />
+        <line x1="6" y1="6" x2="18" y2="6" strokeWidth="1.5" stroke="var(--foreground-emphasis)" opacity="0.45" />
+        <circle cx="6" cy="6" r="2.4" fill="var(--foreground-intense)" />
+        <circle cx="18" cy="6" r="2.4" fill="var(--foreground-intense)" />
+        <circle cx="12" cy="18" r="3" fill="var(--violet)" />
+        <circle cx="12" cy="18" r="1.2" fill="var(--background)" />
+      </svg>
       <p
         className={cn(
           "text-sm font-semibold tracking-tight text-foreground-intense",

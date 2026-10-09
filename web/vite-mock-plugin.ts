@@ -8,6 +8,18 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 
 const NOW = Date.now();
 
+/** 生成一条伪趋势:基础值 + 周期扰动 + 末端贴近 target,24 个点(过去 24h) */
+function trend(base: number, target: number, variance: number, n = 24): number[] {
+  const arr: number[] = [];
+  for (let i = 0; i < n; i++) {
+    const cycle = Math.sin((i / n) * Math.PI * 2) * variance;
+    const linear = base + (target - base) * (i / (n - 1));
+    const noise = (Math.random() - 0.5) * variance * 0.4;
+    arr.push(Math.max(0, Math.round(linear + cycle + noise)));
+  }
+  return arr;
+}
+
 function json(res: ServerResponse, status: number, body: unknown) {
   res.statusCode = status;
   res.setHeader("Content-Type", "application/json; charset=utf-8");
@@ -37,6 +49,13 @@ function makeTasks() {
 const OVERVIEW = {
   memories: { ACTIVE: 8247, SUPERSEDED: 312, DELETED: 89, SUPPRESSED: 41 },
   tasks: { running: 14, pending: 23, completed: 1280, failed: 7, dead_letter: 3 },
+  trends: {
+    active_memories_24h: trend(8000, 8247, 60, 24),
+    running_tasks_24h: trend(10, 14, 6, 24),
+    failed_24h: trend(4, 10, 5, 24),
+    l3_queue_24h: trend(80, 47, 25, 24),
+    recall_24h: trend(1500, 1840, 200, 24),
+  },
   by_classification: { normal: 6210, personal: 1820, sensitive: 580, restricted: 79 },
   by_source_type: {
     chat_round: 5830, manual_fix: 240, session_rebuild: 112,
