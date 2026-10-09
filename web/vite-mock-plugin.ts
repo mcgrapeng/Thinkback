@@ -189,6 +189,39 @@ const CONFIG = {
   ],
 };
 
+const INTEGRATION_KEYS = [
+  {
+    key_id: "k8a3f1c2",
+    tenant_id: "tenant_chatbot",
+    scopes: ["memory:append", "memory:recall", "memory:read"],
+    plan: "pro",
+    rate_limit_per_minute: 600,
+    rate_limit_burst: 50,
+    is_active: true,
+    created_at: new Date(NOW - 7 * 86_400_000).toISOString(),
+  },
+  {
+    key_id: "e2d9b4f5",
+    tenant_id: "tenant_search",
+    scopes: ["memory:read"],
+    plan: "free",
+    rate_limit_per_minute: 60,
+    rate_limit_burst: 10,
+    is_active: true,
+    created_at: new Date(NOW - 2 * 86_400_000).toISOString(),
+  },
+  {
+    key_id: "c4f6a1e8",
+    tenant_id: "tenant_legacy",
+    scopes: ["memory:read", "memory:recall"],
+    plan: "free",
+    rate_limit_per_minute: 60,
+    rate_limit_burst: 10,
+    is_active: false,
+    created_at: new Date(NOW - 30 * 86_400_000).toISOString(),
+  },
+];
+
 function route(req: IncomingMessage, res: ServerResponse, next: () => void) {
   const url = req.url ?? "";
   if (!url.startsWith("/admin/api/")) return next();
@@ -201,6 +234,22 @@ function route(req: IncomingMessage, res: ServerResponse, next: () => void) {
   if (url.startsWith("/admin/api/memories"))      return json(res, 200, MEMORIES);
   if (url.startsWith("/admin/api/audit"))         return json(res, 200, AUDIT);
   if (url.startsWith("/admin/api/config"))        return json(res, 200, CONFIG);
+  if (url.startsWith("/admin/api/integration/keys") && req.method === "GET")
+    return json(res, 200, INTEGRATION_KEYS);
+  if (url.startsWith("/admin/api/integration/keys") && req.method === "POST")
+    return json(res, 200, {
+      key: {
+        key_id: Math.random().toString(16).slice(2, 10),
+        tenant_id: "tenant_new",
+        scopes: ["memory:append", "memory:recall", "memory:read"],
+        plan: "free",
+        rate_limit_per_minute: 60,
+        rate_limit_burst: 10,
+        is_active: true,
+        created_at: new Date().toISOString(),
+      },
+      plaintext: `tbk_live_${Math.random().toString(16).slice(2, 10)}_${Math.random().toString(16).slice(2, 34)}`,
+    });
   if (url.includes("/admin/api/maintenance"))
     return json(res, 200, { reclaimed_count: 0, reclaimed_task_ids: [] });
   if (url.includes("/admin/api/delete")) return json(res, 200, { ok: true });
