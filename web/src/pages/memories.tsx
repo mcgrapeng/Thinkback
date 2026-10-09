@@ -108,7 +108,7 @@ function Field({
           </Tooltip>
         ) : null}
       </dt>
-      <dd className="text-sm text-foreground-emphasis">{children}</dd>
+      <dd className="min-w-0 overflow-hidden text-sm text-foreground-emphasis">{children}</dd>
     </div>
   );
 }
@@ -733,50 +733,69 @@ export function MemoriesPage() {
                 <h2 className="text-2xl font-semibold tracking-tight">并排比较</h2>
               </div>
               <div className="grid grid-cols-2 gap-4">
-                {[compareItems[0], compareItems[1]].map((item, idx) => (
-                  <div key={idx} className="rounded-2xl border border-[#ebe7df] p-4 space-y-3">
-                    <p className="section-label text-[10px]">
-                      {idx === 0 ? "LEFT" : "RIGHT"} · {item.memory_id.slice(-6)}
-                    </p>
-                    <p className="text-sm leading-relaxed text-foreground-intense">
-                      {item.memory_text}
-                    </p>
-                    <dl className="space-y-1.5 text-xs">
-                      {[
-                        ["用户", item.user_id],
-                        ["范围", item.memory_scope_id],
-                        ["状态", item.memory_status],
-                        ["分类", item.data_classification],
-                        ["召回", `${item.recall_count}×`],
-                        ["生效", formatTime(item.valid_at)],
-                        ["冲突槽", item.conflict_slot ?? "—"],
-                      ].map(([k, v]) => (
-                        <div key={String(k)} className="flex justify-between gap-2">
-                          <dt className="text-foreground-muted">{k}</dt>
-                          <dd className="font-mono text-foreground-emphasis text-right">{v}</dd>
-                        </div>
-                      ))}
-                    </dl>
-                  </div>
-                ))}
+                {[compareItems[0], compareItems[1]].map((item, idx) => {
+                  const other = idx === 0 ? compareItems[1] : compareItems[0];
+                  return (
+                    <div key={idx} className="rounded-2xl border border-[#ebe7df] p-4 space-y-3">
+                      <p className="section-label text-[10px]">
+                        {idx === 0 ? "LEFT" : "RIGHT"} · {item.memory_id.slice(-6)}
+                      </p>
+                      <p className="text-sm leading-relaxed text-foreground-intense">
+                        {item.memory_text}
+                      </p>
+                      <dl className="space-y-1.5 text-xs">
+                        {[
+                          ["用户", item.user_id, other.user_id],
+                          ["范围", item.memory_scope_id, other.memory_scope_id],
+                          ["状态", item.memory_status, other.memory_status],
+                          ["分类", item.data_classification, other.data_classification],
+                          ["召回", `${item.recall_count}×`, `${other.recall_count}×`],
+                          ["生效", formatTime(item.valid_at), formatTime(other.valid_at)],
+                          ["冲突槽", item.conflict_slot ?? "—", other.conflict_slot ?? "—"],
+                        ].map(([k, v, otherV]) => {
+                          const isDiff = v !== otherV;
+                          return (
+                            <div key={String(k)} className="flex justify-between gap-2 overflow-hidden">
+                              <dt className="shrink-0 text-foreground-muted">{k}</dt>
+                              <dd
+                                className={cn(
+                                  "min-w-0 truncate text-right font-mono",
+                                  isDiff ? "text-error" : "text-foreground-emphasis",
+                                )}
+                              >
+                                {v}
+                              </dd>
+                            </div>
+                          );
+                        })}
+                      </dl>
+                    </div>
+                  );
+                })}
               </div>
               {/* 差异高亮 */}
-              <div className="rounded-xl bg-background-muted p-4 text-xs text-foreground-muted">
-                <p className="font-medium text-foreground-emphasis mb-1">差异摘要</p>
-                {compareItems[0].memory_text !== compareItems[1].memory_text ? (
-                  <p>文本内容不同</p>
-                ) : (
-                  <p>文本内容一致</p>
-                )}
-                {compareItems[0].memory_status !== compareItems[1].memory_status ? (
-                  <p>状态不同:{compareItems[0].memory_status} vs {compareItems[1].memory_status}</p>
-                ) : null}
-                {compareItems[0].data_classification !== compareItems[1].data_classification ? (
-                  <p>分类不同:{compareItems[0].data_classification} vs {compareItems[1].data_classification}</p>
-                ) : null}
-                {compareItems[0].user_id !== compareItems[1].user_id ? (
-                  <p>用户不同:{compareItems[0].user_id} vs {compareItems[1].user_id}</p>
-                ) : null}
+              <div className="rounded-xl bg-background-muted p-4 text-xs">
+                <p className="font-medium text-foreground-emphasis mb-2">差异摘要</p>
+                <div className="space-y-1">
+                  <p className={cn(compareItems[0].memory_text !== compareItems[1].memory_text ? "text-error" : "text-success")}>
+                    {compareItems[0].memory_text !== compareItems[1].memory_text ? "✗ 文本内容不同" : "✓ 文本内容一致"}
+                  </p>
+                  {compareItems[0].memory_status !== compareItems[1].memory_status ? (
+                    <p className="text-error">✗ 状态不同:{compareItems[0].memory_status} vs {compareItems[1].memory_status}</p>
+                  ) : (
+                    <p className="text-success">✓ 状态一致</p>
+                  )}
+                  {compareItems[0].data_classification !== compareItems[1].data_classification ? (
+                    <p className="text-error">✗ 分类不同:{compareItems[0].data_classification} vs {compareItems[1].data_classification}</p>
+                  ) : (
+                    <p className="text-success">✓ 分类一致</p>
+                  )}
+                  {compareItems[0].user_id !== compareItems[1].user_id ? (
+                    <p className="text-error">✗ 用户不同:{compareItems[0].user_id} vs {compareItems[1].user_id}</p>
+                  ) : (
+                    <p className="text-success">✓ 用户一致</p>
+                  )}
+                </div>
               </div>
             </div>
           ) : null}

@@ -131,7 +131,7 @@ function TimelineNode({
               {label}
             </Badge>
             <span className="text-xs text-foreground-muted">
-              由 <span className="font-mono text-foreground-emphasis">{operator}</span> 执行
+              由 <span className="max-w-[16ch] truncate font-mono text-foreground-emphasis" title={operator}>{operator}</span> 执行
             </span>
             <span className="ml-auto">
               <FieldHint text="审计日志是只读留痕,所有治理操作都会自动记录到这里,不可篡改。" />

@@ -100,7 +100,7 @@ function DistributionBars({
             const pct = total > 0 ? Math.round((value / total) * 100) : 0;
             return (
               <li key={row.key} className="flex items-center gap-3">
-                <span className="w-20 shrink-0 text-xs text-foreground-muted">{row.label}</span>
+                <span className="w-24 shrink-0 text-xs text-foreground-muted">{row.label}</span>
                 <span
                   aria-hidden="true"
                   className="h-1 flex-1 overflow-hidden rounded-full bg-background-strong"
@@ -118,7 +118,7 @@ function DistributionBars({
           })}
           {unknown > 0 ? (
             <li className="flex items-center gap-3">
-              <span className="w-20 shrink-0 text-xs text-foreground-muted">其他</span>
+              <span className="w-24 shrink-0 text-xs text-foreground-muted">其他</span>
               <span
                 aria-hidden="true"
                 className="h-1 flex-1 overflow-hidden rounded-full bg-background-strong"
@@ -752,9 +752,9 @@ export function OverviewPage() {
 
 function Row({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <div className="flex items-center gap-3">
+    <div className="flex items-center gap-3 overflow-hidden">
       <dt className="w-24 shrink-0 text-xs text-foreground-muted">{label}</dt>
-      <dd className="min-w-0 flex-1 truncate text-foreground-emphasis">{children}</dd>
+      <dd className="min-w-0 flex-1 overflow-hidden text-foreground-emphasis">{children}</dd>
     </div>
   );
 }
