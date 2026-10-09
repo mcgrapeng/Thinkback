@@ -19,6 +19,7 @@ import { toast } from "sonner";
 import { useHealthDetail, useOverview, useReclaimOrphanTasks } from "@/api/queries";
 import { PageHeader } from "@/components/page-header";
 import { StatusBadge } from "@/components/status-badge";
+import { Sparkline } from "@/components/sparkline";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -243,6 +244,7 @@ export function OverviewPage() {
       suffix: "tasks",
       tone: "neutral" as const,
       delta: prevValues?.running !== undefined ? (data.tasks.running ?? 0) - prevValues.running : undefined,
+      trend: data.trends?.running_tasks_24h ?? [],
     },
     {
       label: "FAILED",
@@ -250,6 +252,7 @@ export function OverviewPage() {
       tone: failed > 0 ? ("warning" as const) : ("neutral" as const),
       suffix: failed > 0 ? "needs attention" : "all clear",
       delta: prevValues ? failed - prevValues.failed : undefined,
+      trend: data.trends?.failed_24h ?? [],
     },
     {
       label: "L3 QUEUE",
@@ -257,6 +260,7 @@ export function OverviewPage() {
       suffix: `${queuePct}% used`,
       tone: "neutral" as const,
       delta: undefined,
+      trend: data.trends?.l3_queue_24h ?? [],
     },
     {
       label: "UPTIME",
@@ -264,6 +268,7 @@ export function OverviewPage() {
       suffix: health.data ? "stable" : "—",
       tone: "neutral" as const,
       delta: undefined,
+      trend: data.trends?.recall_24h ?? [],
     },
   ];
 
@@ -322,14 +327,34 @@ export function OverviewPage() {
         }
       />
 
-      {/* HERO: 单一 96px 数字作为"今天的头条事实" */}
+      {/* HERO: 单一 96px 数字作为"今天的头条事实" + 24h sparkline 趋势 */}
       <section className="animate-editorial-fade-up pt-2">
         <p className="section-label mb-3">ACTIVE MEMORIES · 实时索引</p>
-        <div className="flex items-baseline gap-6 flex-wrap">
-          <span className="text-display-xl text-foreground-intense">
+        <div className="flex items-end gap-6 flex-wrap">
+          <span className="text-display-xl text-foreground-intense leading-none">
             {animatedActive.toLocaleString()}
           </span>
-          <div className="flex flex-col gap-1">
+          <div className="flex-1 min-w-[180px] max-w-[280px] pb-2">
+            <Sparkline
+              data={data.trends?.active_memories_24h ?? []}
+              width={260}
+              height={48}
+              fill
+              smooth
+              strokeClass="stroke-foreground-intense"
+              endClass="fill-foreground-intense"
+              ariaLabel="过去 24 小时有效记忆数趋势"
+            />
+            <p className="mt-1 flex items-center justify-between text-xs text-foreground-muted">
+              <span>过去 24h</span>
+              <span>
+                {data.trends?.active_memories_24h?.[0] !== undefined
+                  ? `起 ${data.trends.active_memories_24h[0].toLocaleString()}`
+                  : "—"}
+              </span>
+            </p>
+          </div>
+          <div className="flex flex-col gap-1 pb-2">
             {activeDelta !== 0 ? (
               <span
                 className={cn(
@@ -353,7 +378,7 @@ export function OverviewPage() {
             </span>
           </div>
         </div>
-        <p className="mt-3 max-w-2xl text-base text-foreground-muted leading-relaxed">
+        <p className="mt-5 max-w-2xl text-base text-foreground-muted leading-relaxed">
           当前已索引 {activeMemories.toLocaleString()} 条有效记忆，覆盖{" "}
           {data.by_classification.normal?.toLocaleString() ?? 0} 条普通记忆与{" "}
           {data.by_classification.personal?.toLocaleString() ?? 0} 条个人偏好。
@@ -369,18 +394,30 @@ export function OverviewPage() {
           {pulses.map((pulse, i) => (
             <div
               key={pulse.label}
-              className="space-y-2 animate-editorial-fade-up"
+              className="space-y-3 animate-editorial-fade-up"
               style={{ animationDelay: `${120 + i * 80}ms` }}
             >
               <p className="section-label">{pulse.label}</p>
               <p
                 className={cn(
-                  "text-display-md tabular-nums",
+                  "text-display-md tabular-nums leading-none",
                   pulse.tone === "warning" ? "text-error" : "text-foreground-intense",
                 )}
               >
                 {pulse.value}
               </p>
+              {pulse.trend && pulse.trend.length > 1 ? (
+                <Sparkline
+                  data={pulse.trend}
+                  width={180}
+                  height={28}
+                  fill
+                  smooth
+                  strokeClass={pulse.tone === "warning" ? "stroke-error" : "stroke-foreground-emphasis"}
+                  endClass={pulse.tone === "warning" ? "fill-error" : "fill-foreground-intense"}
+                  ariaLabel={`${pulse.label} 过去 24h 趋势`}
+                />
+              ) : null}
               <p className="flex items-center gap-2 text-sm text-foreground-muted">
                 <span>{pulse.suffix}</span>
                 {pulse.delta !== undefined && pulse.delta !== 0 ? (

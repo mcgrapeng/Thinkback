@@ -7,7 +7,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type * as React from "react";
 import { Link } from "@tanstack/react-router";
-import { AlertTriangle, ChevronLeft, ChevronRight, Loader2, Search } from "lucide-react";
+import { AlertTriangle, ChevronLeft, ChevronRight, Info, Loader2, Search } from "lucide-react";
 import { toast } from "sonner";
 import { useMemories, useMemorySource, type MemoryFilters } from "@/api/queries";
 import type { AdminMemoryItem } from "@/api/client";
@@ -27,6 +27,7 @@ import {
 } from "@/components/ui/sheet";
 import { StatusBadge } from "@/components/status-badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { findHighlightSegments } from "@/lib/highlight";
 import { cn, formatTime } from "@/lib/utils";
 
@@ -69,10 +70,34 @@ function HighlightedText({
   );
 }
 
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
+function Field({
+  label,
+  hint,
+  children,
+}: {
+  label: string;
+  hint?: string;
+  children: React.ReactNode;
+}) {
   return (
     <div className="flex flex-col gap-0.5">
-      <dt className="text-xs text-foreground-muted">{label}</dt>
+      <dt className="flex items-center gap-1 text-xs text-foreground-muted">
+        <span>{label}</span>
+        {hint ? (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                type="button"
+                aria-label={`${label} 字段说明`}
+                className="inline-flex size-3.5 items-center justify-center rounded-full text-foreground-soft hover:text-foreground-emphasis hover:bg-background-muted transition-colors focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--ring)]"
+              >
+                <Info aria-hidden="true" className="size-3" />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent>{hint}</TooltipContent>
+          </Tooltip>
+        ) : null}
+      </dt>
       <dd className="text-sm text-foreground-emphasis">{children}</dd>
     </div>
   );
@@ -100,20 +125,66 @@ function MemoryDetail({ memory }: { memory: AdminMemoryItem }) {
         <div className="min-h-0 flex-1 overflow-y-auto p-8">
           <TabsContent value="summary" className="mt-0 space-y-4">
             <dl className="grid grid-cols-2 gap-3">
-              <Field label="状态">
+              <Field
+                label="状态"
+                hint="记忆当前是否在用。有效=正常使用;已取代=被新版本替换但仍可查;已删除=软删除(可恢复);已抑制=被人工标记不可检索。"
+              >
                 <StatusBadge status={memory.memory_status} />
               </Field>
-              <Field label="冲突槽位">{memory.conflict_slot ?? "—"}</Field>
-              <Field label="记忆分类">{memory.memory_type ?? "—"}</Field>
-              <Field label="敏感等级">{memory.data_classification}</Field>
-              <Field label="生效时刻（valid_at）">{formatTime(memory.valid_at)}</Field>
-              <Field label="失效时刻（invalid_at）">{formatTime(memory.invalid_at)}</Field>
-              <Field label="最近召回">{formatTime(memory.last_recalled_at)}</Field>
-              <Field label="召回次数">{memory.recall_count}</Field>
-              <Field label="后端记忆 ID">
+              <Field
+                label="冲突槽位"
+                hint="同一类偏好在系统里的归类位置(如 dietary=饮食偏好)。冲突时新记忆会替换槽位里的旧记忆,旧记忆自动标为已取代。"
+              >
+                {memory.conflict_slot ?? "—"}
+              </Field>
+              <Field
+                label="记忆分类"
+                hint="记忆的类型标签,如 preference=偏好、fact=事实、person=人物、event=事件。"
+              >
+                {memory.memory_type ?? "—"}
+              </Field>
+              <Field
+                label="敏感等级"
+                hint="数据合规等级:普通=一般信息;个人=可识别到个人;敏感=健康/财务等;受限=最高保护,默认不可召回。"
+              >
+                {memory.data_classification}
+              </Field>
+              <Field
+                label="生效时刻"
+                hint="从这一刻起这条记忆被系统视为有效;在此之前的相关事实以新记忆为准。"
+              >
+                {formatTime(memory.valid_at)}
+              </Field>
+              <Field
+                label="失效时刻"
+                hint="从这一刻起这条记忆不再被召回(但仍可查);为空表示永久有效。"
+              >
+                {formatTime(memory.invalid_at)}
+              </Field>
+              <Field
+                label="最近召回"
+                hint="最近一次被模型在生成回复时引用到此记忆的本地时间。"
+              >
+                {formatTime(memory.last_recalled_at)}
+              </Field>
+              <Field
+                label="召回次数"
+                hint="累计被模型在生成回复时引用的次数;数字越大说明这条记忆越关键。"
+              >
+                {memory.recall_count}
+              </Field>
+              <Field
+                label="后端记忆 ID"
+                hint="存储层(Milvus / Postgres)里的真实 ID;治理台 ID 仅是前端展示用,后端 ID 才是持久化键。"
+              >
                 <span className="font-mono text-xs break-all">{memory.backend_memory_id}</span>
               </Field>
-              <Field label="来源回合数">{memory.source_refs.length}</Field>
+              <Field
+                label="来源回合数"
+                hint="生成这条记忆时引用的对话轮数;≥1 表明有 journal 原文可追溯(来源反链 tab 可看)。"
+              >
+                {memory.source_refs.length}
+              </Field>
             </dl>
             <div>
               <h3 className="mb-1 text-xs text-foreground-muted">记忆文本</h3>
