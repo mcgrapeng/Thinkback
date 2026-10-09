@@ -28,7 +28,9 @@ const rootRoute = createRootRoute({
     }, []);
     return (
       <Layout>
-        <Outlet />
+        <div key={window.location.pathname} className="animate-page-enter">
+          <Outlet />
+        </div>
       </Layout>
     );
   },

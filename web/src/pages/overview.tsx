@@ -20,6 +20,7 @@ import { useHealthDetail, useOverview, useReclaimOrphanTasks } from "@/api/queri
 import { PageHeader } from "@/components/page-header";
 import { StatusBadge } from "@/components/status-badge";
 import { Sparkline } from "@/components/sparkline";
+import { StaleIndicator } from "@/components/stale-indicator";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -376,6 +377,7 @@ export function OverviewPage() {
             <span className="text-sm text-foreground-muted">
               next refresh · {secondsToNext}s
             </span>
+            <StaleIndicator updatedAt={dataUpdatedAt} prefix="last sync" />
           </div>
         </div>
         <p className="mt-5 max-w-2xl text-base text-foreground-muted leading-relaxed">

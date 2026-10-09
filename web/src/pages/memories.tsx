@@ -6,7 +6,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import type * as React from "react";
-import { Link } from "@tanstack/react-router";
+import { Link, useNavigate, useSearch } from "@tanstack/react-router";
 import { AlertTriangle, ChevronLeft, ChevronRight, Info, Loader2, Search } from "lucide-react";
 import { toast } from "sonner";
 import { useMemories, useMemorySource, type MemoryFilters } from "@/api/queries";
@@ -283,13 +283,34 @@ function MemoryDetail({ memory }: { memory: AdminMemoryItem }) {
 }
 
 export function MemoriesPage() {
-  const [userIdInput, setUserIdInput] = useState("");
-  const [scopeInput, setScopeInput] = useState("");
-  const [statusInput, setStatusInput] = useState<string>("ALL");
-  const [applied, setApplied] = useState<MemoryFilters>({ page: 1 });
+  const navigate = useNavigate({ from: "/memories" });
+  const search = useSearch({ from: "/memories" }) as {
+    user_id?: string;
+    memory_scope_id?: string;
+    status?: string;
+    page?: number;
+    selected?: string;
+  };
+  const [userIdInput, setUserIdInput] = useState(search.user_id ?? "");
+  const [scopeInput, setScopeInput] = useState(search.memory_scope_id ?? "");
+  const [statusInput, setStatusInput] = useState<string>(search.status ?? "ALL");
+  const [applied, setApplied] = useState<MemoryFilters>({ page: search.page ?? 1 });
   const [selected, setSelected] = useState<AdminMemoryItem | null>(null);
   const resultsRef = useRef<HTMLDivElement>(null);
   const lastFilterKeyRef = useRef<string>("");
+
+  // 同步筛选 → URL(可分享、可深链)
+  useEffect(() => {
+    navigate({
+      search: {
+        ...(applied.user_id ? { user_id: applied.user_id } : {}),
+        ...(applied.memory_scope_id ? { memory_scope_id: applied.memory_scope_id } : {}),
+        ...(statusInput !== "ALL" ? { status: statusInput } : {}),
+        ...(applied.page && applied.page > 1 ? { page: applied.page } : {}),
+      } as never,
+      replace: true,
+    });
+  }, [applied.user_id, applied.memory_scope_id, statusInput, applied.page, navigate]);
 
   const trimmedUserId = userIdInput.trim() || undefined;
   const trimmedScope = scopeInput.trim() || undefined;
