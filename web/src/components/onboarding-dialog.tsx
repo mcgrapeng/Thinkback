@@ -99,7 +99,7 @@ export function OnboardingDialog() {
       onClick={close}
     >
       <div
-        className="relative max-h-[85vh] w-full max-w-2xl overflow-y-auto rounded-3xl border border-[#ebe7df] bg-background shadow-2xl"
+        className="relative max-h-[85vh] w-full max-w-2xl overflow-y-auto rounded-3xl border border-border bg-background shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
         <button
@@ -128,14 +128,14 @@ export function OnboardingDialog() {
               {PAGES.map((page) => (
                 <div
                   key={page.title}
-                  className="rounded-2xl border border-[#ebe7df] p-4 space-y-2"
+                  className="rounded-2xl border border-border p-4 space-y-2"
                 >
                   <div className="flex items-center gap-2">
                     <page.icon aria-hidden="true" className="size-4 text-foreground-emphasis" />
                     <p className="text-sm font-semibold text-foreground-intense">{page.title}</p>
                   </div>
                   <p className="text-xs text-foreground-muted leading-relaxed">{page.desc}</p>
-                  <p className="text-[11px] text-foreground-soft leading-relaxed border-l-2 border-[#e8e2d4] pl-2">
+                  <p className="text-[11px] text-foreground-soft leading-relaxed border-l-2 border-border-warm pl-2">
                     {page.tip}
                   </p>
                 </div>
@@ -148,7 +148,7 @@ export function OnboardingDialog() {
         {step === 1 ? (
           <div className="px-8 pb-6 space-y-3">
             {KNOWLEDGE.map((k) => (
-              <div key={k.q} className="rounded-2xl border border-[#ebe7df] p-4">
+              <div key={k.q} className="rounded-2xl border border-border p-4">
                 <p className="text-sm font-semibold text-foreground-intense">{k.q}</p>
                 <p className="mt-1 text-xs text-foreground-muted leading-relaxed">{k.a}</p>
               </div>
@@ -159,7 +159,7 @@ export function OnboardingDialog() {
         {/* 步骤 2:快捷键 */}
         {step === 2 ? (
           <div className="px-8 pb-6 space-y-3">
-            <div className="rounded-2xl border border-[#ebe7df] p-4">
+            <div className="rounded-2xl border border-border p-4">
               <p className="text-sm font-semibold text-foreground-intense mb-2">键盘快捷键</p>
               <div className="space-y-1.5 text-xs text-foreground-muted">
                 {[
@@ -172,7 +172,7 @@ export function OnboardingDialog() {
                   ["Esc", "关闭弹窗/清除选中"],
                 ].map(([key, desc]) => (
                   <div key={key} className="flex items-center gap-3">
-                    <kbd className="inline-flex min-w-[80px] justify-center rounded-md border border-[#ebe7df] bg-background-muted px-2 py-0.5 font-mono text-[10px]">
+                    <kbd className="inline-flex min-w-[80px] justify-center rounded-md border border-border bg-background-muted px-2 py-0.5 font-mono text-[10px]">
                       {key}
                     </kbd>
                     <span>{desc}</span>
@@ -184,7 +184,7 @@ export function OnboardingDialog() {
         ) : null}
 
         {/* 底部操作 */}
-        <div className="flex items-center justify-between border-t border-[#ebe7df] px-8 py-4">
+        <div className="flex items-center justify-between border-t border-border px-8 py-4">
           <div className="flex gap-1.5">
             {[0, 1, 2].map((i) => (
               <button

@@ -85,9 +85,9 @@ export function CommandPalette() {
 
   return (
     <AlertDialog open={open} onOpenChange={setOpen}>
-      <AlertDialogContent className="max-w-[560px] gap-0 p-0 rounded-3xl border-[#ebe7df] shadow-lg top-[20%] translate-y-0">
+      <AlertDialogContent className="max-w-[560px] gap-0 p-0 rounded-3xl border-border shadow-lg top-[20%] translate-y-0">
         <AlertDialogTitle className="sr-only">命令面板</AlertDialogTitle>
-        <div className="flex items-center gap-3 border-b border-[#f5f2ec] px-5 py-4">
+        <div className="flex items-center gap-3 border-b border-border-muted px-5 py-4">
           <Search aria-hidden="true" className="size-5 text-foreground-muted" />
           <input
             autoFocus
@@ -97,7 +97,7 @@ export function CommandPalette() {
             className="flex-1 bg-transparent text-base outline-none placeholder:text-foreground-soft"
             aria-label="命令面板搜索"
           />
-          <kbd className="hidden md:inline-flex items-center gap-1 rounded-md border border-[#ebe7df] bg-background px-2 py-0.5 text-xs text-foreground-muted">esc</kbd>
+          <kbd className="hidden md:inline-flex items-center gap-1 rounded-md border border-border bg-background px-2 py-0.5 text-xs text-foreground-muted">esc</kbd>
         </div>
         <ul className="max-h-80 overflow-y-auto p-2">
           {results.length === 0 ? (
@@ -118,7 +118,7 @@ export function CommandPalette() {
                   ) : item.kind === "page" ? (
                     <item.icon aria-hidden="true" className="size-4 text-foreground-muted" />
                   ) : (
-                    <kbd className="rounded-md border border-[#ebe7df] bg-background px-2 py-0.5 font-mono text-[10px] text-foreground-emphasis">key</kbd>
+                    <kbd className="rounded-md border border-border bg-background px-2 py-0.5 font-mono text-[10px] text-foreground-emphasis">key</kbd>
                   )}
                   <span className="flex-1 truncate text-sm text-foreground-emphasis">{item.label}</span>
                   {item.kind === "shortcut" ? (
@@ -129,7 +129,7 @@ export function CommandPalette() {
             ))
           )}
         </ul>
-        <div className="border-t border-[#f5f2ec] px-5 py-2.5 flex items-center justify-between text-xs text-foreground-muted">
+        <div className="border-t border-border-muted px-5 py-2.5 flex items-center justify-between text-xs text-foreground-muted">
           <span>RECENT · QUICK NAVIGATION</span>
           <span>↑↓ 选择 · ↵ 跳转</span>
         </div>

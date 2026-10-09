@@ -5,7 +5,7 @@ import { cn } from "@/lib/utils";
 
 function Table({ className, ...props }: React.ComponentProps<"table">) {
   return (
-    <div className="w-full overflow-x-auto rounded-2xl border border-[#ebe7df] bg-card shadow-xs">
+    <div className="w-full overflow-x-auto rounded-2xl border border-border bg-card shadow-xs">
       <table className={cn("w-full caption-bottom text-[15px]", className)} {...props} />
     </div>
   );
@@ -23,7 +23,7 @@ function TableRow({ className, ...props }: React.ComponentProps<"tr">) {
   return (
     <tr
       className={cn(
-        "relative border-b border-[#f5f2ec] transition-colors hover:bg-[#fdf8ed] data-[state=selected]:bg-background-muted",
+        "relative border-b border-border-muted transition-colors hover:bg-hover-warm data-[state=selected]:bg-background-muted",
         className,
       )}
       {...props}

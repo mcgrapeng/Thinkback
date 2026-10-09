@@ -200,7 +200,7 @@ export function ConfigPage() {
       ) : isPending ? (
         <div aria-busy="true" className="grid grid-cols-1 gap-4 lg:grid-cols-2">
           {Array.from({ length: 4 }).map((_, i) => (
-            <Card key={i} className="border-[#ebe7df]">
+            <Card key={i} className="border-border">
               <CardHeader className="border-b border-border-muted pb-3">
                 <SkeletonLines count={1} />
               </CardHeader>
@@ -229,7 +229,7 @@ export function ConfigPage() {
                   {fields.map((field) => (
                     <div
                       key={field.name}
-                      className="flex items-center justify-between gap-3 overflow-hidden border-b border-[#f5f2ec] py-2.5 last:border-0"
+                      className="flex items-center justify-between gap-3 overflow-hidden border-b border-border-muted py-2.5 last:border-0"
                     >
                       <dt className="flex min-w-0 shrink items-center gap-1.5 font-mono text-xs text-foreground-muted">
                         <span className="truncate">{field.name}</span>
