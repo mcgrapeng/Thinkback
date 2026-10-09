@@ -231,9 +231,6 @@ export function OverviewPage() {
   const unhealthy = failed > 0 || data.l3.available_capacity === 0 || hasFailedTasks;
   const throughput = data.throughput_5min;
   const totalOps = throughput.append_ok.count + throughput.append_fail.count + throughput.recall_ok.count + throughput.recall_fail.count;
-  const _appendFailRate = throughput.append_ok.count + throughput.append_fail.count > 0
-    ? Math.round(throughput.append_fail.count / (throughput.append_ok.count + throughput.append_fail.count) * 100)
-    : 0;
 
   const activeDelta = prevValues?.ACTIVE !== undefined ? activeMemories - prevValues.ACTIVE : 0;
 
