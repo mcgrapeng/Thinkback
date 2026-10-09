@@ -20,6 +20,7 @@ import { useHealthDetail, useOverview, useReclaimOrphanTasks } from "@/api/queri
 import { PageHeader } from "@/components/page-header";
 import { StatusBadge } from "@/components/status-badge";
 import { Sparkline } from "@/components/sparkline";
+import { Heatmap } from "@/components/heatmap";
 import { StaleIndicator } from "@/components/stale-indicator";
 import { EmptyState } from "@/components/empty-state";
 import { Badge } from "@/components/ui/badge";
@@ -619,12 +620,42 @@ export function OverviewPage() {
 
         <Card variant="elevated" className="animate-editorial-fade-up lg:col-span-2" style={{ animationDelay: "600ms" }}>
           <CardHeader className="border-b border-border-muted pb-3">
-            <CardTitle className="flex items-center gap-2 text-base">
-              <Activity aria-hidden="true" className="size-4" /> 5min 吞吐
-            </CardTitle>
-            <CardDescription className="text-xs">
-              滑动窗口（{totalOps} 次操作）· 失败率仅统计 append
-            </CardDescription>
+            <div className="flex items-start justify-between">
+              <div>
+                <CardTitle className="flex items-center gap-2 text-base">
+                  <Activity aria-hidden="true" className="size-4" /> 5min 吞吐
+                </CardTitle>
+                <CardDescription className="text-xs">
+                  滑动窗口（{totalOps} 次操作）· 失败率仅统计 append
+                </CardDescription>
+              </div>
+              <dl className="hidden sm:grid grid-cols-4 gap-3 text-right">
+                <div>
+                  <dt className="text-[10px] text-foreground-muted">append ok</dt>
+                  <dd className="font-mono text-sm tabular-nums text-success">
+                    {throughput.append_ok.count}
+                  </dd>
+                </div>
+                <div>
+                  <dt className="text-[10px] text-foreground-muted">append fail</dt>
+                  <dd className={cn("font-mono text-sm tabular-nums", throughput.append_fail.count > 0 ? "text-error" : "text-foreground-emphasis")}>
+                    {throughput.append_fail.count}
+                  </dd>
+                </div>
+                <div>
+                  <dt className="text-[10px] text-foreground-muted">recall ok</dt>
+                  <dd className="font-mono text-sm tabular-nums text-foreground-emphasis">
+                    {throughput.recall_ok.count}
+                  </dd>
+                </div>
+                <div>
+                  <dt className="text-[10px] text-foreground-muted">recall fail</dt>
+                  <dd className={cn("font-mono text-sm tabular-nums", throughput.recall_fail.count > 0 ? "text-error" : "text-foreground-emphasis")}>
+                    {throughput.recall_fail.count}
+                  </dd>
+                </div>
+              </dl>
+            </div>
           </CardHeader>
           <CardContent>
             {totalOps === 0 ? (
@@ -632,17 +663,28 @@ export function OverviewPage() {
                 过去 5min 无 append / recall 调用
               </p>
             ) : (
-              <dl className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-                <Mini label="append 成功" value={String(throughput.append_ok.count)} suffix={`/min ${throughput.append_ok.per_minute}`} />
-                <Mini
-                  label="append 失败"
-                  value={String(throughput.append_fail.count)}
-                  suffix={appendFailRate > 0 ? `失败率 ${appendFailRate}%` : undefined}
-                  error={throughput.append_fail.count > 0}
-                />
-                <Mini label="recall 成功" value={String(throughput.recall_ok.count)} suffix={`/min ${throughput.recall_ok.per_minute}`} />
-                <Mini label="recall 失败" value={String(throughput.recall_fail.count)} error={throughput.recall_fail.count > 0} />
-              </dl>
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <div>
+                  <p className="section-label mb-2">append 写入</p>
+                  <Heatmap
+                    data={throughput.append_ok.timeline}
+                    rows={5}
+                    cols={12}
+                    ariaLabel="过去 5 分钟 append 写入分布"
+                    cellClassName="bg-success"
+                  />
+                </div>
+                <div>
+                  <p className="section-label mb-2">recall 检索</p>
+                  <Heatmap
+                    data={throughput.recall_ok.timeline}
+                    rows={5}
+                    cols={12}
+                    ariaLabel="过去 5 分钟 recall 检索分布"
+                    cellClassName="bg-info"
+                  />
+                </div>
+              </div>
             )}
           </CardContent>
         </Card>

@@ -66,10 +66,10 @@ const OVERVIEW = {
     pending_write_tasks: 47, cleanup_tasks: 12, available_capacity: 953,
   },
   throughput_5min: {
-    append_ok:  { count: 312, per_minute: 62 },
-    append_fail: { count: 14, per_minute: 2  },
-    recall_ok:  { count: 1840, per_minute: 368 },
-    recall_fail: { count: 6,  per_minute: 1  },
+    append_ok:  { count: 312, per_minute: 62, timeline: trend(60, 12, 4, 60) },
+    append_fail: { count: 14, per_minute: 2, timeline: trend(60, 0, 1, 60) },
+    recall_ok:  { count: 1840, per_minute: 368, timeline: trend(60, 30, 8, 60) },
+    recall_fail: { count: 6,  per_minute: 1, timeline: trend(60, 0, 1, 60) },
   },
   recent_failed_tasks: [
     {

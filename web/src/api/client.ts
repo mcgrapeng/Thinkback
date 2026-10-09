@@ -60,10 +60,10 @@ export interface OverviewResponse {
   };
   l3: L3BackgroundStatus;
   throughput_5min: {
-    append_ok: { count: number; per_minute: number };
-    append_fail: { count: number; per_minute: number };
-    recall_ok: { count: number; per_minute: number };
-    recall_fail: { count: number; per_minute: number };
+    append_ok: { count: number; per_minute: number; timeline: number[] };
+    append_fail: { count: number; per_minute: number; timeline: number[] };
+    recall_ok: { count: number; per_minute: number; timeline: number[] };
+    recall_fail: { count: number; per_minute: number; timeline: number[] };
   };
   recent_failed_tasks: Array<{
     task_id: string;
