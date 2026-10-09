@@ -250,6 +250,16 @@ function route(req: IncomingMessage, res: ServerResponse, next: () => void) {
       },
       plaintext: `tbk_live_${Math.random().toString(16).slice(2, 10)}_${Math.random().toString(16).slice(2, 34)}`,
     });
+  if (url.startsWith("/admin/api/mem0/configs"))
+    return json(res, 200, [
+      {
+        key: "custom_instructions",
+        value: `Additional requirements:\n1. Language: write each memory text in the SAME language as the conversation (Chinese conversations → Chinese memories). Never translate Chinese names, nicknames, places, or brands into English.\n2. Output shape: return exactly {"memory": [{"id": "<sequential string>", "text": "<one self-contained memory>"}]}. Every "text" MUST be a plain string; never nest arrays or objects inside it.\n3. Preserve Chinese entities verbatim (宠物名/昵称/地点/品牌逐字保留), including tone particles only when they are part of a name.\n4. Corrections write only the new value, never re-state the old one.\n5. One fact per memory. If a turn contains multiple distinct facts, emit one memory per fact.\n6. Output must be pure Chinese characters and Chinese punctuation.`,
+        description: "mem0 v2 事实抽取约束(user prompt 追加段)。每次 append 时拼入。",
+        is_active: true,
+        updated_at: null,
+      },
+    ]);
   if (url.includes("/admin/api/maintenance"))
     return json(res, 200, { reclaimed_count: 0, reclaimed_task_ids: [] });
   if (url.includes("/admin/api/delete")) return json(res, 200, { ok: true });

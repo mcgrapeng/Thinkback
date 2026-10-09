@@ -75,6 +75,15 @@ async def _lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: ARG001
         logger.error(f"Failed to run database migrations: {exc}")
         raise
 
+    # 初始化 mem0 自定义配置(提示词等)到 DB
+    from thinkback.memory.mem0_config import init_mem0_configs
+
+    try:
+        await init_mem0_configs()
+        logger.info("mem0 config initialized")
+    except Exception as exc:
+        logger.warning(f"mem0 config init failed (non-fatal): {exc}")
+
     # Make sure the configured Milvus database exists; mem0 won't create it
     # itself and would otherwise fail every append with code 800 once it tries
     # to write. Best-effort: log a warning if the lazy-create fails so the
@@ -245,6 +254,10 @@ def create_app() -> FastAPI:
     from thinkback.api.integration_admin import router as integration_admin_router
 
     app.include_router(integration_admin_router)
+    # mem0 配置管理(提示词/抽取指令等)给治理台 console 用
+    from thinkback.api.mem0_config_admin import router as mem0_config_router
+
+    app.include_router(mem0_config_router)
     # 治理台 M1：只读聚合端点（Bearer 可选鉴权），见 docs/管理后台设计方案。
     from thinkback.api.admin import router as admin_router
 

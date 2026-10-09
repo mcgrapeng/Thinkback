@@ -187,3 +187,25 @@ class AdminAuditRecord(Base):
     action: Mapped[str] = mapped_column(String(64), index=True)
     target: Mapped[str] = mapped_column(String(256), default="")
     detail: Mapped[dict[str, object]] = mapped_column(JSON, default=dict)
+
+
+class Mem0ConfigRecord(Base):
+    """mem0 自定义配置(提示词/抽取指令等)。
+
+    key 唯一,支持多个配置项(目前只用 custom_instructions)。
+    ```
+    key="custom_instructions" → value 是 mem0 v2 的 user prompt 追加段文本
+    ```
+    治理台 P7 页面可编辑;每次 append 操作时实时读取(无需重启服务)。
+    """
+
+    __tablename__ = "ins_mem0_config"
+
+    config_key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    value: Mapped[str] = mapped_column(Text, default="")
+    description: Mapped[str] = mapped_column(String(256), default="")
+    is_active: Mapped[bool] = mapped_column(default=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
