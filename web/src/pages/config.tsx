@@ -80,7 +80,7 @@ function CopyButton({ text, label }: { text: string; label?: string }) {
   return (
     <button
       type="button"
-      className="inline-flex items-center gap-1.5 rounded-md px-1.5 py-0.5 font-mono text-xs text-foreground-emphasis hover:bg-background-muted focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--ring)] transition-colors"
+      className="inline-flex max-w-full items-center gap-1.5 rounded-md px-1.5 py-0.5 font-mono text-xs text-foreground-emphasis hover:bg-background-muted focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--ring)] transition-colors"
       title={`${text}（点击复制）`}
       onClick={() => {
         void navigator.clipboard?.writeText(text).then(() => {
@@ -90,11 +90,11 @@ function CopyButton({ text, label }: { text: string; label?: string }) {
         });
       }}
     >
-      <span className="max-w-[40ch] truncate">{text}</span>
+      <span className="min-w-0 max-w-[32ch] truncate">{text}</span>
       {copied ? (
-        <Check aria-hidden="true" className="size-3 text-success" />
+        <Check aria-hidden="true" className="size-3 shrink-0 text-success" />
       ) : (
-        <span aria-hidden="true" className="text-foreground-soft text-[10px]">copy</span>
+        <span aria-hidden="true" className="shrink-0 text-foreground-soft text-[10px]">copy</span>
       )}
     </button>
   );
@@ -204,10 +204,10 @@ export function ConfigPage() {
                   {fields.map((field) => (
                     <div
                       key={field.name}
-                      className="flex items-center justify-between gap-3 border-b border-[#f5f2ec] py-2.5 last:border-0"
+                      className="flex items-center justify-between gap-3 overflow-hidden border-b border-[#f5f2ec] py-2.5 last:border-0"
                     >
-                      <dt className="flex items-center gap-1.5 font-mono text-xs text-foreground-muted">
-                        <span>{field.name}</span>
+                      <dt className="flex min-w-0 shrink items-center gap-1.5 font-mono text-xs text-foreground-muted">
+                        <span className="truncate">{field.name}</span>
                         {field.secret ? (
                           <Tooltip>
                             <TooltipTrigger asChild>
@@ -225,9 +225,9 @@ export function ConfigPage() {
                           </Tooltip>
                         ) : null}
                       </dt>
-                      <dd className="flex items-center gap-2">
+                      <dd className="flex min-w-0 shrink items-center gap-2 overflow-hidden">
                         <CopyButton
-                          text={`${field.name} = ${renderValue(field.value)}`}
+                          text={renderValue(field.value)}
                           label="配置项"
                         />
                       </dd>

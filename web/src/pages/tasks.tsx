@@ -15,7 +15,6 @@ import { useTasks } from "@/api/queries";
 import type { TaskItem } from "@/api/client";
 import { PageHeader } from "@/components/page-header";
 import { StaleIndicator } from "@/components/stale-indicator";
-import { Sparkline } from "@/components/sparkline";
 import { EmptyState } from "@/components/empty-state";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -33,9 +32,6 @@ const TABS = [
 ] as const;
 
 type TabValue = (typeof TABS)[number]["value"];
-
-/** 4 个 KPI 占位 mock 趋势(后续真后端有数据时替换为 useTasks 返回) */
-const TREND_PLACEHOLDER = [10, 12, 8, 14, 16, 12, 9, 11, 13, 10, 8, 12, 14, 16, 15, 11, 9, 7, 10, 12, 14, 16, 13, 12];
 
 function scopeUser(scope: Record<string, unknown>): string {
   const user = scope.user_id ?? scope.session_id;
@@ -139,8 +135,8 @@ function TaskCard({
             <span className="text-xs text-foreground-muted">·</span>
             <span className="text-xs text-foreground-emphasis">{task.op_type}</span>
             <span className="ml-auto flex items-center gap-2 text-xs">
-              <span className="text-foreground-muted">用户</span>
-              <span className="font-mono text-foreground-emphasis">
+              <span className="shrink-0 text-foreground-muted">用户</span>
+              <span className="max-w-[12ch] truncate font-mono text-foreground-emphasis" title={scopeUser(task.scope)}>
                 {scopeUser(task.scope)}
               </span>
             </span>
@@ -270,16 +266,13 @@ export function TasksPage() {
               >
                 {value}
               </p>
-              <Sparkline
-                data={TREND_PLACEHOLDER}
-                width={140}
-                height={24}
-                fill
-                smooth
-                strokeClass={value > 0 && kpi.tone === "error" ? "stroke-error" : "stroke-foreground-emphasis"}
-                endClass={value > 0 && kpi.tone === "error" ? "fill-error" : "fill-foreground-intense"}
-                ariaLabel={`${kpi.label} 趋势`}
-              />
+              {value > 0 && (kpi.tone === "error" || kpi.tone === "violet") ? (
+                <p className="text-xs text-warning">需关注</p>
+              ) : value > 0 ? (
+                <p className="text-xs text-foreground-muted">正常</p>
+              ) : (
+                <p className="text-xs text-foreground-soft">—</p>
+              )}
             </div>
           );
         })}
