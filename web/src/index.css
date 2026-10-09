@@ -174,10 +174,11 @@
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
   }
-  /* WCAG 2.4.7：全局可见焦点环 */
+  /* WCAG 2.4.7：全局可见焦点环（带 100ms 渐变进入） */
   :focus-visible {
     outline: 2px solid var(--ring);
     outline-offset: 2px;
+    transition: outline-offset 120ms ease-out, box-shadow 200ms ease-out;
   }
   /* WCAG 2.3.3：尊重 reduced-motion */
   @media (prefers-reduced-motion: reduce) {
@@ -193,6 +194,20 @@
 }
 
 @layer utilities {
+  /* 路由切换页面淡入 + 微下沉（key 由 path 触发，每次重 mount） */
+  @keyframes page-enter {
+    from {
+      opacity: 0;
+      transform: translateY(6px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+  .animate-page-enter {
+    animation: page-enter 320ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  }
   /* Editorial Display: 96px / 72px / 48px 数字锚点(Geist Mono,tabular-nums) */
   .text-display-xl {
     font-family: var(--font-mono);
