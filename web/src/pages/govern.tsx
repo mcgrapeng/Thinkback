@@ -244,7 +244,7 @@ export function GovernPage() {
 
       {/* ── 删除（危险操作） ─────────────────────────────── */}
       {activeTab === "delete" ? (
-        <Card variant="elevated" className="max-w-2xl animate-editorial-fade-up">
+        <Card variant="elevated" className="max-w-2xl animate-editorial-fade-up border-l-[3px] border-l-error">
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-base">
               <Trash2 aria-hidden="true" className="size-4 text-error" />
@@ -394,7 +394,7 @@ export function GovernPage() {
 
       {/* ── 更新 ─────────────────────────────────────────── */}
       {activeTab === "update" ? (
-        <Card variant="elevated" className="max-w-2xl animate-editorial-fade-up">
+        <Card variant="elevated" className="max-w-2xl animate-editorial-fade-up border-l-[3px] border-l-info">
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-base">
               <Wrench aria-hidden="true" className="size-4 text-info" />
@@ -488,7 +488,7 @@ export function GovernPage() {
 
       {/* ── 重建 ─────────────────────────────────────────── */}
       {activeTab === "rebuild" ? (
-        <Card variant="elevated" className="max-w-2xl animate-editorial-fade-up">
+        <Card variant="elevated" className="max-w-2xl animate-editorial-fade-up border-l-[3px] border-l-violet">
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-base">
               <RefreshCw aria-hidden="true" className="size-4 text-violet" />
