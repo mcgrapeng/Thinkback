@@ -443,11 +443,11 @@ export function OverviewPage() {
       {/* NEEDS ATTENTION: 纵向 editorial 列表 */}
       {hasFailedTasks || failed > 0 ? (
         <section
-          className="animate-editorial-fade-up"
+          className="animate-editorial-fade-up rounded-r-xl border-l-[3px] border-error bg-error-soft/15 py-4 pl-5 pr-4"
           style={{ animationDelay: "200ms" }}
         >
           <div className="mb-4 flex items-baseline justify-between">
-            <p className="section-label">NEEDS ATTENTION · 需关注</p>
+            <p className="section-label text-error">NEEDS ATTENTION · 需关注</p>
             <Link
               to="/tasks"
               search={{
