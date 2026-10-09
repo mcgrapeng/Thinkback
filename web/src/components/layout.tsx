@@ -6,6 +6,7 @@ import { Link, useLocation } from "@tanstack/react-router";
 import { useIsFetching } from "@tanstack/react-query";
 import {
   Activity,
+  Cable,
   Database,
   ListTodo,
   Menu,
@@ -42,6 +43,12 @@ const NAV_GROUPS = [
       { to: "/govern", label: "治理操作", icon: ShieldAlert },
       { to: "/audit", label: "审计日志", icon: ScrollText },
       { to: "/config", label: "系统配置", icon: Settings },
+    ],
+  },
+  {
+    label: "集成",
+    items: [
+      { to: "/integration", label: "接入协议", icon: Cable },
     ],
   },
 ] as const;

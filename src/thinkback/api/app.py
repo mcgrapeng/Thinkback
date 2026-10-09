@@ -240,6 +240,11 @@ def create_app() -> FastAPI:
     from thinkback.api.v1_memory import router as v1_memory_router
 
     app.include_router(v1_memory_router)
+
+    # 集成管理(API Key 管理)给治理台 console 用
+    from thinkback.api.integration_admin import router as integration_admin_router
+
+    app.include_router(integration_admin_router)
     # 治理台 M1：只读聚合端点（Bearer 可选鉴权），见 docs/管理后台设计方案。
     from thinkback.api.admin import router as admin_router
 

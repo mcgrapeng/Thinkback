@@ -105,11 +105,25 @@ def register_api_key(record: ApiKey) -> None:
 
 
 def revoke_api_key(key_id: str) -> bool:
-    if key_id in _API_KEYS:
-        del _API_KEYS[key_id]
-        logger.info(f"api_key.revoked key_id={key_id}")
-        return True
-    return False
+    """软撤销:标记 is_active=False,保留记录供审计。
+
+    返回是否成功找到并撤销。
+    """
+    record = _API_KEYS.get(key_id)
+    if record is None:
+        return False
+    _API_KEYS[key_id] = ApiKey(
+        key_id=record.key_id,
+        tenant_id=record.tenant_id,
+        scopes=record.scopes,
+        plan=record.plan,
+        rate_limit_per_minute=record.rate_limit_per_minute,
+        rate_limit_burst=record.rate_limit_burst,
+        created_at=record.created_at,
+        is_active=False,  # 软删
+    )
+    logger.info(f"api_key.revoked key_id={key_id}")
+    return True
 
 
 def get_api_key(key_id: str) -> ApiKey | None:

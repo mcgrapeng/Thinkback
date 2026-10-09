@@ -21,6 +21,7 @@ const MemoriesPage = lazy(() => import("@/pages/memories").then((m) => ({ defaul
 const GovernPage = lazy(() => import("@/pages/govern").then((m) => ({ default: m.GovernPage })));
 const AuditPage = lazy(() => import("@/pages/audit").then((m) => ({ default: m.AuditPage })));
 const ConfigPage = lazy(() => import("@/pages/config").then((m) => ({ default: m.ConfigPage })));
+const IntegrationPage = lazy(() => import("@/pages/integration").then((m) => ({ default: m.IntegrationPage })));
 
 function PageFallback() {
   return (
@@ -83,6 +84,12 @@ const configRoute = createRoute({
   component: ConfigPage,
 });
 
+const integrationRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/integration",
+  component: IntegrationPage,
+});
+
 const routeTree = rootRoute.addChildren([
   overviewRoute,
   memoriesRoute,
@@ -90,6 +97,7 @@ const routeTree = rootRoute.addChildren([
   governRoute,
   auditRoute,
   configRoute,
+  integrationRoute,
 ]);
 const router = createRouter({
   routeTree,
