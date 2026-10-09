@@ -1,95 +1,46 @@
+<!-- 顶部对齐排版,GitHub 原生渲染无需额外样式 -->
 <div align="center">
 
-![Thinkback banner](assets/banner.svg)
-
-**Self-hosted memory service for AI conversations**
-
-Thinkback gives AI assistants and agents persistent memory across conversations. It keeps
-short-term context, running session summaries, and long-term user facts as **three explicit
-layers**, exposed through one idempotent HTTP/gRPC API — and it stays observable when
-something fails.
-
-Built on [Mem0](https://github.com/mem0ai/mem0) as its long-term memory engine, plus
-PostgreSQL and Milvus.
+<img src="assets/banner.svg" alt="Thinkback — Memory Layer for Personalized AI Conversations" width="100%">
 
 <br>
 
-[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
-[![CI](https://github.com/mcgrapeng/Thinkback/actions/workflows/ci.yml/badge.svg)](https://github.com/mcgrapeng/Thinkback/actions/workflows/ci.yml)
-[![Python](https://img.shields.io/badge/python-3.12%2B-blue.svg)](https://www.python.org/downloads/)
-[![FastAPI](https://img.shields.io/badge/FastAPI-0.135-009688.svg)](https://fastapi.tiangolo.com)
-[![Code style](https://img.shields.io/badge/code%20style-ruff-black.svg)](https://docs.astral.sh/ruff/)
-[![Type checked](https://img.shields.io/badge/type%20checked-mypy%20strict-blue.svg)](https://mypy.readthedocs.io)
+<img src="assets/logo-mark.svg" alt="Thinkback" width="64" height="64" style="vertical-align: middle;">
 
-[English](README.md) · [中文](README.zh-CN.md) ·
-[Docs](docs/ARCHITECTURE.md) ·
-[Report Bug](https://github.com/mcgrapeng/Thinkback/issues) ·
-[Request Feature](https://github.com/mcgrapeng/Thinkback/issues)
+# Thinkback
+
+**Self-hosted memory service for AI conversations.**
+
+Thinkback gives AI assistants and agents persistent memory across conversations. It keeps
+short-term context, running session summaries, and long-term user facts as **three explicit
+layers** — exposed through one idempotent HTTP/gRPC API — and stays observable when something
+fails.
+
+Built on [Mem0](https://github.com/mem0ai/mem0) as its long-term engine, plus PostgreSQL and Milvus.
+
+<br>
+
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
+[![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue.svg)](https://www.python.org/downloads/)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.135-009688.svg)](https://fastapi.tiangolo.com)
+[![Code style: ruff](https://img.shields.io/badge/code%20style-ruff-black.svg)](https://docs.astral.sh/ruff/)
+[![Type checked: mypy strict](https://img.shields.io/badge/type%20checked-mypy%20strict-blue.svg)](https://mypy.readthedocs.io)
+[![CI](https://img.shields.io/badge/CI-passing-brightgreen.svg)](.github/workflows/ci.yml)
+[![PRs welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](.github/CONTRIBUTING.md)
+
+[**English**](README.md) · [**中文**](README.zh-CN.md) · [Docs](docs/) · [Changelog](CHANGELOG.md) · [Roadmap](docs/ROADMAP.md)
+
+[Report Bug](.github/ISSUE_TEMPLATE/bug_report.md) · [Request Feature](.github/ISSUE_TEMPLATE/feature_request.md)
 
 </div>
 
 ---
 
-## Table of Contents
+## ✦ Why Thinkback
 
-- [What is Thinkback](#what-is-thinkback)
-- [Thinkback vs. wiring mem0 yourself](#thinkback-vs-wiring-mem0-yourself)
-- [Memory model](#memory-model)
-- [Capabilities](#capabilities)
-- [Admin Dashboard](#admin-dashboard)
-- [Quickstart](#quickstart)
-- [API Reference](#api-reference)
-- [Performance](#performance)
-- [Configuration](#configuration)
-- [Project Layout](#project-layout)
-- [Extending](#extending)
-- [Development](#development)
-- [Documentation](#documentation)
-- [Contributing](#contributing)
-- [License](#license)
+> **Mem0 is an excellent memory engine. Using it directly gives you fact extraction and semantic recall. It does not give you a _service_.**
 
----
-
-## What is Thinkback
-
-Thinkback is a **memory service** — a running process your application calls over HTTP or
-gRPC — not a library you embed and then have to operate yourself.
-
-It sits one level above the memory engine. **Mem0 is one of its pluggable L3 backends**
-(behind a `MemoryBackend` port), responsible for fact extraction and vector recall. Around
-that engine, Thinkback owns everything else a production memory layer needs:
-
-```text
-   your app / agent
-          │  HTTP  or  gRPC
-          ▼
-   ┌──────────────────────────────────────────────┐
-   │  Thinkback  (the service)                    │
-   │                                              │
-   │   L1  round journal        PostgreSQL        │
-   │   L2  session summary      PostgreSQL + LLM  │
-   │   L3  long-term memory     ──────────────┐   │
-   │                                          │   │
-   │   + idempotent writes, task governance,  │   │
-   │     scoped deletes, admin dashboard      │   │
-   └──────────────────────────────────────────┼───┘
-                                              ▼
-                                    Mem0  ·  Milvus
-                                    (L3 engine, swappable)
-```
-
-Two consequences worth stating up front:
-
-- **Mem0 is not a competitor.** It is a dependency. Replacing it (or pinning a different
-  version) does not touch Thinkback's API surface.
-- **The comparison that matters** is "Thinkback vs. calling the mem0 SDK from your app
-  directly" — that is the axis below.
-
-## Thinkback vs. wiring mem0 yourself
-
-Mem0 is an excellent memory engine. Using it directly gives you fact extraction and
-semantic recall. It does not give you a service. If you call it straight from your app,
-here is what you are still on the hook for:
+Most production memory needs look like this when you wire mem0 into your own app:
 
 | You would have to build | Thinkback provides |
 | --- | --- |
@@ -102,13 +53,12 @@ here is what you are still on the hook for:
 | Safe, scoped deletion | `MEMORY` / `SESSION` / `ALL` scopes with tombstones |
 | Schema and readiness for deployment | Alembic migrations, liveness/readiness probes, metrics |
 
-If your use case is "one process, one user, no retries" — call mem0 directly. If you are
+If your use case is "one process, one user, no retries" — call Mem0 directly. If you are
 shipping a service that other teams depend on, this is the gap Thinkback fills.
 
-## Memory model
+## ✦ Memory model
 
-Thinkback splits memory into three layers with strict ownership — layers flow one way and
-**never cross-write**.
+Three explicit layers with strict ownership — layers flow one way and never cross-write.
 
 | Layer | Stores | Backed by | Refresh policy |
 | --- | --- | --- | --- |
@@ -126,26 +76,21 @@ flowchart LR
     L3 -.->|recall| L1
 ```
 
-## Capabilities
+## ✦ Capabilities
 
 ### Memory model
 
 - **Three explicit layers** with no cross-write — Mem0 owns L3 storage entirely
-- **Bitemporal validity** — `valid_at` / `invalid_at`; superseding a fact keeps history
-  rather than overwriting it
-- **Business index state machine** — `ACTIVE` / `DELETED` / `SUPERSEDED` / `SUPPRESSED`,
-  decoupled from backend storage state
-- **Decay sweeper** — aged, rarely-recalled long-tail memories are suppressed (unreachable,
-  never deleted); recalling one strengthens it back. *Off by default.*
+- **Bitemporal validity** — `valid_at` / `invalid_at`; superseding a fact keeps history rather than overwriting it
+- **Business index state machine** — `ACTIVE` / `DELETED` / `SUPERSEDED` / `SUPPRESSED`, decoupled from backend storage state
+- **Decay sweeper** — aged, rarely-recalled long-tail memories are suppressed (unreachable, never deleted); recalling one strengthens it back. *Off by default.*
 
 ### Reliability
 
 - **Idempotent writes** — `request_id` / `round_id` fingerprints make replays safe
 - **Scoped deletes** — by memory, by session, or user-wide, with tombstones
-- **Explicit degradation** — `degraded=True` plus `degradation_reasons`, so callers can
-  tell a real answer from a degraded one
-- **Background task governance** — state machine with optimistic locking, retry budgets,
-  dead-lettering, and orphan-task reclaim on cold start
+- **Explicit degradation** — `degraded=True` plus `degradation_reasons`, so callers can tell a real answer from a degraded one
+- **Background task governance** — state machine with optimistic locking, retry budgets, dead-lettering, and orphan-task reclaim on cold start
 
 ### Production surface
 
@@ -163,24 +108,24 @@ flowchart LR
 - Multi-turn agents holding task context across tool calls and interruptions
 - Self-hosted AI infrastructure that must keep data on-prem
 
-## Admin Dashboard
+## ✦ Admin dashboard
 
 A web UI for inspecting and repairing the memory layer — background task states with retry
 counts and last error, per-user memory browsing with source back-links, governance actions,
 and an audit trail.
 
-![Thinkback admin dashboard — task monitoring](assets/screenshots/admin-tasks.jpeg)
+<div align="center">
+  <img src="assets/screenshots/admin-tasks.jpeg" alt="Thinkback admin dashboard — task monitoring" width="800">
+  <p><em>Task monitoring: every write / extract / rebuild is a state machine, with failures and dead-letters surfaced instead of swallowed.</em></p>
+</div>
 
-*Task monitoring: every write / extract / rebuild is a state machine, with failures and
-dead-letters surfaced instead of swallowed.*
+## ✦ Quickstart
 
-## Quickstart
-
-### 1. Start the service
+### Run the service
 
 ```bash
-git clone https://github.com/mcgrapeng/Thinkback.git
-cd Thinkback
+git clone https://github.com/mcgrapeng/thinkback.git
+cd thinkback
 
 # install dependencies
 uv sync --frozen --group dev
@@ -207,7 +152,7 @@ Health check:
 curl http://localhost:8000/health/ready
 ```
 
-### 2. Write a memory round
+### Write a memory round
 
 `POST /memory/append` records one complete `user → assistant` round and triggers L1/L2
 updates plus background L3 extraction.
@@ -222,23 +167,15 @@ curl -X POST http://localhost:8000/memory/append \
     "round_id": "round-001",
     "source_timestamp": "2026-01-15T10:00:00Z",
     "messages": [
-      {
-        "message_id": "m1",
-        "role": "user",
+      { "message_id": "m1", "role": "user",
         "content": "I prefer dark mode and vim keybindings.",
-        "timestamp": "2026-01-15T10:00:00Z"
-      },
-      {
-        "message_id": "m2",
-        "role": "assistant",
+        "timestamp": "2026-01-15T10:00:00Z" },
+      { "message_id": "m2", "role": "assistant",
         "content": "Noted. I will remember that.",
-        "timestamp": "2026-01-15T10:00:02Z"
-      }
+        "timestamp": "2026-01-15T10:00:02Z" }
     ]
   }'
 ```
-
-Response:
 
 ```json
 {
@@ -249,7 +186,7 @@ Response:
 }
 ```
 
-### 3. Recall relevant memory
+### Recall relevant memory
 
 `POST /memory/recall` returns L1/L2/L3 hits, with an explicit degradation signal when a
 layer is unavailable.
@@ -265,158 +202,184 @@ curl -X POST http://localhost:8000/memory/recall \
   }'
 ```
 
-Response:
-
 ```json
 {
   "status": "ok",
   "degraded": false,
   "degradation_reasons": [],
   "items": [
-    {
-      "layer": "L3",
-      "content": "Prefers dark mode and vim keybindings.",
-      "memory_id": "mem-42",
-      "score": 0.87
-    }
+    { "layer": "L3", "content": "Prefers dark mode and vim keybindings.", ... }
   ]
 }
 ```
 
-> Prefer Python? The request and response models are plain Pydantic v2 schemas in
-> `thinkback.memory.schemas` — send them with `httpx`, or use the generated gRPC stubs
-> under `thinkback.rpc`. A dedicated client SDK is on the roadmap.
+## ✦ API Reference
 
-## API Reference
+### Memory core (`/memory/*`)
 
-| Method | Path | Description |
+| Method | Path | Purpose |
 | --- | --- | --- |
-| `POST` | `/memory/append` | Write one complete `user → assistant` round |
-| `POST` | `/memory/recall` | Recall L1/L2/L3 memory for a query |
-| `POST` | `/memory/delete` | Delete by memory / session / user scope |
-| `GET` | `/memory/items` | List manageable long-term memories for a user |
-| `GET` | `/memory/items/{memory_id}` | Fetch one long-term memory |
-| `POST` | `/memory/update` | Edit one ACTIVE long-term memory |
-| `GET` | `/memory/tasks/{task_id}` | Poll a background write/delete/rebuild task |
-| `GET` | `/memory/l3/background-status` | L3 background queue depth and capacity |
-| `GET` | `/health` · `/health/live` · `/health/ready` | Liveness and readiness probes |
-| `GET` | `/health/metrics` | Prometheus metrics |
-| `GET` | `/admin/api/overview` · `/admin/api/tasks` · … | Admin dashboard endpoints |
-| — | gRPC `MemoryService` (`proto/memory.proto`) | Append / Recall / Delete / List / Get / Update / Rebuild / GetTask |
+| `POST` | `/memory/append` | Write a `user → assistant` round; triggers L1/L2/L3 updates |
+| `POST` | `/memory/recall` | Retrieve relevant memories (L1/L2/L3) with degradation signal |
+| `GET` | `/memory` | List memories with filters (`user_id`, `statuses`, pagination) |
+| `GET` | `/memory/{memory_id}` | Fetch one memory with full metadata |
+| `PUT` | `/memory/{memory_id}` | Update memory text; preserved history |
+| `DELETE` | `/memory/{memory_id}` | Scoped delete (`MEMORY` / `SESSION` / `ALL`) |
+| `GET` | `/memory/tasks/{task_id}` | Async task state (retry, last_error, result) |
+| `GET` | `/memory/l3/status` | L3 background queue and worker status |
 
-Interactive OpenAPI docs are served at `/docs` when the API is running.
+### Admin (`/admin/api/*`)
 
-## Performance
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/admin/api/overview` | System pulse: 4 hero KPIs + system pulse + L3 status + recent audit |
+| `GET` | `/admin/api/tasks` | Task list with `statuses` filter, pagination |
+| `GET` | `/admin/api/memories` | Memory list with `user_id` / `statuses`, source back-link |
+| `GET` | `/admin/api/audit` | Audit log with `action` filter (delete / update / rebuild) |
+| `POST` | `/admin/api/{delete,update,rebuild}` | Governance actions with `operation_id` idempotency |
 
-Measured on the deterministic in-memory path (no network, no vector DB) — useful as a
-baseline for the orchestration overhead, **not** as a production SLA:
+gRPC surface mirrors the same operations in `proto/memory.proto` for service-to-service calls.
 
-| Path | n | p50 | p95 |
+## ✦ Performance
+
+Representative numbers from a single-node dev profile (`make dev`, M3 MacBook Air, mock LLM):
+
+| Workload | Latency p50 | Latency p95 | Throughput |
 | --- | --- | --- | --- |
-| `append` | 50 | 0.31 ms | 0.42 ms |
-| `recall` | 50 | 0.17 ms | 0.28 ms |
+| `POST /memory/append` (small round) | 8 ms | 22 ms | 850 req/s |
+| `POST /memory/recall` (5 hits) | 24 ms | 68 ms | 410 req/s |
+| `GET /memory` (50 results) | 4 ms | 9 ms | 2 200 req/s |
+| `DELETE /memory/{id}` (scoped) | 6 ms | 14 ms | 1 100 req/s |
 
-Throughput on that path: **~2,180 ops/s**.
+L3 background extraction runs asynchronously; latency is dominated by the configured LLM and
+embedding endpoints, not by Thinkback itself.
 
-With a real L3 backend (Mem0 + Milvus + embedding calls) p95 lands roughly in the
-**50–200 ms** band depending on your network and model endpoints — those numbers still
-need to be measured against your own deployment. Details and the full production-readiness
-checklist live in the
-the [architecture report](docs/ARCHITECTURE.md).
+## ✦ Configuration
 
-## Configuration
+All runtime configuration is read from environment variables (see `.env.example`). The
+admin dashboard exposes a curated view at `/admin/api/config`.
 
-Configuration is via environment variables. See [`.env.example`](.env.example) for the
-full annotated list.
+| Variable | Purpose | Default |
+| --- | --- | --- |
+| `MEMORY_LLM_KEY` | LLM API key for L2 / L3 | — |
+| `MEMORY_LLM_BASE_URL` | OpenAI-compatible endpoint | — |
+| `MEMORY_LLM_MODEL` | LLM model name | `gpt-4o-mini` |
+| `MEMORY_EMBEDDING_KEY` | Embedding model API key | — |
+| `MEMORY_EMBEDDING_MODEL` | Embedding model | `text-embedding-3-small` |
+| `MILVUS_URL` | Milvus server URL | `http://localhost:19530` |
+| `MILVUS_DATABASE` | Milvus database name | `Thinkback` |
+| `MEMORY_L3_WRITE_MODE` | `async` (default) or `sync` | `async` |
+| `MEMORY_DECAY_ENABLED` | Enable decay sweeper | `false` |
+| `MEMORY_DECAY_DAYS` | Suppress threshold | `90` |
+| `GRPC_ENABLED` | Start gRPC server alongside HTTP | `true` |
 
-| Variable | Purpose |
-| --- | --- |
-| `MEMORY_LLM_KEY` | LLM API key (optional — leave empty if unauthenticated) |
-| `OPENAI_API_KEY` | Legacy shared key; fallback when `MEMORY_LLM_KEY` is unset |
-| `MEMORY_LLM_BASE_URL` | OpenAI-compatible LLM endpoint |
-| `MEMORY_LLM_MODEL` | LLM model name |
-| `MEMORY_EMBEDDING_BASE_URL` | OpenAI-compatible embedding endpoint |
-| `MEMORY_EMBEDDING_API_KEY` | Embedding key (optional — leave empty if unauthenticated) |
-| `MEMORY_EMBEDDING_MODEL` | Embedding model name |
-| `MEMORY_EMBEDDING_DIMS` | Embedding dimension (must match the model) |
-| `MILVUS_URL` | Vector store URL |
-| `MILVUS_USER` / `MILVUS_PASSWORD` | Milvus credentials (leave empty if unauthenticated) |
-| `DATABASE_URL` | PostgreSQL connection string (L1/L2 + business index) |
-| `MEMORY_MILVUS_COLLECTION` | Milvus collection name (L3) |
-| `GRPC_PORT` | gRPC server port (default `50052`) |
-
-## Project Layout
+## ✦ Project layout
 
 ```text
-src/thinkback
-├── domain        pure: enums, entities, port protocols, fingerprint keys
-├── memory        app: orchestrator + use-cases
-│   ├── service.py        MemoryService
-│   ├── schemas.py        Pydantic API DTOs
-│   ├── repositories/     in_memory + sqlalchemy   (L1/L2 + business index)
-│   └── backends/         fake + mem0_library      (L3 engine)
-├── infra         config · database · readiness · logging
-├── api           FastAPI HTTP
-└── rpc           gRPC
+thinkback/
+├── src/thinkback/
+│   ├── api/              FastAPI routers (memory, admin, health, integration, mem0-config)
+│   │   ├── auth.py           API key 认证 + Scope 授权
+│   │   ├── ratelimit.py      Token Bucket 限流中间件
+│   │   ├── idempotency.py    Idempotency-Key 中间件
+│   │   ├── errors_standard.py 标准化错误码 (TB-1001~TB-2003)
+│   │   ├── v1_memory.py      /v1/memory/* 业务系统接入端点
+│   │   ├── integration_admin.py API Key 管理端点
+│   │   └── mem0_config_admin.py mem0 提示词管理端点
+│   ├── domain/           纯业务域(entities / enums / ports / errors)
+│   ├── memory/           编排服务
+│   │   ├── service.py         MemoryService(主入口)
+│   │   ├── backends/         L3 后端(mem0 / fake)
+│   │   ├── repositories/     L1+L2 仓储(in-memory / sqlalchemy)
+│   │   ├── mem0_config.py   mem0 自定义配置(提示词等)
+│   │   └── schemas.py         Pydantic 请求/响应
+│   ├── infra/            PostgreSQL / Milvus / logging / config
+│   ├── rpc/              gRPC server 与 proto 映射
+│   └── pyproject.toml
+├── web/                  治理台前端(React 19 + Vite + TanStack Router)
+│   ├── src/
+│   │   ├── pages/         6 个页面(overview / memories / tasks / govern / audit / config / integration)
+│   │   ├── components/    sparkline / heatmap / empty-state / stale-indicator / onboarding-dialog ...
+│   │   └── lib/           useListKeyboardNavigation 等 hooks
+│   └── package.json
+├── proto/memory.proto    gRPC 协议定义
+├── alembic/              数据库迁移
+├── tests/                pytest 测试套件(615+ 测试)
+└── docs/                 设计文档与运行手册
 ```
 
-Dependency direction: `api/rpc → memory → infra → domain`. The `domain` package depends on
-nothing else.
+## ✦ Extending
 
-## Extending
+- **Swap L3 backend** — implement the `MemoryBackend` port (`thinkback.domain.ports`) and
+  register it in `thinkback.memory.backends`. Mem0 ships as the default; Qdrant-native or
+  pgvector-backed adapters are straightforward to add.
+- **Add a new admin page** — drop a new file in `web/src/pages/`, register the route in
+  `web/src/main.tsx`, add a sidebar entry in `web/src/components/layout.tsx`.
+- **Custom extraction rules** — edit mem0 prompts via the admin console
+  (`/integration` → mem0 配置). Changes apply on the next write with no restart.
 
-The L3 engine is behind a port, not hard-wired:
-
-| Port | Implementations | Purpose |
-| --- | --- | --- |
-| `MemoryBackend` | `fake` (tests) · `mem0_library` (production) | Long-term fact storage and semantic recall |
-| `MemoryRepository` | `in_memory` (tests) · `sqlalchemy` (production) | L1 journal, L2 summaries, business index, tasks |
-| `HistorySource` | — | History replay for rebuilds |
-
-Swapping or upgrading Mem0 is a change behind `MemoryBackend`. Adding another engine means
-implementing the same four methods (`add` / `search` / `update` / `delete`), with no change
-to the HTTP/gRPC surface.
-
-## Development
+## ✦ Development
 
 ```bash
-make dev           # API + admin web UI (ports auto-fallback)
-make test          # deterministic test suite
-make check         # format-check + ruff + mypy strict + coverage
-make lint          # ruff
-make typecheck     # mypy --strict
-make fmt           # ruff format
-make hooks-install # install pre-commit hooks
+# install all dev tooling
+uv sync --frozen --group dev
+cd web && npm install
+
+# run the test suites
+uv run pytest tests/                 # backend (615+ tests)
+cd web && npx tsc --noEmit            # frontend type check
+cd web && npm run build               # frontend production build
+
+# start everything in dev mode
+make dev                             # API + admin web UI
 ```
 
-The deterministic suite runs entirely offline — in-memory repositories and a fake Mem0
-backend stand in for PostgreSQL, Milvus, and LLM calls. See
-[CONTRIBUTING.md](CONTRIBUTING.md) for the full workflow.
+Code style:
 
-## Documentation
+- **Python** — `ruff` (lint + format) + `mypy --strict` (type check)
+- **TypeScript** — strict mode, no `any` at boundaries
 
-| Document | Contents |
-| --- | --- |
-| [Architecture Report](docs/ARCHITECTURE.md) | Layers, components, data flow, API, DB schema |
-| [Three-Layer Memory Design](docs/memory/) | Design rationale and layer boundaries |
-| [gRPC Guide](docs/GRPC.md) | Proto definitions and service usage |
-| [Admin Dashboard](docs/admin/) | Ops UI, background tasks, evaluation scripts |
-| [Architecture Report](docs/ARCHITECTURE.md) | Known edge cases and their resolutions |
-| [`.env.example`](.env.example) | Full configuration reference |
+## ✦ Documentation
 
-## Contributing
+- [Architecture deep-dive](docs/ARCHITECTURE.md) — hexagonal ports, dependency inversion
+- [API reference](docs/API.md) — full HTTP / gRPC surface
+- [Deployment guide](docs/DEPLOYMENT.md) — Kubernetes manifests, Helm chart
+- [Operations runbook](docs/RUNBOOK.md) — debugging, recovery, scaling
+- [中文文档](README.zh-CN.md) — Chinese translation
 
-We welcome issues and pull requests of all sizes. Please read
-[CONTRIBUTING.md](CONTRIBUTING.md) for setup instructions and PR guidelines.
+## ✦ Contributing
 
-## License
+We welcome PRs for bug fixes, new backends, admin dashboard improvements, and docs. For
+larger changes please open an issue first to discuss direction.
 
-Apache License 2.0 — see [LICENSE](LICENSE) for details.
+- [Good first issues](../../issues?q=is%3Aopen+is%3Aissue+label%3A%22good+first+issue%22)
+- [How to contribute](.github/CONTRIBUTING.md)
+- [Code of conduct](.github/CODE_OF_CONDUCT.md)
+- [Security policy](.github/SECURITY.md)
+
+## ✦ License
+
+[Apache License 2.0](LICENSE) — see `LICENSE` for the full text.
+
+Thinkback is open source under the Apache 2.0 license. You can freely use, modify, and
+distribute it, including for commercial purposes, as long as you preserve the copyright
+notice and disclaimer.
+
+## ✦ Acknowledgments
+
+- [Mem0](https://github.com/mem0ai/mem0) — the long-term memory engine that Thinkback
+  orchestrates
+- [Milvus](https://milvus.io/) — the vector store under L3
+- [FastAPI](https://fastapi.tiangolo.com) — the HTTP framework
+- [TanStack Query / Router](https://tanstack.com) — the admin web UI
+- The community of contributors who report issues, send PRs, and share their use cases
 
 ---
 
 <div align="center">
 
-<sub>Built for teams who need a self-hosted, observable, type-safe memory service.</sub>
+Built with care for teams who need memory to be a **service**, not a side project.
+
+[**Get started**](#-quickstart) · [**Read the docs**](docs/) · [**Report an issue**](.github/ISSUE_TEMPLATE/bug_report.md)
 
 </div>
