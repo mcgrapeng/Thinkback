@@ -167,6 +167,17 @@ export interface AuditItem {
   detail: Record<string, unknown>;
 }
 
+export interface ApiKeyInfo {
+  key_id: string;
+  tenant_id: string;
+  scopes: string[];
+  plan: string;
+  rate_limit_per_minute: number;
+  rate_limit_burst: number;
+  is_active: boolean;
+  created_at: string;
+}
+
 export interface ConfigResponse {
   environment: string;
   fields: Array<{ name: string; value: unknown }>;
@@ -223,6 +234,22 @@ export const api = {
   audit: (params: { action?: string; limit?: number; offset?: number }) =>
     request<AuditItem[]>(`/admin/api/audit${queryOf(params)}`),
   config: () => request<ConfigResponse>("/admin/api/config"),
+  // 集成:API Key 管理
+  listApiKeys: () => request<ApiKeyInfo[]>("/admin/api/integration/keys"),
+  createApiKey: (body: {
+    tenant_id: string;
+    scopes: string[];
+    plan?: string;
+    env?: string;
+  }) => request<{ key: ApiKeyInfo; plaintext: string }>("/admin/api/integration/keys", {
+    method: "POST",
+    body: JSON.stringify(body),
+  }),
+  revokeApiKey: (keyId: string) =>
+    request<{ key_id: string; revoked: boolean }>(
+      `/admin/api/integration/keys/${encodeURIComponent(keyId)}`,
+      { method: "DELETE" },
+    ),
   deleteMemory: (body: Record<string, unknown>) =>
     post<Record<string, unknown>>("/admin/api/delete", body),
   updateMemory: (body: Record<string, unknown>) =>

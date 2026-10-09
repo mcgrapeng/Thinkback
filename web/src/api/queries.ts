@@ -80,3 +80,33 @@ export function useAudit(params: { action?: string; limit?: number }) {
 export function useConfig() {
   return useQuery({ queryKey: ["admin", "config"], queryFn: api.config, staleTime: 300_000 });
 }
+
+// ─── 集成:API Key 管理 ────────────────────────────────────────────────
+
+export function useApiKeys() {
+  return useQuery({
+    queryKey: ["admin", "integration", "keys"],
+    queryFn: api.listApiKeys,
+    staleTime: 10_000,
+  });
+}
+
+export function useCreateApiKey() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: api.createApiKey,
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["admin", "integration", "keys"] });
+    },
+  });
+}
+
+export function useRevokeApiKey() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: api.revokeApiKey,
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["admin", "integration", "keys"] });
+    },
+  });
+}
