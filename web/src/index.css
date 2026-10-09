@@ -180,6 +180,32 @@
     outline-offset: 2px;
     transition: outline-offset 120ms ease-out, box-shadow 200ms ease-out;
   }
+  /* 自定义滚动条:暖色 + 圆角 + hover 增亮 */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: #d6cfbe transparent;
+  }
+  *::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  *::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  *::-webkit-scrollbar-thumb {
+    background-color: #d6cfbe;
+    border-radius: 9999px;
+    border: 2px solid transparent;
+    background-clip: content-box;
+  }
+  *::-webkit-scrollbar-thumb:hover {
+    background-color: #99a1af;
+    background-clip: content-box;
+  }
+  *::-webkit-scrollbar-corner {
+    background: transparent;
+  }
+
   /* WCAG 2.3.3：尊重 reduced-motion */
   @media (prefers-reduced-motion: reduce) {
     *,
@@ -194,8 +220,20 @@
 }
 
 @layer utilities {
-  /* 路由切换页面淡入 + 微下沉（key 由 path 触发，每次重 mount） */
-  @keyframes page-enter {
+  /* View Transitions API:路由切换真·柔顺过渡（原生浏览器动画） */
+  ::view-transition-old(root) {
+    animation: fade-out 180ms cubic-bezier(0.4, 0, 1, 1) both;
+  }
+  ::view-transition-new(root) {
+    animation: fade-in 280ms cubic-bezier(0, 0, 0.2, 1) both;
+  }
+  @keyframes fade-out {
+    to {
+      opacity: 0;
+      transform: translateY(-4px);
+    }
+  }
+  @keyframes fade-in {
     from {
       opacity: 0;
       transform: translateY(6px);
@@ -204,9 +242,6 @@
       opacity: 1;
       transform: translateY(0);
     }
-  }
-  .animate-page-enter {
-    animation: page-enter 320ms cubic-bezier(0.16, 1, 0.3, 1) both;
   }
   /* Editorial Display: 96px / 72px / 48px 数字锚点(Geist Mono,tabular-nums) */
   .text-display-xl {

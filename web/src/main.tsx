@@ -28,9 +28,7 @@ const rootRoute = createRootRoute({
     }, []);
     return (
       <Layout>
-        <div key={window.location.pathname} className="animate-page-enter">
-          <Outlet />
-        </div>
+        <Outlet />
       </Layout>
     );
   },
@@ -80,7 +78,10 @@ const routeTree = rootRoute.addChildren([
   auditRoute,
   configRoute,
 ]);
-const router = createRouter({ routeTree });
+const router = createRouter({
+  routeTree,
+  defaultViewTransition: true,
+});
 
 declare module "@tanstack/react-router" {
   interface Register {

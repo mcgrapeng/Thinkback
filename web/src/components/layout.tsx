@@ -25,6 +25,7 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet";
 import { CommandPalette } from "@/components/command-palette";
+import { OnboardingDialog } from "@/components/onboarding-dialog";
 
 const NAV_GROUPS = [
   {
@@ -246,6 +247,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
         </main>
       </div>
       <CommandPalette />
+      <OnboardingDialog />
     </div>
   );
 }
