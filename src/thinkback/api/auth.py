@@ -68,7 +68,7 @@ class AuthContext:
             )
 
 
-# ─── API Key 存储(进程内,生产替换为 DB/Redis) ──────────────────────────
+# ─── API Key 存储(进程内,生产替换为持久化层) ──────────────────────────
 
 _API_KEYS: dict[str, ApiKey] = {}
 
