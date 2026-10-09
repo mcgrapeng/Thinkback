@@ -255,9 +255,75 @@ function route(req: IncomingMessage, res: ServerResponse, next: () => void) {
       {
         key: "custom_instructions",
         value: `Additional requirements:\n1. Language: write each memory text in the SAME language as the conversation (Chinese conversations → Chinese memories). Never translate Chinese names, nicknames, places, or brands into English.\n2. Output shape: return exactly {"memory": [{"id": "<sequential string>", "text": "<one self-contained memory>"}]}. Every "text" MUST be a plain string; never nest arrays or objects inside it.\n3. Preserve Chinese entities verbatim (宠物名/昵称/地点/品牌逐字保留), including tone particles only when they are part of a name.\n4. Corrections write only the new value, never re-state the old one.\n5. One fact per memory. If a turn contains multiple distinct facts, emit one memory per fact.\n6. Output must be pure Chinese characters and Chinese punctuation.`,
-        description: "mem0 v2 事实抽取约束(user prompt 追加段)。每次 append 时拼入。",
+        description: "mem0 v2 事实抽取约束(user prompt 追加段)。每次 append 时拼入。控制记忆语言、输出格式、实体保留、修正处理、粒度等。",
         is_active: true,
         updated_at: null,
+      },
+      {
+        key: "update_memory_prompt",
+        value: "Compare newly retrieved facts with the existing memory. For each new fact, decide whether to:\n- ADD: Add it to the memory as a new element\n- UPDATE: Update an existing memory element\n- DELETE: Delete an existing memory element\n- NONE: Make no change\n\nGuidelines:\n1. **Add**: If the retrieved facts contain new information not present in the memory.\n2. **Update**: If the retrieved facts contain information that is already present but the information is totally different.\n3. **Delete**: If the retrieved facts contradict existing memories.\n4. **NONE**: If the fact is already present or irrelevant.",
+        description: "记忆更新/冲突处理提示词。控制 ADD/UPDATE/DELETE/NONE 四种操作的决策规则。影响记忆合并、取代、去重策略。",
+        is_active: true,
+        updated_at: "2026-10-08T10:00:00Z",
+      },
+      {
+        key: "memory_answer_prompt",
+        value: "You are an expert at answering questions based on the provided memories. Your task is to provide accurate and concise answers to the questions by leveraging the information given in the memories.\n\nGuidelines:\n- Extract relevant information from the memories based on the question.\n- If no relevant information is found, make sure you don't say no information is found. Instead, accept the question and provide a general response.\n- Ensure that the answers are clear, concise, and directly address the question.",
+        description: "记忆召回回答提示词。控制如何基于记忆回答问题。影响回答的准确性、完整性、语气。",
+        is_active: true,
+        updated_at: null,
+      },
+    ]);
+  if (url.startsWith("/admin/api/mem0/sections"))
+    return json(res, 200, [
+      {
+        key: "custom_instructions",
+        title: "抽取约束 (custom_instructions)",
+        category: "extraction",
+        icon: "Sparkles",
+        tips: [
+          "用「## Custom Instructions」段拼入 mem0 的 user prompt",
+          "控制:记忆语言、输出格式(JSON schema)、实体保留规则、修正处理、粒度",
+          "常见调优:加业务术语约束、调整记忆粒度(一次最多抽 N 条)、改输出格式",
+          "建议:保持简洁,每次写入记忆时都拼入此 prompt,过长会增加 token 消耗",
+        ],
+        examples: [
+          { label: "语言约束", code: "Language: write each memory text in the SAME language as the conversation (Chinese conversations → Chinese memories). Never translate Chinese names, nicknames, places, or brands into English." },
+          { label: "输出格式", code: 'Output shape: return exactly {"memory": [{"id": "<sequential string>", "text": "<one self-contained memory>"}]}. Every "text" MUST be a plain string; never nest arrays or objects inside it.' },
+          { label: "记忆粒度", code: 'One fact per memory. If a turn contains multiple distinct facts, emit one memory per fact. Never combine "X is Y" + "X is Z" into a single memory.' },
+        ],
+      },
+      {
+        key: "update_memory_prompt",
+        title: "更新策略 (update_memory_prompt)",
+        category: "update",
+        icon: "RefreshCw",
+        tips: [
+          "控制记忆的 ADD/UPDATE/DELETE/NONE 四种操作决策",
+          "影响:记忆合并策略、取代逻辑、去重规则",
+          "常见调优:修改冲突解决策略(如「新值优先」vs「保留最完整值」)、调整去重阈值",
+          "建议:默认策略已较通用,只有特定业务场景才需要修改",
+        ],
+        examples: [
+          { label: "新值优先", code: "If the retrieved fact conveys the same thing as an existing memory, prefer the NEW fact (recent information is more accurate)." },
+          { label: "保留最完整", code: "If the retrieved fact conveys the same thing as an existing memory, keep the fact with the MOST information (longest, most detailed)." },
+        ],
+      },
+      {
+        key: "memory_answer_prompt",
+        title: "召回回答 (memory_answer_prompt)",
+        category: "recall",
+        icon: "Search",
+        tips: [
+          "控制记忆召回时的 LLM 回答行为",
+          "影响:回答的准确性、完整性、语气",
+          "常见调优:改回答风格(如「简洁」vs「详细」)、加引用格式、调整不确定性处理",
+          "建议:根据业务场景定制,如客服场景可加「如果记忆不足请主动询问」",
+        ],
+        examples: [
+          { label: "简洁回答", code: "Provide concise answers. Only use information from the provided memories. If the memory doesn't contain the answer, say so briefly." },
+          { label: "详细回答", code: "Provide detailed, comprehensive answers. Use all relevant information from the memories. If multiple memories relate to the question, synthesize them into a coherent answer." },
+        ],
       },
     ]);
   if (url.includes("/admin/api/maintenance"))
