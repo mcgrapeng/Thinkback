@@ -5,11 +5,11 @@ import { AlertTriangle, SearchX } from "lucide-react";
 import { toast } from "sonner";
 import { useConfig } from "@/api/queries";
 import { PageHeader } from "@/components/page-header";
-import { Alert, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
+import { EmptyState } from "@/components/empty-state";
 
 const GROUP_LABELS: Record<string, string> = {
   app: "应用标识",
@@ -104,10 +104,13 @@ export function ConfigPage() {
       </div>
 
       {isError ? (
-        <Alert variant="destructive">
-          <AlertTriangle aria-hidden="true" />
-          <AlertTitle>无法加载配置</AlertTitle>
-        </Alert>
+        <EmptyState
+          variant="error"
+          icon={AlertTriangle}
+          title="无法加载配置"
+          description="请确认后端服务可达。"
+          action={{ label: "重试", onClick: () => window.location.reload() }}
+        />
       ) : isPending ? (
         <div aria-busy="true" className="space-y-3">
           <Skeleton className="h-40" />
@@ -150,9 +153,12 @@ export function ConfigPage() {
             </Card>
           ))}
           {groups.length === 0 ? (
-            <div className="flex flex-col items-center gap-2 py-12 text-center lg:col-span-2">
-              <SearchX aria-hidden="true" className="size-8 text-foreground-soft" />
-              <p className="text-sm text-foreground-muted">没有匹配的配置项</p>
+            <div className="lg:col-span-2">
+              <EmptyState
+                icon={SearchX}
+                title="没有匹配的配置项"
+                description="试试别的搜索词，或用别名(如「数据库」命中 PostgreSQL、「向量库」命中 Milvus)。"
+              />
             </div>
           ) : null}
         </div>

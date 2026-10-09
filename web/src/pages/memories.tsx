@@ -12,12 +12,13 @@ import { toast } from "sonner";
 import { useMemories, useMemorySource, type MemoryFilters } from "@/api/queries";
 import type { AdminMemoryItem } from "@/api/client";
 import { PageHeader } from "@/components/page-header";
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Alert, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
+import { EmptyState } from "@/components/empty-state";
 import {
   Sheet,
   SheetContent,
@@ -485,11 +486,13 @@ export function MemoriesPage() {
       <div className="editorial-rule" />
 
       {isError ? (
-        <Alert variant="destructive">
-          <AlertTriangle aria-hidden="true" />
-          <AlertTitle>无法加载记忆列表</AlertTitle>
-          <AlertDescription>请确认后端服务可达、管理 token 正确。</AlertDescription>
-        </Alert>
+        <EmptyState
+          variant="error"
+          icon={AlertTriangle}
+          title="无法加载记忆列表"
+          description="请确认后端服务可达、管理 token 正确。"
+          action={{ label: "重试", onClick: () => window.location.reload() }}
+        />
       ) : null}
 
       {isPending && !data ? (
