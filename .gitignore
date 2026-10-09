@@ -257,3 +257,7 @@ web/.cache/
 web/playwright-report/
 web/blob-report/
 web/test-results/
+
+# 根目录级 node_modules(之前只忽略了 web/node_modules/)
+# 用 **/ 模式匹配任何深度的 node_modules,防御未来在 src/ 或 tests/ 下引入
+**/node_modules/
