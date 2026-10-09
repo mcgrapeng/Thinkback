@@ -21,7 +21,7 @@ import { PageHeader } from "@/components/page-header";
 import { StatusBadge } from "@/components/status-badge";
 import { Sparkline } from "@/components/sparkline";
 import { StaleIndicator } from "@/components/stale-indicator";
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { EmptyState } from "@/components/empty-state";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -207,16 +207,14 @@ export function OverviewPage() {
     return (
       <div className="space-y-4">
         <PageHeader title="总览" />
-        <Alert variant="destructive">
-          <AlertTriangle aria-hidden="true" />
-          <AlertTitle>无法加载总览数据</AlertTitle>
-          <AlertDescription>
-            <p className="mb-2">{errMsg.slice(0, 200)}</p>
-            <Button variant="outline" size="sm" onClick={() => refetch()}>
-              <RefreshCw aria-hidden="true" /> 重试
-            </Button>
-          </AlertDescription>
-        </Alert>
+        <EmptyState
+          variant="error"
+          icon={AlertTriangle}
+          title="无法加载总览数据"
+          description="请确认后端服务可达。"
+          detail={errMsg.slice(0, 240)}
+          action={{ label: "重试", onClick: () => refetch() }}
+        />
       </div>
     );
   }

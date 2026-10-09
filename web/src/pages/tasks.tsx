@@ -7,10 +7,10 @@ import { toast } from "sonner";
 import { useTasks } from "@/api/queries";
 import type { TaskItem } from "@/api/client";
 import { PageHeader } from "@/components/page-header";
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
+import { EmptyState } from "@/components/empty-state";
 import { StatusBadge } from "@/components/status-badge";
 import {
   Table,
@@ -188,16 +188,19 @@ export function TasksPage() {
           ))}
         </div>
       ) : isError ? (
-        <Alert variant="destructive">
-          <AlertTriangle aria-hidden="true" />
-          <AlertTitle>无法加载任务列表</AlertTitle>
-          <AlertDescription>请确认后端服务可达、管理 token 正确。</AlertDescription>
-        </Alert>
+        <EmptyState
+          variant="error"
+          icon={AlertTriangle}
+          title="无法加载任务列表"
+          description="请确认后端服务可达、管理 token 正确。"
+          action={{ label: "重试", onClick: () => window.location.reload() }}
+        />
       ) : data.length === 0 ? (
-        <div className="flex flex-col items-center gap-2 py-16 text-center">
-          <Inbox aria-hidden="true" className="size-8 text-foreground-soft" />
-          <p className="text-sm text-foreground-muted">当前筛选下没有任务</p>
-        </div>
+        <EmptyState
+          icon={Inbox}
+          title="当前筛选下没有任务"
+          description="试试切换到其他状态(全部/运行中/失败/死信),或刷新等待新任务。"
+        />
       ) : (
         <p className="sr-only" aria-live="polite">
           {data.length} 个任务

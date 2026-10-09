@@ -8,7 +8,7 @@
 
 import { useState } from "react";
 import { Link, useSearch } from "@tanstack/react-router";
-import { ShieldAlert } from "lucide-react";
+import { Loader2, ShieldAlert } from "lucide-react";
 import { toast } from "sonner";
 import { api, ApiError } from "@/api/client";
 import { PageHeader } from "@/components/page-header";
@@ -125,6 +125,7 @@ export function GovernPage() {
   });
   const [confirmText, setConfirmText] = useState("");
   const [pending, setPending] = useState<PendingOp | null>(null);
+  const [running, setRunning] = useState(false);
 
   const request_id = () => `admin-${Date.now()}`;
   const operationId = (form: { operation_id: string }, prefix: string) =>
@@ -147,14 +148,27 @@ export function GovernPage() {
   const rebuildReady = rebuildForm.user_id.trim().length > 0;
 
   const runOp = async (op: PendingOp) => {
+    setRunning(true);
     try {
       const result = (await op.run()) as { task_id?: string };
+      const taskId = result?.task_id;
       toast.success(`${op.title} 已提交`, {
-        description: result?.task_id ? `任务 ${result.task_id}，可在任务监控页跟踪` : undefined,
+        description: taskId ? `任务 ${taskId} · 后台执行中` : "已进入后台任务队列",
+        action: taskId
+          ? {
+              label: "查看任务",
+              onClick: () => window.location.assign(`/tasks?tab=all`),
+            }
+          : undefined,
+        duration: 6000,
       });
     } catch (error) {
-      toast.error(`${op.title} 失败`, { description: errorDetail(error) });
+      toast.error(`${op.title} 失败`, {
+        description: errorDetail(error),
+        duration: 8000,
+      });
     } finally {
+      setRunning(false);
       setPending(null);
       setConfirmText("");
     }
@@ -269,7 +283,7 @@ export function GovernPage() {
             <CardFooterAction note="执行后进入后台任务队列，结果可在任务监控页跟踪。">
               <Button
                 variant="destructive"
-                disabled={!deleteReady || isMobile}
+                disabled={!deleteReady || isMobile || running}
                 onClick={() =>
                   setPending({
                     kind: "delete",
@@ -293,6 +307,9 @@ export function GovernPage() {
                   })
                 }
               >
+                {running && pending?.kind === "delete" ? (
+                  <Loader2 aria-hidden="true" className="size-4 animate-spin" />
+                ) : null}
                 执行删除
               </Button>
             </CardFooterAction>
@@ -349,7 +366,7 @@ export function GovernPage() {
             </CardContent>
             <CardFooterAction note="执行后进入后台任务队列，结果可在任务监控页跟踪。">
               <Button
-                disabled={!updateReady || isMobile}
+                disabled={!updateReady || isMobile || running}
                 onClick={() =>
                   setPending({
                     kind: "update",
@@ -366,6 +383,9 @@ export function GovernPage() {
                   })
                 }
               >
+                {running && pending?.kind === "update" ? (
+                  <Loader2 aria-hidden="true" className="size-4 animate-spin" />
+                ) : null}
                 执行更新
               </Button>
             </CardFooterAction>
@@ -444,7 +464,7 @@ export function GovernPage() {
             </CardContent>
             <CardFooterAction note="重建耗时与用户记忆量成正比，结果可在任务监控页跟踪。">
               <Button
-                disabled={!rebuildReady || isMobile}
+                disabled={!rebuildReady || isMobile || running}
                 onClick={() =>
                   setPending({
                     kind: "rebuild",
@@ -466,6 +486,9 @@ export function GovernPage() {
                   })
                 }
               >
+                {running && pending?.kind === "rebuild" ? (
+                  <Loader2 aria-hidden="true" className="size-4 animate-spin" />
+                ) : null}
                 执行重建
               </Button>
             </CardFooterAction>

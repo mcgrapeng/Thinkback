@@ -5,7 +5,6 @@ import { AlertTriangle, ScrollText } from "lucide-react";
 import { toast } from "sonner";
 import { useAudit } from "@/api/queries";
 import { PageHeader } from "@/components/page-header";
-import { Alert, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -17,6 +16,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
+import { EmptyState } from "@/components/empty-state";
 import {
   Table,
   TableBody,
@@ -111,10 +111,13 @@ export function AuditPage() {
       />
 
       {isError ? (
-        <Alert variant="destructive">
-          <AlertTriangle aria-hidden="true" />
-          <AlertTitle>无法加载审计日志</AlertTitle>
-        </Alert>
+        <EmptyState
+          variant="error"
+          icon={AlertTriangle}
+          title="无法加载审计日志"
+          description="请确认后端服务可达。"
+          action={{ label: "重试", onClick: () => window.location.reload() }}
+        />
       ) : isPending ? (
         <div aria-busy="true" className="space-y-2">
           {Array.from({ length: 5 }).map((_, index) => (
@@ -235,10 +238,11 @@ export function AuditPage() {
           </div>
         </>
       ) : (
-        <div className="flex flex-col items-center gap-2 py-16 text-center">
-          <ScrollText aria-hidden="true" className="size-8 text-foreground-soft" />
-          <p className="text-sm text-foreground-muted">暂无审计记录</p>
-        </div>
+        <EmptyState
+          icon={ScrollText}
+          title="暂无审计记录"
+          description="该筛选条件下还没有任何操作记录。试试切换动作类型或扩大时间范围。"
+        />
       )}
     </div>
   );
