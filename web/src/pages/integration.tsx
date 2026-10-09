@@ -30,6 +30,7 @@ import {
 } from "@/api/queries";
 import { PageHeader } from "@/components/page-header";
 import { StaleIndicator } from "@/components/stale-indicator";
+import { Mem0ConfigSection } from "@/components/mem0-config";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -409,6 +410,11 @@ export function IntegrationPage() {
           />
         )}
       </section>
+
+      <div className="editorial-rule" />
+
+      {/* mem0 抽取提示词配置 */}
+      <Mem0ConfigSection />
 
       <div className="editorial-rule" />
 
