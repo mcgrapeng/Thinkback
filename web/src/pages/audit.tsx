@@ -21,6 +21,7 @@ import {
 } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { useListKeyboardNavigation } from "@/lib/use-list-keyboard-nav";
 import { Info } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -70,6 +71,7 @@ function TimelineNode({
   detail,
   isLast,
   index,
+  isFocused,
 }: {
   createdAt: string;
   action: string;
@@ -78,12 +80,16 @@ function TimelineNode({
   detail: Record<string, unknown>;
   isLast: boolean;
   index: number;
+  isFocused: boolean;
 }) {
   const tone = ACTION_TONE[action] ?? "neutral";
   const label = ACTION_LABELS[action] ?? action;
   return (
     <li
-      className="relative flex gap-4 pb-6 animate-editorial-fade-up"
+      className={cn(
+        "relative flex gap-4 pb-6 animate-editorial-fade-up transition-colors",
+        isFocused && "bg-background-muted/30 rounded-lg",
+      )}
       style={{ animationDelay: `${Math.min(index * 30, 400)}ms` }}
     >
       {/* 左侧:时间 + 时间轴竖线 */}
@@ -168,6 +174,7 @@ export function AuditPage() {
     limit,
   });
   const isFull = (data?.length ?? 0) >= limit;
+  const { selectedIndex } = useListKeyboardNavigation(data?.length ?? 0);
 
   return (
     <div className="space-y-6">
@@ -235,6 +242,7 @@ export function AuditPage() {
                 detail={item.detail}
                 isLast={i === data.length - 1}
                 index={i}
+                isFocused={selectedIndex === i}
               />
             ))}
           </ol>

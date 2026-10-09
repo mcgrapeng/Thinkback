@@ -22,6 +22,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton, SkeletonLines } from "@/components/ui/skeleton";
 import { StatusBadge } from "@/components/status-badge";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { useListKeyboardNavigation } from "@/lib/use-list-keyboard-nav";
 import { cn } from "@/lib/utils";
 
 const TABS = [
@@ -90,17 +91,22 @@ function TaskCard({
   expanded,
   onToggle,
   index,
+  isFocused,
 }: {
   task: TaskItem;
   expanded: boolean;
   onToggle: () => void;
   index: number;
+  isFocused: boolean;
 }) {
   const retry = task.retry_count ?? 0;
   const tone = retryTone(retry);
   return (
     <li
-      className="group row-hover-warm border-l-2 border-transparent pl-4 -ml-4 pr-2 py-4 animate-editorial-fade-up"
+      className={cn(
+        "group row-hover-warm border-l-2 pl-4 -ml-4 pr-2 py-4 animate-editorial-fade-up transition-colors",
+        isFocused ? "border-foreground-intense" : "border-transparent",
+      )}
       style={{ animationDelay: `${Math.min(index * 30, 400)}ms` }}
     >
       <div className="flex items-start gap-3">
@@ -189,6 +195,7 @@ export function TasksPage() {
   const activeTab = TABS.find((t) => t.value === tab) ?? TABS[0];
   const { data, isPending, isError, refetch, dataUpdatedAt } =
     useTasks(activeTab.statuses);
+  const { selectedIndex } = useListKeyboardNavigation(data?.length ?? 0);
 
   // tab 同步 URL(可深链)
   useEffect(() => {
@@ -343,6 +350,7 @@ export function TasksPage() {
                 expanded={expanded.has(task.task_id)}
                 onToggle={() => toggle(task.task_id)}
                 index={i}
+                isFocused={selectedIndex === i}
               />
             ))}
           </ul>

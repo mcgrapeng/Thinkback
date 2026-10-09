@@ -7,7 +7,15 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type * as React from "react";
 import { Link, useNavigate, useSearch } from "@tanstack/react-router";
-import { AlertTriangle, ChevronLeft, ChevronRight, Info, Loader2, Search } from "lucide-react";
+import {
+  AlertTriangle,
+  ChevronLeft,
+  ChevronRight,
+  Columns2,
+  Info,
+  Loader2,
+  Search,
+} from "lucide-react";
 import { toast } from "sonner";
 import { useMemories, useMemorySource, type MemoryFilters } from "@/api/queries";
 import type { AdminMemoryItem } from "@/api/client";
@@ -29,6 +37,7 @@ import {
 import { StatusBadge } from "@/components/status-badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { useListKeyboardNavigation } from "@/lib/use-list-keyboard-nav";
 import { findHighlightSegments } from "@/lib/highlight";
 import { cn, formatTime } from "@/lib/utils";
 
@@ -297,8 +306,38 @@ export function MemoriesPage() {
   const [statusInput, setStatusInput] = useState<string>(search.status ?? "ALL");
   const [applied, setApplied] = useState<MemoryFilters>({ page: search.page ?? 1 });
   const [selected, setSelected] = useState<AdminMemoryItem | null>(null);
+  const [compareItems, setCompareItems] = useState<[AdminMemoryItem, AdminMemoryItem] | null>(null);
   const resultsRef = useRef<HTMLDivElement>(null);
   const lastFilterKeyRef = useRef<string>("");
+
+  const totalItems = 50; // PAGE_SIZE,用于键盘导航范围
+  const {
+    selectedIndex,
+    selectedIds,
+    setSelectedIds,
+    selectAll,
+    clearSelection,
+  } = useListKeyboardNavigation(totalItems);
+
+  // 键盘 Enter/Space 在 selectedIndex 打开详情
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement;
+      if (
+        target.tagName === "INPUT" ||
+        target.tagName === "TEXTAREA" ||
+        target.isContentEditable
+      )
+        return;
+      if (e.key === "Enter" && data?.items?.[selectedIndex]) {
+        e.preventDefault();
+        setSelected(data.items[selectedIndex]);
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedIndex]);
 
   // 同步筛选 → URL(可分享、可深链)
   useEffect(() => {
@@ -508,46 +547,73 @@ export function MemoriesPage() {
           <>
             {/* 桌面:editorial card 列表 */}
             <ul className="hidden md:block divide-y divide-[#f5f2ec] border-t border-b border-[#f5f2ec]">
-              {data.items.map((memory, i) => (
-                <li
-                  key={memory.memory_id}
-                  className="group cursor-pointer row-hover-warm border-l-2 border-transparent pl-4 -ml-4 pr-2 py-5 animate-editorial-fade-up"
-                  style={{ animationDelay: `${i * 40}ms` }}
-                  onClick={() => openDetail(memory)}
-                  onKeyDown={(e) => onRowKeyDown(e, memory)}
-                  tabIndex={0}
-                  role="button"
-                  aria-label={`打开记忆 ${memory.memory_id}`}
-                >
-                  <div className="flex items-baseline gap-3 mb-2">
-                    <span className="section-label text-[10px]">
-                      MEMORY · {memory.memory_id.slice(-3)}
-                    </span>
-                    <span className="font-mono text-xs text-foreground-soft">
-                      {memory.last_recalled_at ? formatTime(memory.last_recalled_at) : "never"}
-                    </span>
-                    <span className="ml-auto text-sm text-foreground-muted tabular-nums">
-                      recalled <strong className="font-semibold text-foreground-intense">{memory.recall_count}×</strong>
-                    </span>
-                  </div>
-                  <p className="text-lg leading-snug text-foreground-intense mb-2 line-clamp-2">
-                    {memory.memory_text}
-                  </p>
-                  <div className="flex flex-wrap items-center gap-3 text-xs text-foreground-muted">
-                    <span className="font-mono">{memory.user_id}</span>
-                    <span aria-hidden="true">·</span>
-                    <span>{memory.memory_scope_id}</span>
-                    {memory.conflict_slot ? (
-                      <>
-                        <span aria-hidden="true">·</span>
-                        <span>{memory.conflict_slot}</span>
-                      </>
-                    ) : null}
-                    <StatusBadge status={memory.memory_status} />
-                    <Badge variant="neutral">{memory.data_classification}</Badge>
-                  </div>
-                </li>
-              ))}
+              {data.items.map((memory, i) => {
+                const isSelected = selectedIds.has(String(i));
+                const isFocused = selectedIndex === i;
+                return (
+                  <li
+                    key={memory.memory_id}
+                    className={cn(
+                      "group cursor-pointer row-hover-warm border-l-2 pl-4 -ml-4 pr-2 py-5 animate-editorial-fade-up transition-colors",
+                      isSelected
+                        ? "border-info bg-info-soft/20"
+                        : isFocused
+                          ? "border-foreground-intense"
+                          : "border-transparent",
+                    )}
+                    style={{ animationDelay: `${i * 40}ms` }}
+                    onClick={() => openDetail(memory)}
+                    onKeyDown={(e) => onRowKeyDown(e, memory)}
+                    tabIndex={0}
+                    role="button"
+                    aria-label={`打开记忆 ${memory.memory_id}`}
+                  >
+                    <div className="flex items-baseline gap-3 mb-2">
+                      <span
+                        className="cursor-pointer select-none text-xs text-foreground-soft hover:text-info"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setSelectedIds((prev) => {
+                            const next = new Set(prev);
+                            const key = String(i);
+                            if (next.has(key)) next.delete(key);
+                            else next.add(key);
+                            return next;
+                          });
+                        }}
+                        title="选中后可对比（Shift+Click 多选）"
+                      >
+                        {isSelected ? "☑" : "☐"}
+                      </span>
+                      <span className="section-label text-[10px]">
+                        MEMORY · {memory.memory_id.slice(-3)}
+                      </span>
+                      <span className="font-mono text-xs text-foreground-soft">
+                        {memory.last_recalled_at ? formatTime(memory.last_recalled_at) : "never"}
+                      </span>
+                      <span className="ml-auto text-sm text-foreground-muted tabular-nums">
+                        recalled <strong className="font-semibold text-foreground-intense">{memory.recall_count}×</strong>
+                      </span>
+                    </div>
+                    <p className="text-lg leading-snug text-foreground-intense mb-2 line-clamp-2">
+                      {memory.memory_text}
+                    </p>
+                    <div className="flex flex-wrap items-center gap-3 text-xs text-foreground-muted">
+                      <span className="font-mono">{memory.user_id}</span>
+                      <span aria-hidden="true">·</span>
+                      <span>{memory.memory_scope_id}</span>
+                      {memory.conflict_slot ? (
+                        <>
+                          <span aria-hidden="true">·</span>
+                          <span>{memory.conflict_slot}</span>
+                        </>
+                      ) : null}
+                      <StatusBadge status={memory.memory_status} />
+                      <Badge variant="neutral">{memory.data_classification}</Badge>
+                    </div>
+                  </li>
+                );
+              })}
             </ul>
 
             {/* 移动卡片(触达 ≥44px) */}
@@ -613,6 +679,107 @@ export function MemoriesPage() {
       <Sheet open={selected !== null} onOpenChange={(open) => (open ? null : setSelected(null))}>
         <SheetContent className="p-0">
           {selected ? <MemoryDetail memory={selected} /> : null}
+        </SheetContent>
+      </Sheet>
+
+      {/* 底部操作条:多选时显示 */}
+      {selectedIds.size > 0 ? (
+        <div className="fixed bottom-0 left-0 right-0 z-40 border-t border-[#ebe7df] bg-background/95 backdrop-blur-sm px-6 py-3 flex items-center justify-between animate-editorial-fade-up">
+          <div className="flex items-center gap-3 text-sm text-foreground-muted">
+            <span className="font-mono tabular-nums text-foreground-emphasis">
+              {selectedIds.size}
+            </span>
+            条已选
+            <button
+              type="button"
+              onClick={clearSelection}
+              className="text-xs text-foreground-soft hover:text-foreground-emphasis underline-offset-2 hover:underline"
+            >
+              清除
+            </button>
+          </div>
+          <div className="flex items-center gap-2">
+            {selectedIds.size === 2 ? (
+              <Button
+                variant="default"
+                size="sm"
+                onClick={() => {
+                  const items = Array.from(selectedIds)
+                    .map((k) => data?.items[Number(k)])
+                    .filter(Boolean) as AdminMemoryItem[];
+                  if (items.length === 2) setCompareItems([items[0]!, items[1]!]);
+                }}
+              >
+                <Columns2 aria-hidden="true" className="size-3.5" /> 对比
+              </Button>
+            ) : null}
+            {selectedIds.size > 2 ? (
+              <span className="text-xs text-foreground-muted">请选择恰好 2 条以对比</span>
+            ) : null}
+            <Button variant="outline" size="sm" onClick={selectAll}>
+              全选
+            </Button>
+          </div>
+        </div>
+      ) : null}
+
+      {/* 对比 Sheet */}
+      <Sheet open={compareItems !== null} onOpenChange={(open) => (open ? null : setCompareItems(null))}>
+        <SheetContent className="w-[720px] sm:max-w-[720px] overflow-y-auto">
+          {compareItems ? (
+            <div className="space-y-6">
+              <div>
+                <p className="section-label mb-1">COMPARISON · 记忆对比</p>
+                <h2 className="text-2xl font-semibold tracking-tight">并排比较</h2>
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                {[compareItems[0], compareItems[1]].map((item, idx) => (
+                  <div key={idx} className="rounded-2xl border border-[#ebe7df] p-4 space-y-3">
+                    <p className="section-label text-[10px]">
+                      {idx === 0 ? "LEFT" : "RIGHT"} · {item.memory_id.slice(-6)}
+                    </p>
+                    <p className="text-sm leading-relaxed text-foreground-intense">
+                      {item.memory_text}
+                    </p>
+                    <dl className="space-y-1.5 text-xs">
+                      {[
+                        ["用户", item.user_id],
+                        ["范围", item.memory_scope_id],
+                        ["状态", item.memory_status],
+                        ["分类", item.data_classification],
+                        ["召回", `${item.recall_count}×`],
+                        ["生效", formatTime(item.valid_at)],
+                        ["冲突槽", item.conflict_slot ?? "—"],
+                      ].map(([k, v]) => (
+                        <div key={String(k)} className="flex justify-between gap-2">
+                          <dt className="text-foreground-muted">{k}</dt>
+                          <dd className="font-mono text-foreground-emphasis text-right">{v}</dd>
+                        </div>
+                      ))}
+                    </dl>
+                  </div>
+                ))}
+              </div>
+              {/* 差异高亮 */}
+              <div className="rounded-xl bg-background-muted p-4 text-xs text-foreground-muted">
+                <p className="font-medium text-foreground-emphasis mb-1">差异摘要</p>
+                {compareItems[0].memory_text !== compareItems[1].memory_text ? (
+                  <p>文本内容不同</p>
+                ) : (
+                  <p>文本内容一致</p>
+                )}
+                {compareItems[0].memory_status !== compareItems[1].memory_status ? (
+                  <p>状态不同:{compareItems[0].memory_status} vs {compareItems[1].memory_status}</p>
+                ) : null}
+                {compareItems[0].data_classification !== compareItems[1].data_classification ? (
+                  <p>分类不同:{compareItems[0].data_classification} vs {compareItems[1].data_classification}</p>
+                ) : null}
+                {compareItems[0].user_id !== compareItems[1].user_id ? (
+                  <p>用户不同:{compareItems[0].user_id} vs {compareItems[1].user_id}</p>
+                ) : null}
+              </div>
+            </div>
+          ) : null}
         </SheetContent>
       </Sheet>
     </div>
