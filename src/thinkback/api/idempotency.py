@@ -75,7 +75,7 @@ class IdempotencyCache:
         return len(expired)
 
 
-# 全局缓存实例(生产替换为 Redis)
+# 全局缓存实例(生产替换为持久化层)
 _idempotency_cache = IdempotencyCache()
 
 
@@ -84,13 +84,17 @@ def get_idempotency_cache() -> IdempotencyCache:
 
 
 class IdempotencyMiddleware(BaseHTTPMiddleware):
-    """对写操作(POST/PUT/DELETE)做幂等保护。"""
+    """只对 /v1/* 的写操作(POST/PUT/DELETE/PATCH)做幂等保护。"""
 
     def __init__(self, app):
         super().__init__(app)
         self.cache = _idempotency_cache
 
     async def dispatch(self, request: Request, call_next):
+        # 只处理 /v1/* 路径
+        if not request.url.path.startswith("/v1/"):
+            return await call_next(request)
+
         # 只处理写操作
         if request.method not in ("POST", "PUT", "DELETE", "PATCH"):
             return await call_next(request)

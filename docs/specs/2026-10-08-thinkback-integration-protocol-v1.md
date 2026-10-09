@@ -273,12 +273,24 @@ const results = await client.memory.recall({ userId: "u_8421", query: "..." });
 
 ## 9. 实施计划
 
-| 阶段 | 内容 | 优先级 |
-|------|------|--------|
-| P0 | API key 认证 + tenant 隔离 | 高 |
-| P0 | 标准化错误码 + 版本化路由 | 高 |
-| P0 | 限流中间件 | 高 |
-| P1 | 幂等保证(Idempotency-Key) | 中 |
-| P1 | Python SDK | 中 |
-| P2 | Webhook 事件通知 | 低 |
-| P2 | TypeScript SDK | 低 |
+| 阶段 | 内容 | 状态 |
+|------|------|------|
+| P0 | API key 认证 + tenant 隔离(`api/auth.py`) | ✅ done |
+| P0 | 标准化错误码 + 版本化路由(`api/errors_standard.py`) | ✅ done |
+| P0 | 限流中间件 Token Bucket(`api/ratelimit.py`) | ✅ done |
+| P0 | 幂等保证 Idempotency-Key(`api/idempotency.py`) | ✅ done |
+| P0 | `/v1/memory/*` 路由 + 认证接入(`api/v1_memory.py`) | ✅ done |
+| P0 | v1 集成测试(`tests/unit/test_v1_integration.py`) | ✅ done (8 tests) |
+| P1 | Python SDK(`thinkback-py` package) | TODO |
+| P2 | Webhook 事件通知 | TODO |
+| P2 | TypeScript SDK | TODO |
+
+## 10. 路由分层
+
+| 路径 | 鉴权 | 限流 | 幂等 | 用途 |
+|------|------|------|------|------|
+| `/health` `/docs` `/openapi.json` | ❌ | ❌ | ❌ | 健康/文档 |
+| `/memory/*` | ❌ (内部服务) | ❌ | ❌ | admin web / gRPC / 内部服务间调用 |
+| `/admin/api/*` | ✅ Admin Token | ❌ | ❌ | 治理台 console |
+| `/v1/memory/*` | ✅ API Key + Scope + Tenant | ✅ Token Bucket | ✅ Idempotency-Key | 业务系统接入 |
+

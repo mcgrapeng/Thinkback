@@ -43,18 +43,23 @@ class TokenBucket:
 
 
 class RateLimitMiddleware(BaseHTTPMiddleware):
-    """对 /v1/* 路径做 API key 级限流。"""
+    """只对 /v1/* 路径做 API key 级限流。
+
+    /memory/*、/admin/api/*、/health 等内部路径不走限流。
+    """
 
     def __init__(self, app, exclude_paths: set[str] | None = None):
         super().__init__(app)
-        self.exclude_paths = exclude_paths or {"/health", "/docs", "/redoc", "/openapi.json"}
+        self.exclude_paths = exclude_paths or {
+            "/health", "/docs", "/redoc", "/openapi.json",
+        }
         self.buckets: dict[str, TokenBucket] = defaultdict(
             lambda: TokenBucket(tokens=0, last_refill=0, rate_per_second=0, burst=0)
         )
 
     def _get_bucket(self, key_id: str, rate_per_minute: int, burst: int) -> TokenBucket:
         bucket = self.buckets[key_id]
-        if bucket.burst != burst:  # plan 变更时重置
+        if bucket.burst != burst:
             bucket.burst = burst
             bucket.rate_per_second = rate_per_minute / 60.0
             bucket.tokens = float(burst)
@@ -62,15 +67,18 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         return bucket
 
     async def dispatch(self, request: Request, call_next):
-        # 跳过非 API 路径
-        if request.url.path in self.exclude_paths:
+        path = request.url.path
+        # 只限流 /v1/* 业务系统接入路径
+        if not path.startswith("/v1/"):
+            return await call_next(request)
+        if path in self.exclude_paths:
             return await call_next(request)
 
         # 解析 API key
         auth_header = request.headers.get("authorization", "")
         parsed = _parse_api_key(auth_header)
         if not parsed:
-            return await call_next(request)  # 认证失败由 require_auth 处理
+            return await call_next(request)
 
         key_id, _ = parsed
         record = get_api_key(key_id)
@@ -89,7 +97,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                     "error": {
                         "code": "TB-1007",
                         "message": f"Rate limit exceeded. Retry after {retry_after}s",
-                        "request_id": request.state.request_id if hasattr(request.state, "request_id") else "unknown",
+                        "request_id": getattr(request.state, "request_id", "unknown"),
                     }
                 },
                 headers={
