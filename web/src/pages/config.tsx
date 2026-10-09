@@ -15,6 +15,7 @@ import { SkeletonLines } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/empty-state";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Info } from "lucide-react";
+import { cn } from "@/lib/utils";
 
 const GROUP_LABELS: Record<string, string> = {
   app: "应用标识",
@@ -31,6 +32,24 @@ const GROUP_LABELS: Record<string, string> = {
   api: "API 工作池",
   log: "日志",
   otel: "可观测",
+};
+
+const GROUP_COLORS: Record<string, string> = {
+  app: "bg-violet",
+  postgres: "bg-info",
+  database: "bg-info",
+  grpc: "bg-success",
+  memory: "bg-warning",
+  l2: "bg-violet",
+  l3: "bg-info",
+  decay: "bg-warning",
+  task: "bg-success",
+  admin: "bg-error",
+  milvus: "bg-info",
+  api: "bg-success",
+  log: "bg-neutral",
+  otel: "bg-violet",
+  general: "bg-neutral",
 };
 
 const GROUP_ALIASES: Record<string, string> = {
@@ -196,7 +215,13 @@ export function ConfigPage() {
           {groups.map(([group, fields]) => (
             <Card key={group} variant="elevated" className="animate-editorial-fade-up">
               <CardHeader>
-                <CardTitle className="text-base">{GROUP_LABELS[group] ?? "其他"}</CardTitle>
+                <div className="flex items-center gap-2">
+                  <span
+                    className={cn("size-2 rounded-full", GROUP_COLORS[group] ?? "bg-neutral")}
+                    aria-hidden="true"
+                  />
+                  <CardTitle className="text-base">{GROUP_LABELS[group] ?? "其他"}</CardTitle>
+                </div>
                 <CardDescription>{fields.length} 项</CardDescription>
               </CardHeader>
               <CardContent className="space-y-0">

@@ -41,12 +41,12 @@ import { useListKeyboardNavigation } from "@/lib/use-list-keyboard-nav";
 import { findHighlightSegments } from "@/lib/highlight";
 import { cn, formatTime } from "@/lib/utils";
 
-const STATUS_CHIPS: Array<{ value: string; label: string }> = [
-  { value: "ALL", label: "全部" },
-  { value: "ACTIVE", label: "有效" },
-  { value: "SUPERSEDED", label: "已取代" },
-  { value: "DELETED", label: "已删除" },
-  { value: "SUPPRESSED", label: "已抑制" },
+const STATUS_CHIPS: Array<{ value: string; label: string; dot: string }> = [
+  { value: "ALL", label: "全部", dot: "bg-foreground-soft" },
+  { value: "ACTIVE", label: "有效", dot: "bg-success" },
+  { value: "SUPERSEDED", label: "已取代", dot: "bg-neutral" },
+  { value: "DELETED", label: "已删除", dot: "bg-warning" },
+  { value: "SUPPRESSED", label: "已抑制", dot: "bg-error" },
 ];
 
 const PAGE_SIZE = 50;
@@ -499,13 +499,14 @@ export function MemoriesPage() {
                 key={chip.value}
                 onClick={() => setStatusInput(chip.value)}
                 className={cn(
-                  "relative rounded-xl border px-4 py-1.5 text-sm font-medium transition-colors",
+                  "relative flex items-center gap-1.5 rounded-xl border px-4 py-1.5 text-sm font-medium transition-colors",
                   active
                     ? "border-foreground-intense text-foreground-intense bg-background"
                     : "border-border text-foreground-muted hover:text-foreground-emphasis hover:bg-background-muted",
                   active && "shadow-[inset_0_-1px_0_0_var(--foreground-intense)]",
                 )}
               >
+                <span className={cn("size-1.5 rounded-full", chip.dot)} aria-hidden="true" />
                 {chip.label}
               </button>
             );
