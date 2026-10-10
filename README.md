@@ -37,7 +37,7 @@ Built on [Mem0](https://github.com/mem0ai/mem0) as its long-term engine, plus Po
 
 ---
 
-## ✦ TL;DR — what is Thinkback?
+## ✦ At a glance
 
 Thinkback is the **memory layer for AI applications** that need to remember what happened in past
 conversations. It's the difference between an AI that forgets you after every message and one that
