@@ -216,33 +216,16 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
-docs/superpowers
-.idea/
-.mem0/
-.claude
-.qwen
-.serena
-.playwright-mcp/
-
-# 前端
-web/node_modules/
-web/dist/
-web/tsconfig.tsbuildinfo
-docs/memory/report
-docs/report
-.shots
-.mimocode
-.superpowers
 
 # ─── 增量增强(2026-10-08 截图脚本 + Playwright 报告) ───────────────
 # 修正为目录形式(原 .xxx 改为 .xxx/)
 docs/superpowers/
 .idea/
 .mem0/
+.playwright-mcp/
 .claude/
 .qwen/
 .serena/
-.playwright-mcp/
 .shots/
 .mimocode/
 .superpowers/
