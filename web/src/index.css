@@ -23,8 +23,8 @@
   --foreground-intense: #101828;
   --foreground-emphasis: #1e2939;
   --foreground: #364153;
-  --foreground-muted: #6a7282;
-  --foreground-soft: #99a1af;
+  --foreground-muted: #5f6775;
+  --foreground-soft: #656c7b;
   /* 边框（muted → intense 五档） */
   --border-muted: #f5f2ec;
   --border: #ebe7df;
@@ -50,9 +50,9 @@
   --popover-foreground: #101828;
   /* 状态 6 档（text 色对白底 ≥4.5:1） */
   --success: #067647;  --success-soft: #00bb7f1f;  --success-strong: #00bb7f;
-  --error: #d92d20;    --error-soft: #fb2c361f;    --error-strong: #fb2c36;
-  --info: #0084cc;     --info-soft: #00a5ef1f;     --info-strong: #00a5ef;
-  --warning: #c2410c;  --warning-soft: #fe6e001f;  --warning-strong: #fe6e00;
+  --error: #c2261b;    --error-soft: #fb2c361f;    --error-strong: #fb2c36;
+  --info: #006fae;     --info-soft: #00a5ef1f;     --info-strong: #00a5ef;
+  --warning: #b83c0a;  --warning-soft: #fe6e001f;  --warning-strong: #fe6e00;
   --neutral: #364153;  --neutral-soft: #98a2b31f;  --neutral-strong: #98a2b3;
   --violet: #6d28d9;   --violet-soft: #8d54ff1f;   --violet-strong: #8d54ff;
 }

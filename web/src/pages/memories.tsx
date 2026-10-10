@@ -566,7 +566,6 @@ export function MemoriesPage() {
                     onClick={() => openDetail(memory)}
                     onKeyDown={(e) => onRowKeyDown(e, memory)}
                     tabIndex={0}
-                    role="button"
                     aria-label={`打开记忆 ${memory.memory_id}`}
                   >
                     <div className="flex items-baseline gap-3 mb-2">

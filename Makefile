@@ -5,7 +5,7 @@ IMAGE ?= thinkback
 VERSION ?= 0.1.0
 # K8S_DIR：Kustomize 部署目录，环境 overlay 可覆盖为其他目录。
 K8S_DIR ?= k8s
-.PHONY: fmt format-check lint typecheck test test-fast coverage check test-ui test-e2e eval load-smoke mutation-audit hooks-install hooks-run dev dev-up dev-down image-build k8s-apply k8s-delete proto-gen migration-up migration-downgrade-1 migration-status migration-history migration-revision
+.PHONY: fmt format-check lint typecheck test test-fast coverage check test-ui test-e2e test-fuzz eval audit load-smoke mutation-audit hooks-install hooks-run dev dev-up dev-down image-build k8s-apply k8s-delete proto-gen migration-up migration-downgrade-1 migration-status migration-history migration-revision
 
 proto-gen:
 	uv run --group dev python -m grpc_tools.protoc \
@@ -57,6 +57,14 @@ test-e2e:
 eval:
 	uv run --group dev python tests/script/run_self_contained_evaluation.py
 	uv run --group dev python tests/script/eval/check_baseline.py
+
+# API 契约模糊测试（schemathesis，审计层：不进 check，分钟级）
+test-fuzz:
+	uv run --group dev pytest tests/fuzz -q
+
+# 供应链 CVE 扫描（需网络查漏洞库；进 CI 门禁，check 层保持离线）
+audit:
+	uv run --group dev pip-audit
 
 # k6 冒烟压测：需真实后端 + API Key（BASE_URL/API_KEY 环境变量）
 load-smoke:

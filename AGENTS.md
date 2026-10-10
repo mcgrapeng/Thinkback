@@ -34,5 +34,7 @@ Python 3.12 记忆服务（FastAPI + gRPC + SQLAlchemy）与 React 管理台。�
 | `make test` | 确定性单元/集成套件 |
 | `make coverage` | 套件 + 覆盖率门禁（提交前必跑） |
 | `make check` | 全部门禁，等价 CI |
-| `make test-ui` / `make test-e2e` | 前端组件 / 端到端冒烟 |
+| `make test-ui` / `make test-e2e` | 前端组件 / 端到端冒烟（e2e 含 axe a11y 扫描） |
+| `make test-fuzz` | API 契约模糊测试（schemathesis，审计层） |
+| `make audit` | 供应链 CVE 扫描（需网络；CI 门禁） |
 | `make eval` | 自包含质量评测 + 基线门禁（确定性；真实链路评测见 tests/script/） |

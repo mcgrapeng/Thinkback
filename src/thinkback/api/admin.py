@@ -23,6 +23,7 @@ from loguru import logger
 
 from thinkback.api.dependencies import get_memory_service
 from thinkback.api.errors import service_error_to_http
+from thinkback.api.errors_standard import COMMON_ERROR_RESPONSES
 from thinkback.domain.entities import AdminAuditEntry
 from thinkback.domain.enums import MemoryStatus, TaskStatus
 from thinkback.memory.schemas import (
@@ -36,7 +37,7 @@ from thinkback.memory.schemas import (
 )
 from thinkback.memory.service import MemoryService
 
-router = APIRouter(prefix="/admin/api", tags=["admin"])
+router = APIRouter(prefix="/admin/api", tags=["admin"], responses=COMMON_ERROR_RESPONSES)
 
 
 def require_admin_token(authorization: Annotated[str, Header()] = "") -> None:
@@ -49,6 +50,16 @@ def require_admin_token(authorization: Annotated[str, Header()] = "") -> None:
         return
     if authorization != f"Bearer {token}":
         raise HTTPException(status_code=401, detail="invalid admin token")
+
+
+_TASK_STATUS_CSV_PATTERN = (
+    r"^$|^\s*(pending|running|completed|failed|dead_letter)"
+    r"(\s*,\s*(pending|running|completed|failed|dead_letter))*\s*$"
+)
+_MEMORY_STATUS_CSV_PATTERN = (
+    r"^$|^\s*(ACTIVE|DELETED|SUPERSEDED|SUPPRESSED)"
+    r"(\s*,\s*(ACTIVE|DELETED|SUPERSEDED|SUPPRESSED))*\s*$"
+)
 
 
 def _parse_statuses(raw: str | None) -> list[str] | None:
@@ -148,7 +159,11 @@ async def admin_overview(
 async def admin_list_tasks(
     _: None = Depends(require_admin_token),
     service: MemoryService = Depends(get_memory_service),
-    statuses: str | None = Query(default=None, description="逗号分隔：pending,running,..."),
+    statuses: str | None = Query(
+        default=None,
+        description="逗号分隔：pending,running,...",
+        json_schema_extra={"pattern": _TASK_STATUS_CSV_PATTERN},
+    ),
     older_than_seconds: float | None = Query(default=None, ge=0),
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
@@ -183,7 +198,11 @@ async def admin_list_memories(
     service: MemoryService = Depends(get_memory_service),
     user_id: str | None = Query(default=None, description="用户 ID（不传=全量）"),
     memory_scope_id: str | None = Query(default=None),
-    statuses: str | None = Query(default=None, description="逗号分隔：ACTIVE,DELETED,..."),
+    statuses: str | None = Query(
+        default=None,
+        description="逗号分隔：ACTIVE,DELETED,...",
+        json_schema_extra={"pattern": _MEMORY_STATUS_CSV_PATTERN},
+    ),
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
 ) -> dict[str, Any]:
@@ -323,7 +342,9 @@ async def admin_rebuild_memory(
 async def admin_list_audit(
     _: None = Depends(require_admin_token),
     service: MemoryService = Depends(get_memory_service),
-    action: str | None = Query(default=None),
+    action: str | None = Query(
+        default=None, json_schema_extra={"pattern": r"^(|delete|update|rebuild)$"}
+    ),
     operator: str | None = Query(default=None),
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),

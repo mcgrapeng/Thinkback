@@ -25,6 +25,7 @@ from thinkback.api.dependencies import (
     get_memory_service,
 )
 from thinkback.api.errors import service_error_to_http
+from thinkback.api.errors_standard import COMMON_ERROR_RESPONSES
 from thinkback.api.metrics import record_event
 from thinkback.infra.config import settings
 from thinkback.memory.schemas import (
@@ -46,6 +47,10 @@ from thinkback.memory.service import MemoryService
 router = APIRouter(
     prefix="/memory",
     tags=["memory"],
+    responses={
+        **COMMON_ERROR_RESPONSES,
+        403: {"description": "fail-closed 敏感意图召回被拒绝"},
+    },
 )
 P = ParamSpec("P")
 R = TypeVar("R")
