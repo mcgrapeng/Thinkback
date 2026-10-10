@@ -13,6 +13,7 @@ import {
   AlertTriangle,
   BookOpen,
   Check,
+  Hash,
   Code2,
   Copy,
   Key,
@@ -331,31 +332,7 @@ export function IntegrationPage() {
         }
       />
 
-      {/* 协议概述 */}
-      <section className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4 animate-editorial-fade-up">
-        {[
-          { icon: Key, title: "API Key 认证", desc: "Bearer token + Tenant 隔离" },
-          { icon: Shield, title: "Scope 授权", desc: "6 个最小权限 scope" },
-          { icon: Sparkles, title: "Idempotency-Key", desc: "写操作幂等保证" },
-          { icon: AlertTriangle, title: "标准化错误码", desc: "TB-1xxx / TB-2xxx" },
-        ].map((item) => (
-          <Card key={item.title} className="border-border-muted">
-            <CardContent className="flex items-start gap-3 p-4">
-              <div className="flex size-9 shrink-0 items-center justify-center rounded-full bg-background-muted">
-                <item.icon className="size-4 text-foreground-emphasis" aria-hidden="true" />
-              </div>
-              <div>
-                <p className="text-sm font-medium text-foreground-intense">{item.title}</p>
-                <p className="mt-0.5 text-xs text-foreground-muted">{item.desc}</p>
-              </div>
-            </CardContent>
-          </Card>
-        ))}
-      </section>
-
-      <div className="editorial-rule" />
-
-      {/* API Key 管理 */}
+      {/* API Key 管理 — 放在最前(用户主要操作) */}
       <section className="space-y-4">
         <div className="flex items-center justify-between">
           <h2 className="flex items-center gap-2 text-lg font-semibold tracking-tight">
@@ -409,6 +386,31 @@ export function IntegrationPage() {
             action={{ label: "生成 API Key", onClick: () => setShowGenerate(true) }}
           />
         )}
+      </section>
+
+      <div className="editorial-rule" />
+
+      {/* 协议概览(meta strip 形式,降低视觉权重) */}
+      <section className="animate-editorial-fade-up">
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 text-xs">
+          {[
+            { icon: Key, title: "API Key 认证", desc: "Bearer + Tenant" },
+            { icon: Shield, title: "Scope 授权", desc: "6 个最小权限" },
+            { icon: Sparkles, title: "Idempotency-Key", desc: "写操作幂等" },
+            { icon: Hash, title: "错误码 TB-1xxx", desc: "标准化错误响应" },
+          ].map((item) => (
+            <div
+              key={item.title}
+              className="flex items-center gap-2 rounded-lg border border-border-muted bg-background-subtle/40 px-3 py-2"
+            >
+              <item.icon className="size-3.5 shrink-0 text-foreground-emphasis" aria-hidden="true" />
+              <div className="min-w-0">
+                <p className="truncate text-xs font-medium text-foreground-intense">{item.title}</p>
+                <p className="truncate text-[10px] text-foreground-muted">{item.desc}</p>
+              </div>
+            </div>
+          ))}
+        </div>
       </section>
 
       <div className="editorial-rule" />
