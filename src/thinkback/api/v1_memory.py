@@ -15,9 +15,11 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, Path
 
 from thinkback.api.auth import Scope, require_auth, require_scope
+from thinkback.api.dependencies import get_memory_service
+from thinkback.api.errors_standard import COMMON_ERROR_RESPONSES
 from thinkback.api.memory import (
     append_memory,
     delete_memory,
@@ -28,16 +30,54 @@ from thinkback.api.memory import (
     recall_memory,
     update_memory_item,
 )
+from thinkback.memory.schemas import (
+    DeleteMemoryRequest,
+    DeleteMemoryResponse,
+    UpdateMemoryRequest,
+    UpdateMemoryResponse,
+)
+from thinkback.memory.service import MemoryService
 
 router = APIRouter(
     prefix="/v1/memory",
     tags=["v1-memory"],
     responses={
+        **COMMON_ERROR_RESPONSES,
         401: {"description": "API key 缺失或无效"},
         403: {"description": "Scope 不足或 Tenant 不匹配"},
         429: {"description": "限流"},
     },
 )
+
+
+# ─── 路径/身体一致性包装 ───────────────────────────────────────────
+# 内部 /memory/update、/memory/delete 端点不绑定 URL 路径段；v1 把它们挂在
+# /{memory_id} 下时必须声明并校验该段，否则 URL 可以是任意值（契约 fuzz
+# 抓到的 InvalidSchema 根因）。URL 路径是定位语义的真值。
+
+
+async def v1_update_memory_item(
+    request: UpdateMemoryRequest,
+    memory_id: str = Path(min_length=1, max_length=128, description="要编辑的业务记忆 ID。"),
+    service: MemoryService = Depends(get_memory_service),
+) -> UpdateMemoryResponse:
+    if request.memory_id != memory_id:
+        raise HTTPException(status_code=400, detail="path/body memory_id mismatch")
+    return await update_memory_item(request=request, service=service)
+
+
+async def v1_delete_memory(
+    request: DeleteMemoryRequest,
+    memory_id: str = Path(min_length=1, max_length=128, description="要删除的业务记忆 ID。"),
+    service: MemoryService = Depends(get_memory_service),
+) -> DeleteMemoryResponse:
+    if request.memory_id is not None and request.memory_id != memory_id:
+        raise HTTPException(status_code=400, detail="path/body memory_id mismatch")
+    if request.memory_id is None:
+        # 单条删除路由：body 未带 memory_id 时以 URL 为准（scope=ALL/SESSION
+        # 随后会被领域校验拒绝，不会误删更大范围）。
+        request = request.model_copy(update={"memory_id": memory_id})
+    return await delete_memory(request=request, service=service)
 
 
 # ─── 写入/召回/读:需要对应 scope ──────────────────────────────────────
@@ -80,7 +120,7 @@ router.add_api_route(
 
 router.add_api_route(
     "/{memory_id}",
-    endpoint=update_memory_item,
+    endpoint=v1_update_memory_item,
     methods=["PUT"],
     summary="更新记忆正文",
     operation_id="v1_memory_update",
@@ -89,7 +129,7 @@ router.add_api_route(
 
 router.add_api_route(
     "/{memory_id}",
-    endpoint=delete_memory,
+    endpoint=v1_delete_memory,
     methods=["DELETE"],
     summary="删除记忆",
     operation_id="v1_memory_delete",

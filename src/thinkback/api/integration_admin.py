@@ -19,6 +19,7 @@ from thinkback.api.auth import (
     generate_api_key,
     revoke_api_key,
 )
+from thinkback.api.errors_standard import COMMON_ERROR_RESPONSES
 
 
 class GenerateKeyRequest(BaseModel):
@@ -26,8 +27,16 @@ class GenerateKeyRequest(BaseModel):
 
     tenant_id: str = Field(min_length=1, max_length=64, description="租户 ID")
     scopes: list[Scope] = Field(description="授权的 scope 列表")
-    plan: str = Field(default="free", description="计费计划: free | pro | enterprise")
-    env: str = Field(default="live", description="环境: live | test")
+    plan: str = Field(
+        default="free",
+        json_schema_extra={"pattern": r"^(free|pro|enterprise)$"},
+        description="计费计划: free | pro | enterprise",
+    )
+    env: str = Field(
+        default="live",
+        json_schema_extra={"pattern": r"^(live|test)$"},
+        description="环境: live | test",
+    )
 
 
 class KeyInfo(BaseModel):
@@ -51,7 +60,11 @@ class RevokeKeyResponse(BaseModel):
     revoked: bool
 
 
-router = APIRouter(prefix="/admin/api/integration/keys", tags=["integration"])
+router = APIRouter(
+    prefix="/admin/api/integration/keys",
+    tags=["integration"],
+    responses=COMMON_ERROR_RESPONSES,
+)
 
 
 def _key_to_info(record: ApiKey) -> KeyInfo:

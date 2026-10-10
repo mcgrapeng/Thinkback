@@ -239,7 +239,12 @@ function ConfigCard({
           </div>
         ) : (
           <div className="relative rounded-xl bg-foreground-intense p-4">
-            <pre className="whitespace-pre-wrap font-mono text-[11px] leading-relaxed text-background overflow-x-auto max-h-[180px] overflow-y-auto">
+            <pre
+              tabIndex={0}
+              role="region"
+              aria-label="抽取提示词预览"
+              className="whitespace-pre-wrap font-mono text-[11px] leading-relaxed text-background overflow-x-auto max-h-[180px] overflow-y-auto"
+            >
               {config.value}
             </pre>
             <button

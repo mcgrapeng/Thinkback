@@ -14,6 +14,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from thinkback.api.admin import require_admin_token
+from thinkback.api.errors_standard import COMMON_ERROR_RESPONSES
 from thinkback.memory.mem0_config import (
     CONFIG_SECTIONS,
     DEFAULT_CONFIGS,
@@ -22,7 +23,11 @@ from thinkback.memory.mem0_config import (
     set_config_value,
 )
 
-router = APIRouter(prefix="/admin/api/mem0", tags=["mem0-config"])
+router = APIRouter(
+    prefix="/admin/api/mem0",
+    tags=["mem0-config"],
+    responses=COMMON_ERROR_RESPONSES,
+)
 
 
 class Mem0ConfigItem(BaseModel):

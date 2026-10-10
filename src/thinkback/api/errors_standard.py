@@ -41,6 +41,16 @@ class ErrorCode:
     OVERLOAD = "TB-2003"
 
 
+# 各业务 router 共用的错误响应文档。声明实际会返回的 4xx 状态码，
+# OpenAPI 契约必须如实反映错误面（schemathesis 契约 fuzz 的
+# status_code_conformance 检查据此判定"未声明状态码"）。
+COMMON_ERROR_RESPONSES: dict[int | str, dict[str, str]] = {
+    400: {"description": "请求业务规则校验失败"},
+    404: {"description": "资源不存在"},
+    409: {"description": "幂等冲突或状态冲突"},
+}
+
+
 def _get_request_id(request: Request) -> str:
     return getattr(request.state, "request_id", f"req_{uuid.uuid4().hex[:12]}")
 

@@ -58,6 +58,7 @@ def _active_memories(self, user_id: str, memory_scope_id: str) -> list[Any]:
     """读 L3 active 索引。直读仓库，V2.1 起不再缓存。"""
     return list(self.repository.active_memories(user_id, memory_scope_id))
 
+
 def _summary(self, user_id: str, memory_scope_id: str) -> Any | None:
     """读 L2 摘要。直读仓库（同上，V2.1 起不再缓存）。"""
     return self.repository.get_summary(user_id, memory_scope_id)

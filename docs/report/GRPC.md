@@ -64,43 +64,47 @@ protoc -I proto \
 import grpc
 from thinkback.rpc import memory_pb2, memory_pb2_grpc
 
-channel = grpc.insecure_channel('localhost:50051')
+channel = grpc.insecure_channel("localhost:50051")
 stub = memory_pb2_grpc.MemoryServiceStub(channel)
 
 # Append
-response = stub.Append(memory_pb2.AppendRequest(
-    request_id='req-1',
-    user_id='user-1',
-    session_id='session-1',
-    round_id='round-1',
-    messages=[
-        memory_pb2.MemoryMessage(
-            message_id='m1',
-            role=memory_pb2.MESSAGE_ROLE_USER,
-            content='hello',
-            timestamp='2026-01-01T00:00:00Z',
-        ),
-        memory_pb2.MemoryMessage(
-            message_id='m2',
-            role=memory_pb2.MESSAGE_ROLE_ASSISTANT,
-            content='hi',
-            timestamp='2026-01-01T00:00:01Z',
-        ),
-    ],
-    source_timestamp='2026-01-01T00:00:01Z',
-))
+response = stub.Append(
+    memory_pb2.AppendRequest(
+        request_id="req-1",
+        user_id="user-1",
+        session_id="session-1",
+        round_id="round-1",
+        messages=[
+            memory_pb2.MemoryMessage(
+                message_id="m1",
+                role=memory_pb2.MESSAGE_ROLE_USER,
+                content="hello",
+                timestamp="2026-01-01T00:00:00Z",
+            ),
+            memory_pb2.MemoryMessage(
+                message_id="m2",
+                role=memory_pb2.MESSAGE_ROLE_ASSISTANT,
+                content="hi",
+                timestamp="2026-01-01T00:00:01Z",
+            ),
+        ],
+        source_timestamp="2026-01-01T00:00:01Z",
+    )
+)
 print(response.status, response.task_id)
 
 # Recall
-response = stub.Recall(memory_pb2.RecallRequest(
-    user_id='user-1',
-    session_id='session-1',
-    query='hello',
-    intent=memory_pb2.RECALL_INTENT_CHAT,
-    l3_limit=5,
-))
+response = stub.Recall(
+    memory_pb2.RecallRequest(
+        user_id="user-1",
+        session_id="session-1",
+        query="hello",
+        intent=memory_pb2.RECALL_INTENT_CHAT,
+        l3_limit=5,
+    )
+)
 for item in response.items:
-    print(f'{item.layer}: {item.content}')
+    print(f"{item.layer}: {item.content}")
 ```
 
 ### grpcurl (调试工具)

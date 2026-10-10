@@ -262,7 +262,7 @@ function KeyCard({
     <div
       className={cn(
         "rounded-2xl border p-4 transition-colors",
-        apiKey.is_active ? "border-border bg-card" : "border-border-muted bg-background-muted/30 opacity-60",
+        apiKey.is_active ? "border-border bg-card" : "border-border-muted bg-background-muted/30",
       )}
     >
       <div className="flex items-start justify-between gap-3 mb-3">

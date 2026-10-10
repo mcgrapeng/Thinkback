@@ -77,3 +77,36 @@ Playwright web 引擎，另有 iOS/Android 引擎，agent 步骤可零模型回�
 注：`npx skills -g` 在本机 harness 被拒，改项目安装后手工迁入 `~/.agents/skills`；
 该 CLI 会顺手生成 CHANGELOG/.github 社区文件等脚手架，已清除。
 testmon 按方法级哈希选测：注释级改动不触发（正确行为），语义改动实测选中 161/458 用例。
+
+## 工业级补强（第三轮）
+
+全局工具：`pip-audit 2.10`、`schemathesis 4.30`（uv tool，机器级 CLI）。
+全局体系：`~/.agents/skills/ai-testing-system`（成熟度清单 10+1 条 + 工具矩阵 +
+门禁分层 + AI 测试工作流）；全局 AGENTS.md 挂触发指针。
+
+schemathesis 契约 fuzz（tests/fuzz，`make test-fuzz`）首轮即抓出并修复 6 类真问题：
+
+1. 405 缺 RFC 9110 必需的 `Allow` 头（错误标准化层丢路由头）→ errors_standard 透传。
+2. `IdStr`/update content 未声明 `minLength`（生成空串被拒 = 契约比实现宽松）。
+3. v1 PUT/DELETE 的 `{memory_id}` 路径段被处理器忽略（契约未声明 + URL 可为任意值）
+   → v1 包装层声明路径参数并做 path/body 一致性校验（顺带封掉 scope=ALL 误删口）。
+4. `plan`/`env`/`statuses`/`action` 运行时枚举、schema 自由串 → json_schema_extra.pattern。
+5. 未声明状态码（400/404/409/403）→ COMMON_ERROR_RESPONSES 各 router 声明。
+6. pytest 8.4.2 CVE（PYSEC-2026-1845）→ `make audit` 抓获，升级 pytest 9.1.1 + pytest-asyncio 1.4。
+
+fuzz 已知豁免（弱区留痕）：allow_header_conformance（FastAPI 分 method 路由的
+Allow 集不全）、negative_data_rejection（pydantic 宽松 coercion，strict 化列为
+API 策略 backlog）、positive_data_acceptance 放行 422（跨字段业务规则，单测钉死）。
+
+a11y（axe 4.10.3 注入 e2e）修复 4 类：`role="button"` 覆盖 listitem、
+`--foreground-muted/soft` 与 `--warning/error/info` 对比度差一口气（已加深）、
+可滚 `<pre>` 不可聚焦、revoked 卡片 `opacity-60` 混色击穿 AA（改为纯视觉弱化）。
+e2e 旅程补至 5 条（记忆浏览器/任务监控/治理操作）。
+
+CI（ci.yml）新增 `supply-chain-audit`（pip-audit）与 `api-fuzz`（schemathesis）两个门禁任务。
+
+### 后续 backlog
+
+- 全模型 strict 化（negative_data_rejection 恢复启用）属 API 策略决策。
+- 夜间 cron：全量变异审计（service.py）+ 真实链路评测（tests/script/real_*）。
+- 视觉回归（截图基线）未做；迁移测试（alembic 升降级）需 PG 环境。

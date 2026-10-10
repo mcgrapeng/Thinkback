@@ -59,6 +59,38 @@ jobs:
         # 显式跳过"需要真实依赖"的脚本级用例，避免无凭证暴露缺 infra 红灯
         run: uv run pytest tests/unit/ --ignore=tests/unit/test_real_quality_evaluation.py --ignore=tests/unit/test_runtime_boundaries.py -q
 
+  supply-chain-audit:
+    name: pip-audit (CVE gate)
+    needs: lint-and-typecheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install uv
+        run: pip install uv
+      - name: Install dependencies
+        run: uv sync --frozen
+      - name: Audit dependencies
+        run: uv run --group dev pip-audit
+
+  api-fuzz:
+    name: schemathesis (contract fuzz)
+    needs: lint-and-typecheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install uv
+        run: pip install uv
+      - name: Install dependencies
+        run: uv sync --frozen
+      - name: Contract fuzz
+        run: uv run --group dev pytest tests/fuzz -q
+
   docker-build-verify:
     name: docker build (verify)
     needs: [lint-and-typecheck, unit-tests]

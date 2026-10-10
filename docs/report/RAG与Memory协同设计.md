@@ -90,10 +90,7 @@ Thinkback 是面向半导体行业的企业知识搜索与AI对话平台，具�
 
 ```python
 # ❌ 错误的Memory设计：缓存了RAG的结论
-memory_item = {
-    "content": "7nm工艺良率偏低（85%），建议优化",
-    "created_at": "2024-01-15"
-}
+memory_item = {"content": "7nm工艺良率偏低（85%），建议优化", "created_at": "2024-01-15"}
 
 # RAG文档更新后
 rag_doc_v2 = "7nm工艺良率已提升至92%"
@@ -115,8 +112,8 @@ memory_item = {
         "topic": "7nm_yield",
         "user_concern": "cost_optimization",
         "interaction_count": 3,
-        "last_discussed": "2024-01-15"
-    }
+        "last_discussed": "2024-01-15",
+    },
 }
 
 # RAG文档更新后
@@ -151,6 +148,7 @@ def generate_response(query: str, user_id: str):
     """
 
     return llm.generate(prompt)
+
 
 # 生成结果示例：
 # "根据最新数据（2024-02-01），7nm工艺良率已提升至92%，
@@ -210,9 +208,7 @@ def generate_response(query: str, user_id: str):
 
 ```python
 def should_extract_to_memory(
-    message: dict,
-    role: str,
-    conversation_context: dict
+    message: dict, role: str, conversation_context: dict
 ) -> tuple[bool, str | None]:
     """
     判断消息是否应提取为Memory
@@ -225,21 +221,15 @@ def should_extract_to_memory(
     # 用户消息：提取意图和状态
     if role == "user":
         # 身份声明
-        if any(pattern in content for pattern in [
-            "我是", "我负责", "我的职位", "我在"
-        ]):
+        if any(pattern in content for pattern in ["我是", "我负责", "我的职位", "我在"]):
             return (True, "PROFILE")
 
         # 偏好表达
-        if any(pattern in content for pattern in [
-            "我习惯", "我喜欢", "我倾向", "我一般"
-        ]):
+        if any(pattern in content for pattern in ["我习惯", "我喜欢", "我倾向", "我一般"]):
             return (True, "PREFERENCE")
 
         # 待办请求
-        if any(pattern in content for pattern in [
-            "帮我跟进", "持续关注", "记得提醒", "需要追踪"
-        ]):
+        if any(pattern in content for pattern in ["帮我跟进", "持续关注", "记得提醒", "需要追踪"]):
             return (True, "PLAN")
 
         # 询问关注点（提取topic，不提取答案）
@@ -253,9 +243,7 @@ def should_extract_to_memory(
             return (False, None)
 
         # 提取对用户意图的确认
-        if any(pattern in content for pattern in [
-            "您是在问", "您关心的是", "理解您的需求"
-        ]):
+        if any(pattern in content for pattern in ["您是在问", "您关心的是", "理解您的需求"]):
             return (True, "EVENT")
 
     return (False, None)
@@ -279,11 +267,7 @@ def preprocess_for_memory(messages: list) -> list:
             if msg["role"] == "assistant":
                 content = extract_user_intent_understanding(content)
 
-            filtered.append({
-                "role": msg["role"],
-                "content": content,
-                "memory_type": mem_type
-            })
+            filtered.append({"role": msg["role"], "content": content, "memory_type": mem_type})
 
     return filtered
 ```
@@ -296,10 +280,7 @@ def preprocess_for_memory(messages: list) -> list:
 
 ```python
 # V1: 拼接最近10轮user消息
-l2_content = "；".join([
-    round.user_message
-    for round in recent_10_rounds
-])
+l2_content = "；".join([round.user_message for round in recent_10_rounds])
 ```
 
 **评价**：
@@ -378,10 +359,10 @@ memory_item = {
             "doc_id": "doc-7nm-spec",
             "version": "v2.3",
             "timestamp": "2024-01-15T10:00:00Z",
-            "key_data_points": ["良率85%"]  # 可选：记录用户关注的数据点
-        }
+            "key_data_points": ["良率85%"],  # 可选：记录用户关注的数据点
+        },
     },
-    "created_at": "2024-01-15T10:00:00Z"
+    "created_at": "2024-01-15T10:00:00Z",
 }
 ```
 
@@ -402,13 +383,15 @@ def recall_with_version_awareness(query: str, user_id: str):
         if "rag_context" in mem.metadata:
             old_version = mem.metadata["rag_context"]["version"]
             if old_version != current_doc.version:
-                version_changes.append({
-                    "topic": mem.metadata["topic"],
-                    "old_version": old_version,
-                    "new_version": current_doc.version,
-                    "old_timestamp": mem.metadata["rag_context"]["timestamp"],
-                    "new_timestamp": current_doc.updated_at
-                })
+                version_changes.append(
+                    {
+                        "topic": mem.metadata["topic"],
+                        "old_version": old_version,
+                        "new_version": current_doc.version,
+                        "old_timestamp": mem.metadata["rag_context"]["timestamp"],
+                        "new_timestamp": current_doc.updated_at,
+                    }
+                )
 
     # 4. 构建prompt
     prompt = f"""
@@ -482,16 +465,17 @@ Mem0（thinkback当前使用的L3后端）的核心约束：
 ```python
 # Mem0自动提取的记忆类型
 class MemoryType(Enum):
-    PROFILE = "用户画像"       # "我是工艺工程师"
-    PREFERENCE = "用户偏好"    # "我喜欢看流程图"
-    EVENT = "交互事件"         # "用户询问过7nm良率"
-    PLAN = "待办事项"          # "跟进设备参数确认"
+    PROFILE = "用户画像"  # "我是工艺工程师"
+    PREFERENCE = "用户偏好"  # "我喜欢看流程图"
+    EVENT = "交互事件"  # "用户询问过7nm良率"
+    PLAN = "待办事项"  # "跟进设备参数确认"
+
 
 # Mem0 **拒绝** 提取的内容
 rejected_patterns = [
-    "技术规范定义",           # "7nm工艺标准是..."
-    "设备参数数值",           # "光刻机波长13.5nm"
-    "文档引用内容",           # "根据SEMI标准..."
+    "技术规范定义",  # "7nm工艺标准是..."
+    "设备参数数值",  # "光刻机波长13.5nm"
+    "文档引用内容",  # "根据SEMI标准..."
 ]
 ```
 
@@ -552,36 +536,23 @@ rejected_patterns = [
 
 ```python
 # ❌ 错误：把完整对话内容存入Memory
-memory.add({
-    "user": "7nm良率多少？",
-    "assistant": "根据最新文档，7nm工艺良率为92%，符合SEMI标准..."
-})
+memory.add(
+    {"user": "7nm良率多少？", "assistant": "根据最新文档，7nm工艺良率为92%，符合SEMI标准..."}
+)
 
 # ✅ 正确：只提取用户状态
-memory.add({
-    "event": "用户询问7nm良率",
-    "topic": "7nm_yield",
-    "user_concern": "符合标准"
-})
+memory.add({"event": "用户询问7nm良率", "topic": "7nm_yield", "user_concern": "符合标准"})
 ```
 
 ### 反模式2：Memory与RAG冗余存储
 
 ```python
 # ❌ 错误：在Memory中复制RAG内容
-memory.add({
-    "content": "7nm工艺标准流程：光刻→蚀刻→沉积→..."
-})
+memory.add({"content": "7nm工艺标准流程：光刻→蚀刻→沉积→..."})
 
 # ✅ 正确：RAG存流程，Memory存用户关注点
-rag.index({
-    "doc_id": "7nm-process",
-    "content": "7nm工艺标准流程：光刻→蚀刻→沉积→..."
-})
-memory.add({
-    "event": "用户查阅过7nm工艺流程文档",
-    "focus": "光刻环节"
-})
+rag.index({"doc_id": "7nm-process", "content": "7nm工艺标准流程：光刻→蚀刻→沉积→..."})
+memory.add({"event": "用户查阅过7nm工艺流程文档", "focus": "光刻环节"})
 ```
 
 ### 反模式3：RAG更新触发Memory清理
@@ -592,6 +563,7 @@ def on_rag_document_updated(doc_id: str):
     related_memories = memory.search(doc_id)
     for mem in related_memories:
         memory.delete(mem.id)  # 错误：用户状态不应因知识更新而失效
+
 
 # ✅ 正确：RAG更新不影响Memory，召回时动态组合
 def on_rag_document_updated(doc_id: str):
@@ -650,9 +622,6 @@ new_memory_count = len(memory.list_all(user_id))
 assert old_memory_count == new_memory_count
 
 # 测试3：召回可感知版本变化
-response = recall_and_generate(
-    query="7nm良率现在怎么样？",
-    user_id="user-123"
-)
+response = recall_and_generate(query="7nm良率现在怎么样？", user_id="user-123")
 assert "较上次" in response or "已更新" in response
 ```
