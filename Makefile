@@ -5,7 +5,7 @@ IMAGE ?= thinkback
 VERSION ?= 0.1.0
 # K8S_DIR：Kustomize 部署目录，环境 overlay 可覆盖为其他目录。
 K8S_DIR ?= k8s
-.PHONY: fmt format-check lint typecheck test coverage check hooks-install hooks-run dev dev-up dev-down image-build k8s-apply k8s-delete proto-gen migration-up migration-downgrade-1 migration-status migration-history migration-revision
+.PHONY: fmt format-check lint typecheck test test-fast coverage check test-ui test-e2e eval load-smoke mutation-audit hooks-install hooks-run dev dev-up dev-down image-build k8s-apply k8s-delete proto-gen migration-up migration-downgrade-1 migration-status migration-history migration-revision
 
 proto-gen:
 	uv run --group dev python -m grpc_tools.protoc \
@@ -27,15 +27,45 @@ lint:
 	uv run --group dev ruff check .
 
 typecheck:
-	uv run --group dev mypy .
+	uv run --group dev mypy src
 
 test:
 	uv run --group dev pytest -v
 
+# 本地快环：testmon 只跑受本次改动影响的用例（提交前仍以 make check 为准）
+test-fast:
+	uv run --group dev pytest --testmon -q
+
+# 覆盖率门禁：低于 92% 直接失败，防止测试退化无声通过。
+# 提高门限时请同步补测试，不要下调阈值迁就缺失覆盖。
+COVERAGE_FLOOR ?= 92
+
 coverage:
-	uv run --group dev pytest --cov=thinkback --cov-report=term-missing --cov-report=xml -v
+	uv run --group dev pytest --cov=thinkback --cov-report=term-missing --cov-report=xml --cov-fail-under=$(COVERAGE_FLOOR) -v
 
 check: format-check lint typecheck coverage
+
+# 前端组件测试（vitest，确定性无网络）
+test-ui:
+	cd web && npm run test-ui
+
+# 管理台端到端冒烟（Playwright + VITE_USE_MOCK，自动起 vite dev）
+test-e2e:
+	uv run --group dev pytest tests/e2e -v
+
+# 自包含质量评测（确定性 fakes）+ 基线门禁；真实链路评测见 tests/script/
+eval:
+	uv run --group dev python tests/script/run_self_contained_evaluation.py
+	uv run --group dev python tests/script/eval/check_baseline.py
+
+# k6 冒烟压测：需真实后端 + API Key（BASE_URL/API_KEY 环境变量）
+load-smoke:
+	k6 run tests/load/smoke.k6.js
+
+# 变异测试审计：范围见 pyproject [tool.mutmut]，结果用 mutmut results 查看
+mutation-audit:
+	uv run --group dev mutmut run --max-children 8
+	uv run --group dev mutmut results
 
 # 本地开发：后端 7002 / 前端 7001 起步，占用自动顺延（script/dev.py）
 dev:

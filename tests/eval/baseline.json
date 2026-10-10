@@ -1,0 +1,39 @@
+{
+  "report_type": "thinking_memory_self_contained_evaluation",
+  "min_total_pass_rate": 1.0,
+  "min_pass_rate_by_category": {
+    "主路径": 1.0,
+    "冲突解决": 1.0,
+    "删除": 1.0,
+    "召回质量": 1.0,
+    "安全": 1.0,
+    "幂等性": 1.0,
+    "并发安全": 1.0,
+    "管理面": 1.0,
+    "跨 session": 1.0,
+    "降级": 1.0,
+    "隔离": 1.0
+  },
+  "required_cases": [
+    "case_basic_recall_finds_user_fact",
+    "case_basic_recall_finds_pet_name",
+    "case_recall_works_across_sessions",
+    "case_conflict_resolution_supersedes_old_fact",
+    "case_conflict_resolution_update_memory_works",
+    "case_update_memory_refreshes_valid_at",
+    "case_delete_memory_removes_from_recall",
+    "case_delete_all_user_removes_all_recall",
+    "case_cross_user_isolation",
+    "case_idempotent_append_same_round",
+    "case_idempotent_delete_same_operation",
+    "case_h3_supersede_lock_outside",
+    "case_concurrent_appends_no_deadlock",
+    "case_recall_degrades_when_backend_fails",
+    "case_restricted_content_does_not_enter_l3",
+    "case_recall_precision_at_10",
+    "case_recall_recall_at_5_for_broad_query",
+    "case_recall_token_budget_clip",
+    "case_list_memory_items_excludes_deleted_by_default",
+    "case_update_memory_conflicts_on_operation_id_scope_mismatch"
+  ]
+}

@@ -50,9 +50,9 @@ def error_response(
     message: str,
     request_id: str,
     status_code: int,
-    details: dict | None = None,
+    details: dict[str, Any] | None = None,
 ) -> JSONResponse:
-    body: dict = {
+    body: dict[str, Any] = {
         "error": {
             "code": code,
             "message": message,
@@ -70,7 +70,7 @@ def register_exception_handlers(app: FastAPI) -> None:
     """注册标准化异常处理器。"""
 
     @app.exception_handler(RequestValidationError)
-    async def validation_handler(request: Request, exc: RequestValidationError):
+    async def validation_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
         rid = _get_request_id(request)
         logger.warning(f"validation_error rid={rid} errors={exc.errors()}")
         # 用 jsonable_encoder 安全序列化(Pydantic 错误可能含 ValueError 等不可 JSON 化对象)
@@ -87,10 +87,14 @@ def register_exception_handlers(app: FastAPI) -> None:
         )
 
     @app.exception_handler(StarletteHTTPException)
-    async def http_exception_handler(request: Request, exc: StarletteHTTPException):
+    async def http_exception_handler(request: Request, exc: StarletteHTTPException) -> JSONResponse:
         rid = _get_request_id(request)
+        # 路由器给出的响应头（如 405 必带的 Allow，RFC 9110）必须透传，
+        # 否则标准化错误体会把合规响应变成违约响应。
         if isinstance(exc.detail, dict) and "error" in exc.detail:
-            return JSONResponse(status_code=exc.status_code, content=exc.detail)
+            return JSONResponse(
+                status_code=exc.status_code, content=exc.detail, headers=exc.headers
+            )
 
         code_map = {
             400: ErrorCode.VALIDATION,
@@ -107,15 +111,18 @@ def register_exception_handlers(app: FastAPI) -> None:
         code = code_map.get(exc.status_code, ErrorCode.INTERNAL)
         # 安全序列化 detail(可能是 dict/list/任意对象)
         detail = jsonable_encoder(exc.detail) if exc.detail is not None else ""
-        return error_response(
+        response = error_response(
             code=code,
             message=str(detail),
             request_id=rid,
             status_code=exc.status_code,
         )
+        if exc.headers:
+            response.headers.update(exc.headers)
+        return response
 
     @app.exception_handler(Exception)
-    async def global_handler(request: Request, exc: Exception):
+    async def global_handler(request: Request, exc: Exception) -> JSONResponse:
         rid = _get_request_id(request)
         logger.error(f"unhandled_error rid={rid} type={type(exc).__name__} msg={exc}")
         return error_response(

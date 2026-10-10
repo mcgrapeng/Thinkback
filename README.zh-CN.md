@@ -848,7 +848,7 @@ cd web && node take-screenshots.mjs
 - ✨ **[功能请求](.github/ISSUE_TEMPLATE/feature_request.md)** — Thinkback 接下来该做什么?
 - 🔔 **[Watch 此仓库](.github)** — 接收发布和安全修复通知
 
-如果你在生产环境使用 Thinkback 并想分享你的故事,请开一个 Discussion —— 我们很乐意在 [wiki](docs/USER_STORIES.md)(即将推出)中推荐你。
+如果你在生产环境使用 Thinkback 并想分享你的故事,请开一个 Discussion —— 我们很乐意在 [wiki](.github/DISCUSSIONS)(即将推出)中推荐你。
 
 ---
 
