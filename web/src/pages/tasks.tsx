@@ -142,22 +142,23 @@ function TaskCard({
             </span>
           </div>
           <div className="flex flex-wrap items-center gap-2 text-xs">
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <button
-                  type="button"
-                  className={cn(
-                    "inline-flex items-center gap-1 rounded-md px-1.5 py-0.5",
-                    tone === "warning" && "bg-warning-soft text-warning",
-                    tone === "violet" && "bg-violet-soft text-violet",
-                    tone === "neutral" && "bg-background-muted text-foreground-muted",
-                  )}
-                >
-                  重试 <span className="font-mono tabular-nums">{retry}</span>
-                </button>
-              </TooltipTrigger>
-              <TooltipContent>已重试 {retry} 次 · 5 次后进入死信</TooltipContent>
-            </Tooltip>
+            {retry > 0 ? (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span
+                    className={cn(
+                      "inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 cursor-help",
+                      tone === "warning" && "bg-warning-soft text-warning",
+                      tone === "violet" && "bg-violet-soft text-violet",
+                      tone === "neutral" && "bg-background-muted text-foreground-muted",
+                    )}
+                  >
+                    重试 <span className="font-mono tabular-nums">{retry}</span>
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent>已重试 {retry} 次 · 5 次后进入死信</TooltipContent>
+              </Tooltip>
+            ) : null}
             {task.last_error ? (
               <p
                 className="flex-1 truncate text-error"
