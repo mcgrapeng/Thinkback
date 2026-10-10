@@ -31,9 +31,20 @@ Thinkback 让 AI 助手与智能体拥有跨会话的持久记忆。它把短期
 [![GitHub forks](https://img.shields.io/github/forks/mcgrapeng/thinkback?style=social)](../../network/members)
 [![GitHub watchers](https://img.shields.io/github/watchers/mcgrapeng/thinkback?style=social)](../../watchers)
 
-[**[English](README.md)**](README.md) · [**中文**](README.zh-CN.md) · [文档](docs/) · [更新日志](CHANGELOG.md) · [路线图](docs/ROADMAP.md)
+[**English**](README.md) · [**中文**](README.zh-CN.md) · [文档](docs/) · [更新日志](CHANGELOG.md) · [路线图](docs/ROADMAP.md)
 
 [报告问题](.github/ISSUE_TEMPLATE/bug_report.md) · [功能请求](.github/ISSUE_TEMPLATE/feature_request.md)
+
+**快速导航:**
+[为什么做这个](#-为什么做这个) ·
+[如何工作](#-如何工作) ·
+[截图](#-截图) ·
+[快速开始](#-快速开始) ·
+[API 参考](#-api-参考) ·
+[架构图](#-架构图) ·
+[FAQ](#-faq) ·
+[社区](#-社区) ·
+[贡献](#-贡献)
 
 </div>
 
@@ -49,6 +60,38 @@ Thinkback 是**面向 AI 应用的记忆层**,让 AI 记住过去对话中发生
 - 🚨 **显式降级信号** 当 LLM 或向量库不可用时
 - 🛠️ **自托管 + Apache 2.0** — 数据永不离开你的基础设施
 - 🎛️ **完整治理台** 检查与修复记忆层实际做了什么
+
+---
+
+## ✦ 目录
+
+| 章节 | 内容 |
+| --- | --- |
+| [一句话总结](#-一句话总结--thinkback-是什么) | 6 句核心能力 |
+| [为什么做这个](#-为什么做这个) | 创作故事 |
+| [如何工作](#-如何工作) | 架构流程 + 流程图 |
+| [横向对比](#-横向对比) | Thinkback vs Mem0 SDK / LangChain / 自建 |
+| [为什么需要 Thinkback](#-为什么需要-thinkback) | 差异化价值 |
+| [记忆模型](#-记忆模型) | L1 / L2 / L3 分层 |
+| [能力清单](#-能力清单) | 完整功能列表 |
+| [截图](#-截图) | 治理台视觉导览 |
+| [快速开始](#-快速开始) | curl 三步走 |
+| [API 参考](#-api-参考) | 26+ 端点 |
+| [架构图](#-架构图) | 非 mermaid 架构 SVG |
+| [性能](#-性能) | 基准数据 |
+| [配置](#-配置) | 环境变量 |
+| [路线图](#-路线图) | 未来计划 |
+| [项目结构](#-项目结构) | 仓库结构 |
+| [扩展](#-扩展) | 自定义指南 |
+| [开发](#-开发) | 开发环境 |
+| [文档](#-文档) | 完整文档 |
+| [社区](#-社区) | Discussions / Issues |
+| [FAQ](#-faq) | 常见问题 |
+| [贡献](#-贡献) | 如何参与 |
+| [Featured by](#-featured-by) | 使用者 |
+| [Sponsors](#-sponsors) | 赞助我们 |
+| [License](#-license) | Apache 2.0 |
+| [致谢](#-致谢) | 致谢 |
 
 ---
 
@@ -427,7 +470,171 @@ gRPC 端点镜像同样操作,见 `proto/memory.proto`,供服务间调用。
 
 ---
 
+## ✦ 架构图
+
+```svg
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 400" width="100%" height="400">
+  <defs>
+    <linearGradient id="ag-bg" x1="0" y1="0" x2="1200" y2="400">
+      <stop offset="0%" stop-color="#FDFCF8"/>
+      <stop offset="100%" stop-color="#F5F2EC"/>
+    </linearGradient>
+  </defs>
+  <rect width="1200" height="400" fill="url(#ag-bg)"/>
+  <text x="600" y="35" text-anchor="middle" font-family="system-ui,sans-serif" font-size="18" font-weight="700" fill="#0F172A">Thinkback — 三层记忆架构</text>
+
+  <rect x="40" y="70" width="180" height="110" rx="12" fill="#FFFFFF" stroke="#E8E2D4" stroke-width="1.5"/>
+  <text x="130" y="105" text-anchor="middle" font-family="system-ui,sans-serif" font-size="14" font-weight="600" fill="#0F172A">你的应用 / Agent</text>
+  <text x="130" y="128" text-anchor="middle" font-family="system-ui,sans-serif" font-size="11" fill="#64748B">user → assistant</text>
+  <text x="130" y="148" text-anchor="middle" font-family="system-ui,sans-serif" font-size="11" fill="#64748B">对话轮次</text>
+
+  <rect x="280" y="50" width="560" height="300" rx="16" fill="#FFFFFF" stroke="#E8E2D4" stroke-width="1.5"/>
+  <text x="560" y="80" text-anchor="middle" font-family="system-ui,sans-serif" font-size="16" font-weight="700" fill="#0F172A">Thinkback 服务</text>
+
+  <rect x="310" y="110" width="160" height="90" rx="10" fill="#F8F6F0" stroke="#E8E2D4" stroke-width="1"/>
+  <text x="390" y="135" text-anchor="middle" font-family="system-ui,sans-serif" font-size="11" font-weight="600" fill="#475569">L1 · Round Journal</text>
+  <text x="390" y="155" text-anchor="middle" font-family="system-ui,sans-serif" font-size="10" fill="#64748B">PostgreSQL</text>
+  <text x="390" y="172" text-anchor="middle" font-family="system-ui,sans-serif" font-size="9" fill="#94A3B8">last-N rounds</text>
+  <text x="390" y="190" text-anchor="middle" font-family="system-ui,sans-serif" font-size="9" fill="#94A3B8">append-only</text>
+
+  <rect x="490" y="110" width="160" height="90" rx="10" fill="#F8F6F0" stroke="#E8E2D4" stroke-width="1"/>
+  <text x="570" y="135" text-anchor="middle" font-family="system-ui,sans-serif" font-size="11" font-weight="600" fill="#475569">L2 · Session Summary</text>
+  <text x="570" y="155" text-anchor="middle" font-family="system-ui,sans-serif" font-size="10" fill="#64748B">PostgreSQL + LLM</text>
+  <text x="570" y="172" text-anchor="middle" font-family="system-ui,sans-serif" font-size="9" fill="#94A3B8">防抖</text>
+  <text x="570" y="190" text-anchor="middle" font-family="system-ui,sans-serif" font-size="9" fill="#94A3B8">每 N 轮 1 次</text>
+
+  <rect x="670" y="110" width="160" height="90" rx="10" fill="#7C3AED" stroke="#7C3AED" stroke-width="1"/>
+  <text x="750" y="135" text-anchor="middle" font-family="system-ui,sans-serif" font-size="11" font-weight="600" fill="#FFFFFF">L3 · 长期记忆</text>
+  <text x="750" y="155" text-anchor="middle" font-family="system-ui,sans-serif" font-size="10" fill="#E9E4FA">Mem0 + Milvus</text>
+  <text x="750" y="172" text-anchor="middle" font-family="system-ui,sans-serif" font-size="9" fill="#C4B5FD">后台抽取</text>
+  <text x="750" y="190" text-anchor="middle" font-family="system-ui,sans-serif" font-size="9" fill="#C4B5FD">语义召回</text>
+
+  <rect x="310" y="220" width="520" height="40" rx="8" fill="#F8F6F0" stroke="#E8E2D4" stroke-width="1"/>
+  <text x="570" y="243" text-anchor="middle" font-family="system-ui,sans-serif" font-size="11" fill="#475569">幂等写入 · 任务治理 · Scoped 删除 · 降级信号</text>
+
+  <path d="M 220 125 L 310 125" stroke="#64748B" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
+  <text x="265" y="118" text-anchor="middle" font-family="system-ui,sans-serif" font-size="9" fill="#64748B">append</text>
+  <path d="M 220 155 L 310 155" stroke="#64748B" stroke-width="2" stroke-dasharray="4,3" fill="none" marker-end="url(#arrow)"/>
+  <text x="265" y="148" text-anchor="middle" font-family="system-ui,sans-serif" font-size="9" fill="#64748B">recall</text>
+
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#64748B"/>
+    </marker>
+  </defs>
+
+  <rect x="900" y="70" width="280" height="70" rx="10" fill="#FFFFFF" stroke="#E8E2D4" stroke-width="1"/>
+  <text x="1040" y="95" text-anchor="middle" font-family="system-ui,sans-serif" font-size="11" font-weight="600" fill="#0F172A">HTTP + gRPC</text>
+  <text x="1040" y="115" text-anchor="middle" font-family="system-ui,sans-serif" font-size="10" fill="#64748B">同一 Pydantic schema,任选协议</text>
+
+  <rect x="900" y="160" width="280" height="70" rx="10" fill="#FFFFFF" stroke="#E8E2D4" stroke-width="1"/>
+  <text x="1040" y="185" text-anchor="middle" font-family="system-ui,sans-serif" font-size="11" font-weight="600" fill="#0F172A">治理台</text>
+  <text x="1040" y="205" text-anchor="middle" font-family="system-ui,sans-serif" font-size="10" fill="#64748B">React 19 + TanStack · 键盘导航</text>
+
+  <rect x="900" y="250" width="280" height="70" rx="10" fill="#FFFFFF" stroke="#E8E2D4" stroke-width="1"/>
+  <text x="1040" y="275" text-anchor="middle" font-family="system-ui,sans-serif" font-size="11" font-weight="600" fill="#0F172A">可观测</text>
+  <text x="1040" y="295" text-anchor="middle" font-family="system-ui,sans-serif" font-size="10" fill="#64748B">任务状态机 · Prometheus metrics</text>
+
+  <text x="600" y="380" text-anchor="middle" font-family="system-ui,sans-serif" font-size="11" fill="#94A3B8">Mem0 + Milvus + PostgreSQL — 全部开源</text>
+</svg>
+```
+
+---
+
 ## ✦ 性能
+
+单机开发环境(`make dev`,M3 MacBook Air,mock LLM)实测:
+
+| 工作负载 | 延迟 p50 | 延迟 p95 | 吞吐量 |
+| --- | --- | --- | --- |
+| `POST /memory/append`(小轮次) | 8 ms | 22 ms | 850 req/s |
+| `POST /memory/recall`(5 命中) | 24 ms | 68 ms | 410 req/s |
+| `GET /memory`(50 条结果) | 4 ms | 9 ms | 2 200 req/s |
+| `DELETE /memory/{id}`(scoped) | 6 ms | 14 ms | 1 100 req/s |
+
+```svg
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 320" width="100%" height="320">
+  <rect width="1200" height="320" fill="#FDFCF8"/>
+  <text x="60" y="35" font-family="system-ui,sans-serif" font-size="16" font-weight="700" fill="#0F172A">延迟对比 (ms) — p50 vs p95</text>
+  <line x1="200" y1="60" x2="200" y2="280" stroke="#E8E2D4" stroke-width="1"/>
+  <line x1="400" y1="60" x2="400" y2="280" stroke="#E8E2D4" stroke-width="1"/>
+  <line x1="600" y1="60" x2="600" y2="280" stroke="#E8E2D4" stroke-width="1"/>
+  <line x1="800" y1="60" x2="800" y2="280" stroke="#E8E2D4" stroke-width="1"/>
+  <text x="200" y="295" text-anchor="middle" font-family="system-ui,sans-serif" font-size="10" fill="#64748B">20ms</text>
+  <text x="400" y="295" text-anchor="middle" font-family="system-ui,sans-serif" font-size="10" fill="#64748B">40ms</text>
+  <text x="600" y="295" text-anchor="middle" font-family="system-ui,sans-serif" font-size="10" fill="#64748B">60ms</text>
+  <text x="800" y="295" text-anchor="middle" font-family="system-ui,sans-serif" font-size="10" fill="#64748B">80ms</text>
+
+  <text x="60" y="80" font-family="system-ui,sans-serif" font-size="11" fill="#475569">POST /memory/append</text>
+  <rect x="200" y="68" width="80" height="14" rx="3" fill="#7C3AED"/>
+  <text x="290" y="78" font-family="system-ui,sans-serif" font-size="10" fill="#7C3AED">p50 8ms</text>
+  <rect x="200" y="84" width="220" height="14" rx="3" fill="#A78BFA" opacity="0.5"/>
+  <text x="430" y="94" font-family="system-ui,sans-serif" font-size="10" fill="#A78BFA">p95 22ms</text>
+
+  <text x="60" y="125" font-family="system-ui,sans-serif" font-size="11" fill="#475569">POST /memory/recall</text>
+  <rect x="200" y="113" width="240" height="14" rx="3" fill="#7C3AED"/>
+  <text x="450" y="123" font-family="system-ui,sans-serif" font-size="10" fill="#7C3AED">p50 24ms</text>
+  <rect x="200" y="129" width="680" height="14" rx="3" fill="#A78BFA" opacity="0.5"/>
+  <text x="890" y="139" font-family="system-ui,sans-serif" font-size="10" fill="#A78BFA">p95 68ms</text>
+
+  <text x="60" y="170" font-family="system-ui,sans-serif" font-size="11" fill="#475569">GET /memory</text>
+  <rect x="200" y="158" width="40" height="14" rx="3" fill="#7C3AED"/>
+  <text x="250" y="168" font-family="system-ui,sans-serif" font-size="10" fill="#7C3AED">p50 4ms</text>
+  <rect x="200" y="174" width="90" height="14" rx="3" fill="#A78BFA" opacity="0.5"/>
+  <text x="300" y="184" font-family="system-ui,sans-serif" font-size="10" fill="#A78BFA">p95 9ms</text>
+
+  <text x="60" y="215" font-family="system-ui,sans-serif" font-size="11" fill="#475569">DELETE /memory</text>
+  <rect x="200" y="203" width="60" height="14" rx="3" fill="#7C3AED"/>
+  <text x="270" y="213" font-family="system-ui,sans-serif" font-size="10" fill="#7C3AED">p50 6ms</text>
+  <rect x="200" y="219" width="140" height="14" rx="3" fill="#A78BFA" opacity="0.5"/>
+  <text x="350" y="229" font-family="system-ui,sans-serif" font-size="10" fill="#A78BFA">p95 14ms</text>
+
+  <rect x="200" y="265" width="12" height="12" fill="#7C3AED" rx="2"/>
+  <text x="220" y="275" font-family="system-ui,sans-serif" font-size="10" fill="#475569">p50</text>
+  <rect x="270" y="265" width="12" height="12" fill="#A78BFA" opacity="0.5" rx="2"/>
+  <text x="290" y="275" font-family="system-ui,sans-serif" font-size="10" fill="#475569">p95</text>
+</svg>
+```
+
+L3 后台抽取是异步的,延迟瓶颈在所配的 LLM 与 embedding 端点,不在 Thinkback 自身。
+
+---
+
+## ✦ 路线图
+
+```svg
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 220" width="100%" height="220">
+  <rect width="1200" height="220" fill="#FDFCF8"/>
+  <text x="60" y="35" font-family="system-ui,sans-serif" font-size="16" font-weight="700" fill="#0F172A">路线图</text>
+  <line x1="150" y1="110" x2="1150" y2="110" stroke="#E8E2D4" stroke-width="2"/>
+  <circle cx="250" cy="110" r="12" fill="#7C3AED" stroke="#FFFFFF" stroke-width="2"/>
+  <text x="250" y="85" text-anchor="middle" font-family="system-ui,sans-serif" font-size="11" font-weight="600" fill="#0F172A">✅ 2026 Q1</text>
+  <text x="250" y="145" text-anchor="middle" font-family="system-ui,sans-serif" font-size="10" fill="#475569">核心记忆层</text>
+  <text x="250" y="162" text-anchor="middle" font-family="system-ui,sans-serif" font-size="10" fill="#475569">治理台 v1</text>
+
+  <circle cx="500" cy="110" r="12" fill="#7C3AED" stroke="#FFFFFF" stroke-width="2"/>
+  <text x="500" y="85" text-anchor="middle" font-family="system-ui,sans-serif" font-size="11" font-weight="600" fill="#0F172A">✅ 2026 Q2</text>
+  <text x="500" y="145" text-anchor="middle" font-family="system-ui,sans-serif" font-size="10" fill="#475569">v1 集成 API</text>
+  <text x="500" y="162" text-anchor="middle" font-family="system-ui,sans-serif" font-size="10" fill="#475569">mem0 提示词管理</text>
+
+  <circle cx="750" cy="110" r="12" fill="#7C3AED" stroke="#FFFFFF" stroke-width="2"/>
+  <text x="750" y="85" text-anchor="middle" font-family="system-ui,sans-serif" font-size="11" font-weight="600" fill="#0F172A">🔄 2026 Q3</text>
+  <text x="750" y="145" text-anchor="middle" font-family="system-ui,sans-serif" font-size="10" fill="#475569">Webhook 事件</text>
+  <text x="750" y="162" text-anchor="middle" font-family="system-ui,sans-serif" font-size="10" fill="#475569">Python SDK</text>
+
+  <circle cx="1000" cy="110" r="12" fill="#FFFFFF" stroke="#A78BFA" stroke-width="2" stroke-dasharray="3,2"/>
+  <text x="1000" y="85" text-anchor="middle" font-family="system-ui,sans-serif" font-size="11" font-weight="600" fill="#64748B">🎯 2026 Q4</text>
+  <text x="1000" y="145" text-anchor="middle" font-family="system-ui,sans-serif" font-size="10" fill="#64748B">TypeScript SDK</text>
+  <text x="1000" y="162" text-anchor="middle" font-family="system-ui,sans-serif" font-size="10" fill="#64748B">多租户隔离</text>
+</svg>
+```
+
+> [!NOTE]
+> 路线图是动态文档,投票 Issue 我们会优先处理。
+
+---
+
+## ✦ 配置
 
 单机开发环境(`make dev`,M3 MacBook Air,mock LLM)实测:
 
@@ -555,6 +762,63 @@ cd web && node take-screenshots.mjs
 
 ---
 
+## ✦ FAQ
+
+<details>
+<summary><b>Thinkback 和直接调用 Mem0 SDK 有什么区别?</b></summary>
+
+Mem0 是出色的记忆引擎,给你事实抽取和语义召回。但不给你 _服务_。
+Thinkback 在 Mem0 之上加了:会话级上下文(L1/L2)、幂等写入、显式降级信号、后台任务治理、
+scoped 删除墓碑、治理台、HTTP + gRPC 访问。
+如果只是"一个进程、一个用户、不需要重试",直接调 Mem0 即可。
+
+</details>
+
+<details>
+<summary><b>Thinkback 能否接入我现有的 Mem0 + Milvus 环境?</b></summary>
+
+可以。L3 后端是可插拔的。配置 `MEMORY_LLM_*`、`MEMORY_EMBEDDING_*`、`MILVUS_URL`、`MILVUS_DATABASE`
+指向你现有的基础设施即可。无需迁移 — Thinkback 会使用同一 collection。
+
+</details>
+
+<details>
+<summary><b>LLM 或向量库宕机会怎样?</b></summary>
+
+Thinkback 绝不返回"半个答案"。任何一层不可用时,响应标记 `degraded=true` + `degradation_reasons`
+说明哪一层、为什么。调用方决定降级到其他源还是向用户报错。
+
+</details>
+
+<details>
+<summary><b>Thinkback 生产就绪了吗?</b></summary>
+
+是。六边形端口 + Pydantic v2 + `mypy --strict` + Alembic 迁移 + Kubernetes 原生探针 +
+Prometheus metrics + 615+ 测试。治理台是 React 19 SPA,支持键盘导航、无障碍、响应式布局。
+
+</details>
+
+<details>
+<summary><b>规模性能怎样?</b></summary>
+
+单机开发环境 `POST /memory/append` p50 8ms,recall p50 24ms。
+L3 后台抽取是异步的。多租户规模化请启用 `MEMORY_L3_WRITE_MODE=async`,
+配 `MEMORY_L3_EXECUTOR_WORKERS` 与 `MEMORY_L3_MAX_PENDING_TASKS`。详见
+[运维手册](docs/RUNBOOK.md)。
+
+</details>
+
+<details>
+<summary><b>如何自定义记忆抽取提示词?</b></summary>
+
+治理台 `/integration` → mem0 配置。实时编辑 `custom_instructions`、`update_memory_prompt`、
+`memory_answer_prompt`,下次写入时立即生效,无需重启。
+详见 [mem0 提示词管理](docs/specs/2026-10-08-thinkback-integration-protocol-v1.md) 规范。
+
+</details>
+
+---
+
 ## ✦ 贡献
 
 我们欢迎 PR,涵盖 bug 修复、新后端、治理台改进、文档等。较大改动请先开 issue 讨论方向。
@@ -600,6 +864,24 @@ Thinkback 由独立团队开发,以 Apache 2.0 协议开源。如果你的公司
 [Apache License 2.0](LICENSE) — 完整文本见 `LICENSE`。
 
 Thinkback 以 Apache 2.0 协议开源,你可以自由使用、修改、分发,包括商业用途,只需保留版权声明和免责声明。
+
+---
+
+## ✦ Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=mcgrapeng/Thinkback&type=Date)](https://star-history.com/#mcgrapeng/Thinkback&Date)
+
+---
+
+## ✦ 贡献者
+
+感谢所有为 Thinkback 做出贡献的朋友们 🙏
+
+<a href="https://github.com/mcgrapeng/thinkback/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=mcgrapeng/thinkback&max=40&columns=8&anon=1" />
+</a>
+
+想参与贡献?见 [贡献指南](#-贡献)。
 
 ---
 

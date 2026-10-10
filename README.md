@@ -42,6 +42,17 @@ Built on [Mem0](https://github.com/mem0ai/mem0) as its long-term engine, plus Po
 
 [Report Bug](.github/ISSUE_TEMPLATE/bug_report.md) · [Request Feature](.github/ISSUE_TEMPLATE/feature_request.md)
 
+**Quick links:**
+[Why Thinkback](#-why-thinkback) ·
+[How it works](#-how-it-works) ·
+[Screenshots](#-screenshots) ·
+[Quickstart](#-quickstart) ·
+[API Reference](#-api-reference) ·
+[Architecture](#-architecture) ·
+[FAQ](#-faq) ·
+[Community](#-community) ·
+[Contributing](#-contributing)
+
 </div>
 
 ---
@@ -58,6 +69,38 @@ remembers your preferences, past issues, and context.
 - 🚨 **Explicit degradation** signals when the LLM or vector store is down
 - 🛠️ **Self-hosted** with Apache 2.0 — your data never leaves your infra
 - 🎛️ **Full admin dashboard** to inspect and repair what the memory layer actually did
+
+---
+
+## ✦ Table of Contents
+
+| Section | What you'll find |
+| --- | --- |
+| [At a glance](#-at-a-glance) | 6-line summary + key capabilities |
+| [Why we built this](#-why-we-built-this) | The origin story |
+| [How it works](#-how-it-works) | Architecture flow with diagram |
+| [How it compares](#-how-it-compares) | Thinkback vs Mem0 SDK / LangChain / DIY |
+| [Why Thinkback](#-why-thinkback) | What you get vs what you build |
+| [Memory model](#-memory-model) | L1 / L2 / L3 layer separation |
+| [Capabilities](#-capabilities) | Full feature list |
+| [Screenshots](#-screenshots) | Admin dashboard visual tour |
+| [Quickstart](#-quickstart) | 3-step curl walkthrough |
+| [API Reference](#-api-reference) | 26+ endpoints |
+| [Architecture](#-architecture) | Non-mermaid architecture diagram |
+| [Performance](#-performance) | Benchmarks |
+| [Configuration](#-configuration) | Env vars |
+| [Roadmap](#-roadmap) | What's next |
+| [Project layout](#-project-layout) | Repo structure |
+| [Extending](#-extending) | How to customize |
+| [Development](#-development) | Dev setup |
+| [Documentation](#-documentation) | Full docs |
+| [Community](#-community) | Discussions / Issues |
+| [FAQ](#-faq) | Frequently asked questions |
+| [Contributing](#-contributing) | How to help |
+| [Featured by](#-featured-by) | Used by |
+| [Sponsors](#-sponsors) | Sponsor us |
+| [License](#-license) | Apache 2.0 |
+| [Acknowledgments](#-acknowledgments) | Credits |
 
 ---
 
@@ -493,6 +536,86 @@ Full interactive API documentation at **`/docs`** (Swagger UI) and **`/redoc`**.
 
 ---
 
+## ✦ Architecture
+
+```svg
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 400" width="100%" height="400">
+  <defs>
+    <linearGradient id="ag-bg" x1="0" y1="0" x2="1200" y2="400">
+      <stop offset="0%" stop-color="#FDFCF8"/>
+      <stop offset="100%" stop-color="#F5F2EC"/>
+    </linearGradient>
+  </defs>
+  <rect width="1200" height="400" fill="url(#ag-bg)"/>
+  <text x="600" y="35" text-anchor="middle" font-family="system-ui,sans-serif" font-size="18" font-weight="700" fill="#0F172A">Thinkback — Three-Layer Memory Architecture</text>
+
+  <!-- Your app -->
+  <rect x="40" y="70" width="180" height="110" rx="12" fill="#FFFFFF" stroke="#E8E2D4" stroke-width="1.5"/>
+  <text x="130" y="105" text-anchor="middle" font-family="system-ui,sans-serif" font-size="14" font-weight="600" fill="#0F172A">Your App / Agent</text>
+  <text x="130" y="128" text-anchor="middle" font-family="system-ui,sans-serif" font-size="11" fill="#64748B">user → assistant</text>
+  <text x="130" y="148" text-anchor="middle" font-family="system-ui,sans-serif" font-size="11" fill="#64748B">conversation turn</text>
+
+  <!-- Thinkback service box -->
+  <rect x="280" y="50" width="560" height="300" rx="16" fill="#FFFFFF" stroke="#E8E2D4" stroke-width="1.5"/>
+  <text x="560" y="80" text-anchor="middle" font-family="system-ui,sans-serif" font-size="16" font-weight="700" fill="#0F172A">Thinkback Service</text>
+
+  <!-- L1 -->
+  <rect x="310" y="110" width="160" height="90" rx="10" fill="#F8F6F0" stroke="#E8E2D4" stroke-width="1"/>
+  <text x="390" y="135" text-anchor="middle" font-family="system-ui,sans-serif" font-size="11" font-weight="600" fill="#475569">L1 · Round Journal</text>
+  <text x="390" y="155" text-anchor="middle" font-family="system-ui,sans-serif" font-size="10" fill="#64748B">PostgreSQL</text>
+  <text x="390" y="172" text-anchor="middle" font-family="system-ui,sans-serif" font-size="9" fill="#94A3B8">last-N rounds</text>
+  <text x="390" y="190" text-anchor="middle" font-family="system-ui,sans-serif" font-size="9" fill="#94A3B8">append-only</text>
+
+  <!-- L2 -->
+  <rect x="490" y="110" width="160" height="90" rx="10" fill="#F8F6F0" stroke="#E8E2D4" stroke-width="1"/>
+  <text x="570" y="135" text-anchor="middle" font-family="system-ui,sans-serif" font-size="11" font-weight="600" fill="#475569">L2 · Session Summary</text>
+  <text x="570" y="155" text-anchor="middle" font-family="system-ui,sans-serif" font-size="10" fill="#64748B">PostgreSQL + LLM</text>
+  <text x="570" y="172" text-anchor="middle" font-family="system-ui,sans-serif" font-size="9" fill="#94A3B8">debounced</text>
+  <text x="570" y="190" text-anchor="middle" font-family="system-ui,sans-serif" font-size="9" fill="#94A3B8">1 call / N rounds</text>
+
+  <!-- L3 (highlighted) -->
+  <rect x="670" y="110" width="160" height="90" rx="10" fill="#7C3AED" stroke="#7C3AED" stroke-width="1"/>
+  <text x="750" y="135" text-anchor="middle" font-family="system-ui,sans-serif" font-size="11" font-weight="600" fill="#FFFFFF">L3 · Long-term</text>
+  <text x="750" y="155" text-anchor="middle" font-family="system-ui,sans-serif" font-size="10" fill="#E9E4FA">Mem0 + Milvus</text>
+  <text x="750" y="172" text-anchor="middle" font-family="system-ui,sans-serif" font-size="9" fill="#C4B5FD">background</text>
+  <text x="750" y="190" text-anchor="middle" font-family="system-ui,sans-serif" font-size="9" fill="#C4B5FD">semantic recall</text>
+
+  <!-- Idempotent + degradation layer -->
+  <rect x="310" y="220" width="520" height="40" rx="8" fill="#F8F6F0" stroke="#E8E2D4" stroke-width="1"/>
+  <text x="570" y="243" text-anchor="middle" font-family="system-ui,sans-serif" font-size="11" fill="#475569">Idempotent writes · Task governance · Scoped deletes · Degradation signals</text>
+
+  <!-- Arrows -->
+  <path d="M 220 125 L 310 125" stroke="#64748B" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
+  <text x="265" y="118" text-anchor="middle" font-family="system-ui,sans-serif" font-size="9" fill="#64748B">append</text>
+  <path d="M 220 155 L 310 155" stroke="#64748B" stroke-width="2" stroke-dasharray="4,3" fill="none" marker-end="url(#arrow)"/>
+  <text x="265" y="148" text-anchor="middle" font-family="system-ui,sans-serif" font-size="9" fill="#64748B">recall</text>
+
+  <!-- Definition for arrow -->
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#64748B"/>
+    </marker>
+  </defs>
+
+  <!-- Side callouts -->
+  <rect x="900" y="70" width="280" height="70" rx="10" fill="#FFFFFF" stroke="#E8E2D4" stroke-width="1"/>
+  <text x="1040" y="95" text-anchor="middle" font-family="system-ui,sans-serif" font-size="11" font-weight="600" fill="#0F172A">HTTP + gRPC</text>
+  <text x="1040" y="115" text-anchor="middle" font-family="system-ui,sans-serif" font-size="10" fill="#64748B">Same Pydantic schema, choose your protocol</text>
+
+  <rect x="900" y="160" width="280" height="70" rx="10" fill="#FFFFFF" stroke="#E8E2D4" stroke-width="1"/>
+  <text x="1040" y="185" text-anchor="middle" font-family="system-ui,sans-serif" font-size="11" font-weight="600" fill="#0F172A">Admin Dashboard</text>
+  <text x="1040" y="205" text-anchor="middle" font-family="system-ui,sans-serif" font-size="10" fill="#64748B">React 19 + TanStack · Keyboard nav</text>
+
+  <rect x="900" y="250" width="280" height="70" rx="10" fill="#FFFFFF" stroke="#E8E2D4" stroke-width="1"/>
+  <text x="1040" y="275" text-anchor="middle" font-family="system-ui,sans-serif" font-size="11" font-weight="600" fill="#0F172A">Observability</text>
+  <text x="1040" y="295" text-anchor="middle" font-family="system-ui,sans-serif" font-size="10" fill="#64748B">Task state machine · Prometheus metrics</text>
+
+  <text x="600" y="380" text-anchor="middle" font-family="system-ui,sans-serif" font-size="11" fill="#94A3B8">Mem0 + Milvus + PostgreSQL — all open source</text>
+</svg>
+```
+
+---
+
 ## ✦ Performance
 
 Representative numbers from a single-node dev profile (`make dev`, M3 MacBook Air, mock LLM):
@@ -504,8 +627,100 @@ Representative numbers from a single-node dev profile (`make dev`, M3 MacBook Ai
 | `GET /memory` (50 results) | 4 ms | 9 ms | 2 200 req/s |
 | `DELETE /memory/{id}` (scoped) | 6 ms | 14 ms | 1 100 req/s |
 
-L3 background extraction runs asynchronously; latency is dominated by the configured LLM and
-embedding endpoints, not by Thinkback itself.
+```svg
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 320" width="100%" height="320">
+  <rect width="1200" height="320" fill="#FDFCF8"/>
+  <text x="60" y="35" font-family="system-ui,sans-serif" font-size="16" font-weight="700" fill="#0F172A">Latency (ms) — p50 vs p95</text>
+
+  <!-- Grid -->
+  <line x1="200" y1="60" x2="200" y2="280" stroke="#E8E2D4" stroke-width="1"/>
+  <line x1="400" y1="60" x2="400" y2="280" stroke="#E8E2D4" stroke-width="1"/>
+  <line x1="600" y1="60" x2="600" y2="280" stroke="#E8E2D4" stroke-width="1"/>
+  <line x1="800" y1="60" x2="800" y2="280" stroke="#E8E2D4" stroke-width="1"/>
+  <text x="200" y="295" text-anchor="middle" font-family="system-ui,sans-serif" font-size="10" fill="#64748B">20ms</text>
+  <text x="400" y="295" text-anchor="middle" font-family="system-ui,sans-serif" font-size="10" fill="#64748B">40ms</text>
+  <text x="600" y="295" text-anchor="middle" font-family="system-ui,sans-serif" font-size="10" fill="#64748B">60ms</text>
+  <text x="800" y="295" text-anchor="middle" font-family="system-ui,sans-serif" font-size="10" fill="#64748B">80ms</text>
+
+  <!-- Bars: workload / p50 / p95 -->
+  <!-- POST append (8ms / 22ms) -->
+  <text x="60" y="80" font-family="system-ui,sans-serif" font-size="11" fill="#475569">POST /memory/append</text>
+  <rect x="200" y="68" width="80" height="14" rx="3" fill="#7C3AED"/>
+  <text x="290" y="78" font-family="system-ui,sans-serif" font-size="10" fill="#7C3AED">p50 8ms</text>
+  <rect x="200" y="84" width="220" height="14" rx="3" fill="#A78BFA" opacity="0.5"/>
+  <text x="430" y="94" font-family="system-ui,sans-serif" font-size="10" fill="#A78BFA">p95 22ms</text>
+
+  <!-- POST recall (24ms / 68ms) -->
+  <text x="60" y="125" font-family="system-ui,sans-serif" font-size="11" fill="#475569">POST /memory/recall</text>
+  <rect x="200" y="113" width="240" height="14" rx="3" fill="#7C3AED"/>
+  <text x="450" y="123" font-family="system-ui,sans-serif" font-size="10" fill="#7C3AED">p50 24ms</text>
+  <rect x="200" y="129" width="680" height="14" rx="3" fill="#A78BFA" opacity="0.5"/>
+  <text x="890" y="139" font-family="system-ui,sans-serif" font-size="10" fill="#A78BFA">p95 68ms</text>
+
+  <!-- GET memory (4ms / 9ms) -->
+  <text x="60" y="170" font-family="system-ui,sans-serif" font-size="11" fill="#475569">GET /memory</text>
+  <rect x="200" y="158" width="40" height="14" rx="3" fill="#7C3AED"/>
+  <text x="250" y="168" font-family="system-ui,sans-serif" font-size="10" fill="#7C3AED">p50 4ms</text>
+  <rect x="200" y="174" width="90" height="14" rx="3" fill="#A78BFA" opacity="0.5"/>
+  <text x="300" y="184" font-family="system-ui,sans-serif" font-size="10" fill="#A78BFA">p95 9ms</text>
+
+  <!-- DELETE memory (6ms / 14ms) -->
+  <text x="60" y="215" font-family="system-ui,sans-serif" font-size="11" fill="#475569">DELETE /memory</text>
+  <rect x="200" y="203" width="60" height="14" rx="3" fill="#7C3AED"/>
+  <text x="270" y="213" font-family="system-ui,sans-serif" font-size="10" fill="#7C3AED">p50 6ms</text>
+  <rect x="200" y="219" width="140" height="14" rx="3" fill="#A78BFA" opacity="0.5"/>
+  <text x="350" y="229" font-family="system-ui,sans-serif" font-size="10" fill="#A78BFA">p95 14ms</text>
+
+  <!-- Legend -->
+  <rect x="200" y="265" width="12" height="12" fill="#7C3AED" rx="2"/>
+  <text x="220" y="275" font-family="system-ui,sans-serif" font-size="10" fill="#475569">p50</text>
+  <rect x="270" y="265" width="12" height="12" fill="#A78BFA" opacity="0.5" rx="2"/>
+  <text x="290" y="275" font-family="system-ui,sans-serif" font-size="10" fill="#475569">p95</text>
+</svg>
+```
+
+L3 background extraction runs asynchronously; latency is dominated by the configured LLM and embedding endpoints, not by Thinkback itself.
+
+---
+
+## ✦ Roadmap
+
+```svg
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 220" width="100%" height="220">
+  <rect width="1200" height="220" fill="#FDFCF8"/>
+  <text x="60" y="35" font-family="system-ui,sans-serif" font-size="16" font-weight="700" fill="#0F172A">Roadmap</text>
+
+  <!-- Timeline line -->
+  <line x1="150" y1="110" x2="1150" y2="110" stroke="#E8E2D4" stroke-width="2"/>
+
+  <!-- Q1 -->
+  <circle cx="250" cy="110" r="12" fill="#7C3AED" stroke="#FFFFFF" stroke-width="2"/>
+  <text x="250" y="85" text-anchor="middle" font-family="system-ui,sans-serif" font-size="11" font-weight="600" fill="#0F172A">✅ Q1 2026</text>
+  <text x="250" y="145" text-anchor="middle" font-family="system-ui,sans-serif" font-size="10" fill="#475569">Core memory layer</text>
+  <text x="250" y="162" text-anchor="middle" font-family="system-ui,sans-serif" font-size="10" fill="#475569">Admin dashboard v1</text>
+
+  <!-- Q2 -->
+  <circle cx="500" cy="110" r="12" fill="#7C3AED" stroke="#FFFFFF" stroke-width="2"/>
+  <text x="500" y="85" text-anchor="middle" font-family="system-ui,sans-serif" font-size="11" font-weight="600" fill="#0F172A">✅ Q2 2026</text>
+  <text x="500" y="145" text-anchor="middle" font-family="system-ui,sans-serif" font-size="10" fill="#475569">v1 integration API</text>
+  <text x="500" y="162" text-anchor="middle" font-family="system-ui,sans-serif" font-size="10" fill="#475569">mem0 prompt mgmt</text>
+
+  <!-- Q3 -->
+  <circle cx="750" cy="110" r="12" fill="#7C3AED" stroke="#FFFFFF" stroke-width="2"/>
+  <text x="750" y="85" text-anchor="middle" font-family="system-ui,sans-serif" font-size="11" font-weight="600" fill="#0F172A">🔄 Q3 2026</text>
+  <text x="750" y="145" text-anchor="middle" font-family="system-ui,sans-serif" font-size="10" fill="#475569">Webhook events</text>
+  <text x="750" y="162" text-anchor="middle" font-family="system-ui,sans-serif" font-size="10" fill="#475569">Python SDK</text>
+
+  <!-- Q4 -->
+  <circle cx="1000" cy="110" r="12" fill="#FFFFFF" stroke="#A78BFA" stroke-width="2" stroke-dasharray="3,2"/>
+  <text x="1000" y="85" text-anchor="middle" font-family="system-ui,sans-serif" font-size="11" font-weight="600" fill="#64748B">🎯 Q4 2026</text>
+  <text x="1000" y="145" text-anchor="middle" font-family="system-ui,sans-serif" font-size="10" fill="#64748B">TypeScript SDK</text>
+  <text x="1000" y="162" text-anchor="middle" font-family="system-ui,sans-serif" font-size="10" fill="#64748B">Multi-tenant isolation</text>
+</svg>
+```
+
+> [!NOTE]
+> Roadmap is a living document. Vote on issues and we'll prioritize accordingly.
 
 ---
 
@@ -628,6 +843,66 @@ Discussion — we'd love to feature it in our [wiki](docs/USER_STORIES.md) (comi
 
 ---
 
+## ✦ FAQ
+
+<details>
+<summary><b>How does Thinkback differ from calling Mem0 SDK directly?</b></summary>
+
+Mem0 is an excellent memory engine that gives you fact extraction and semantic recall. It does **not** give you a _service_.
+Thinkback wraps Mem0 with: session-level context (L1/L2), idempotent writes, explicit degradation signals,
+background task governance, scoped deletes with tombstones, an admin dashboard, and HTTP + gRPC access.
+If you just need "one process, one user, no retries" — call Mem0 directly.
+
+</details>
+
+<details>
+<summary><b>Can I use Thinkback with my existing Mem0 + Milvus setup?</b></summary>
+
+Yes. Thinkback's L3 backend is pluggable. If you already have Mem0 + Milvus running, configure
+`MEMORY_LLM_*`, `MEMORY_EMBEDDING_*`, `MILVUS_URL`, and `MILVUS_DATABASE` to point at your existing infra.
+No schema migration needed — Thinkback will use the same collection.
+
+</details>
+
+<details>
+<summary><b>What happens when the LLM or vector store goes down?</b></summary>
+
+Thinkback never returns a half-answer. If any layer is unavailable, the response is marked
+`degraded=true` with `degradation_reasons` explaining which layer is down and why. Callers can
+decide whether to fall back to a different source or return an error to users.
+
+</details>
+
+<details>
+<summary><b>Is Thinkback production-ready?</b></summary>
+
+Yes. It's built with hexagonal ports, Pydantic v2 + `mypy --strict`, Alembic migrations,
+Kubernetes-native liveness/readiness probes, Prometheus metrics, and 615+ tests.
+The admin dashboard is a React 19 SPA with keyboard navigation, accessibility, and responsive layout.
+
+</details>
+
+<details>
+<summary><b>What about performance at scale?</b></summary>
+
+Single-node dev profile shows 8ms p50 for `POST /memory/append`, 24ms p50 for recall.
+L3 background extraction runs async. For multi-tenant scale, enable `MEMORY_L3_WRITE_MODE=async`
+with appropriate `MEMORY_L3_EXECUTOR_WORKERS` and `MEMORY_L3_MAX_PENDING_TASKS`. See
+[Operations runbook](docs/RUNBOOK.md) for scaling guidance.
+
+</details>
+
+<details>
+<summary><b>How do I customize memory extraction prompts?</b></summary>
+
+Open the admin console → `/integration` → mem0 配置. Edit `custom_instructions`, `update_memory_prompt`,
+and `memory_answer_prompt` in real-time. Changes apply on the next write — no restart needed.
+See the [mem0 prompt management](docs/specs/2026-10-08-thinkback-integration-protocol-v1.md) spec.
+
+</details>
+
+---
+
 ## ✦ Contributing
 
 We welcome PRs for bug fixes, new backends, admin dashboard improvements, and docs. For
@@ -677,6 +952,24 @@ To become a sponsor, open an issue with title [sponsor] and we'll get back to yo
 Thinkback is open source under the Apache 2.0 license. You can freely use, modify, and
 distribute it, including for commercial purposes, as long as you preserve the copyright
 notice and disclaimer.
+
+---
+
+## ✦ Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=mcgrapeng/Thinkback&type=Date)](https://star-history.com/#mcgrapeng/Thinkback&Date)
+
+---
+
+## ✦ Contributors
+
+Thanks to everyone who has contributed to Thinkback! 🙏
+
+<a href="https://github.com/mcgrapeng/thinkback/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=mcgrapeng/thinkback&max=40&columns=8&anon=1" />
+</a>
+
+Want to contribute? See [Contributing](#-contributing).
 
 ---
 
