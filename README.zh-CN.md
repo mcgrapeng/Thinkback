@@ -27,6 +27,12 @@ Thinkback 让 AI 助手与智能体拥有跨会话的持久记忆。它把短期
 [![PRs welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](.github/CONTRIBUTING.md)
 [![Mentioned in Awesome Mem0](https://img.shields.io/badge/Mentioned_in-Awesome_Mem0-7C3AED?logo=awesome-lists&logoColor=white)](#-acknowledgments)
 
+<br>
+
+[![GitHub stars](https://img.shields.io/github/stars/mcgrapeng/thinkback?style=social)](../../stargazers)
+[![GitHub forks](https://img.shields.io/github/forks/mcgrapeng/thinkback?style=social)](../../network/members)
+[![GitHub watchers](https://img.shields.io/github/watchers/mcgrapeng/thinkback?style=social)](../../watchers)
+
 [**[English](README.md)**](README.md) · [**中文**](README.zh-CN.md) · [文档](docs/) · [更新日志](CHANGELOG.md) · [路线图](docs/ROADMAP.md)
 
 [报告问题](.github/ISSUE_TEMPLATE/bug_report.md) · [功能请求](.github/ISSUE_TEMPLATE/feature_request.md)
@@ -45,6 +51,51 @@ Thinkback 是**面向 AI 应用的记忆层**,让 AI 记住过去对话中发生
 - 🚨 **显式降级信号** 当 LLM 或向量库不可用时
 - 🛠️ **自托管 + Apache 2.0** — 数据永不离开你的基础设施
 - 🎛️ **完整治理台** 检查与修复记忆层实际做了什么
+
+---
+
+## ✦ 为什么做这个
+
+> *我们当时在做一个多租户的客服 agent。「记忆层」这件事我们重写了三遍 —— 第一遍 Postgres,第二遍 Redis,第三遍 Sidekiq cron job。最后我们意识到:记忆层不是我们的产品,它是产品上的税。Thinkback 是我们希望一开始就有的一样东西:一个无聊、可靠、可观测,不会在凌晨 3 点挂掉的记忆服务。*
+
+规律是这样的:你做出的 AI 在第一次对话里**能用**,但到第十次就**翻车**了 —— 它忘了用户的偏好、昨天的问题、你花三轮调试的工具调用。每一个 AI 应用最终都需要持久记忆。Thinkback 就是那个你不用自己造、自己调、自己运维的版本。
+
+---
+
+## ✦ 如何工作
+
+一次对话穿过三层。每一层都有严格的所有权 —— 绝不交叉写入。
+
+```mermaid
+flowchart LR
+    subgraph App["你的应用 / agent"]
+        A[user → assistant<br/>对话轮次]
+    end
+
+    subgraph Thinkback["Thinkback 服务"]
+        direction LR
+        L1["**L1 — Round journal**<br/>PostgreSQL<br/><i>保留最近 N 轮</i>"]
+        L2["**L2 — Session summary**<br/>PostgreSQL + LLM<br/><i>防抖,每 N 轮 1 次</i>"]
+        L3["**L3 — Long-term memory**<br/>Mem0 + Milvus<br/><i>后台抽取,语义召回</i>"]
+    end
+
+    A -->|append| L1
+    L1 -->|trigger| L2
+    L2 -->|extract| L3
+    L3 -.->|recall (degraded?)| A
+
+    style L1 fill:#FFFFFF,stroke:#0F172A,stroke-width:2px
+    style L2 fill:#FFFFFF,stroke:#0F172A,stroke-width:2px
+    style L3 fill:#7C3AED,stroke:#A78BFA,stroke-width:2px,color:#FFFFFF
+```
+
+一次请求的流程:
+
+1. **你的应用** 调用 `POST /memory/append`,传入 `user → assistant` 轮次
+2. **L1** 存原始轮次(PostgreSQL,仅追加)
+3. **L2** 防抖更新运行摘要(LLM 调用)
+4. **L3** 后台抽取到向量库(Milvus)
+5. 下次 `POST /memory/recall`,**L1 / L2 / L3** 并行查询;响应标记 `degraded=true`(任一层不可用时),绝不返回半个答案
 
 ---
 
@@ -495,6 +546,17 @@ cd web && node take-screenshots.mjs
 
 ---
 
+## ✦ 社区
+
+- 💬 **[GitHub Discussions](.github/DISCUSSITIONS)** — 提问、想法、show-and-tell
+- 🐛 **[Issue 跟踪器](.github/ISSUE_TEMPLATE/bug_report.md)** — bug 报告
+- ✨ **[功能请求](.github/ISSUE_TEMPLATE/feature_request.md)** — Thinkback 接下来该做什么?
+- 🔔 **[Watch 此仓库](.github)** — 接收发布和安全修复通知
+
+如果你在生产环境使用 Thinkback 并想分享你的故事,请开一个 Discussion —— 我们很乐意在 [wiki](docs/USER_STORIES.md)(即将推出)中推荐你。
+
+---
+
 ## ✦ 贡献
 
 我们欢迎 PR,涵盖 bug 修复、新后端、治理台改进、文档等。较大改动请先开 issue 讨论方向。
@@ -503,6 +565,35 @@ cd web && node take-screenshots.mjs
 - [How to contribute](.github/CONTRIBUTING.md)
 - [Code of conduct](.github/CODE_OF_CONDUCT.md)
 - [Security policy](.github/SECURITY.md)
+
+---
+
+## ✦ Featured by
+
+<!--
+如果你的公司 / 出版物 / 社区正在使用 Thinkback,请开一个 PR 把你的 logo + 链接加到这里。
+我们会在下一个 release notes 中推荐你。
+-->
+<a href="https://github.com/mem0ai/mem0"><img src="https://img.shields.io/badge/powered%20by-Mem0-7C3AED?style=for-the-badge" alt="Mem0"/></a>
+
+<sub>想在这里展示你的 logo?[开一个 PR](.github/PULL_REQUEST_TEMPLATE.md) 把你的公司加上 —— 在生产环境使用 Thinkback 是唯一要求。</sub>
+
+---
+
+## ✦ Sponsors
+
+Thinkback 由独立团队开发,以 Apache 2.0 协议开源。如果你的公司从这个项目获益,并希望它发展得更快,可以考虑赞助开发。
+
+<!--
+赞助档位(详见 CONTRIBUTING.md):
+  - $100/月: 列在 README sponsors 区域
+  - $500/月: 放在 landing page + README + release notes
+  - $2k+/月:  优先 feature 请求 + 私密支持频道
+
+想成为赞助者,开一个标题为 [sponsor] 的 issue,我们会联系你。
+-->
+
+**当前赞助者:** *(做第一个!)*
 
 ---
 
