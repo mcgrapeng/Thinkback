@@ -133,6 +133,10 @@ class MemoryRecord(Base):
             "backend_memory_id",
             unique=True,
             postgresql_where=(memory_status == "ACTIVE"),
+            # SQLite 契约测试跑同一模型；不带 sqlite_where 时唯一约束会覆盖
+            # 全部状态行，与 PG 的 partial unique 语义不一致（删后重插同
+            # backend_memory_id 会被误判冲突）。
+            sqlite_where=(memory_status == "ACTIVE"),
         ),
     )
 

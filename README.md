@@ -12,6 +12,7 @@
 **Self-hosted memory service for AI conversations.**
 
 [![Release v1.0](https://img.shields.io/badge/release-v1.0-7C3AED?style=for-the-badge&logo=github&logoColor=white)](../../releases)
+[![Latest commit](https://img.shields.io/github/last-commit/mcgrapeng/thinkback?color=7C3AED&style=for-the-badge)](../../commits/master)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue.svg)](https://www.python.org/downloads/)
 
@@ -41,6 +42,9 @@ Built on [Mem0](https://github.com/mem0ai/mem0) as its long-term engine, plus Po
 [**English**](README.md) · [**中文**](README.zh-CN.md) · [Docs](docs/) · [Changelog](CHANGELOG.md) · [Roadmap](docs/ROADMAP.md)
 
 [Report Bug](.github/ISSUE_TEMPLATE/bug_report.md) · [Request Feature](.github/ISSUE_TEMPLATE/feature_request.md)
+
+> **Try the admin console live** — `git clone https://github.com/mcgrapeng/thinkback.git && make dev`
+> opens both API and web UI at `localhost:7001` with mock data.
 
 **Quick links:**
 [Why Thinkback](#-why-thinkback) ·
@@ -469,11 +473,98 @@ curl -X POST http://localhost:8000/memory/recall \
 
 ### Business system integration (v1 API)
 
-For production integrations, use the v1 public API with API key + scope-based auth:
+For production integrations, use the v1 public API with API key + scope-based auth.
+
+<details>
+<summary><b>Python SDK example</b></summary>
+
+```python
+from thinkback import Thinkback
+
+client = Thinkback(api_key="tbk_live_xxxxxxxx", tenant_id="tenant_001")
+
+# Append a memory round (triggers L1/L2/L3 pipeline)
+response = client.memory.append(
+    request_id="req-001",
+    user_id="alice",
+    session_id="support-001",
+    round_id="round-001",
+    messages=[
+        {"message_id": "m1", "role": "user",
+         "content": "I prefer dark mode and vim keybindings.",
+         "timestamp": "2026-01-15T10:00:00Z"},
+        {"message_id": "m2", "role": "assistant",
+         "content": "Noted. I will remember that.",
+         "timestamp": "2026-01-15T10:00:02Z"},
+    ],
+)
+print(response.task_id)  # track async L3 extraction
+
+# Recall relevant memories
+result = client.memory.recall(
+    user_id="alice",
+    session_id="support-002",
+    query="What UI preferences does this user have?",
+    intent="chat",
+    l3_limit=5,
+)
+for item in result.items:
+    print(f"[{item.layer}] {item.content}")
+```
+
+</details>
+
+<details>
+<summary><b>TypeScript SDK example</b></summary>
+
+```typescript
+import { Thinkback } from "@thinkback/sdk";
+
+const client = new Thinkback({
+  apiKey: process.env.THINKBACK_API_KEY,
+  tenantId: "tenant_001",
+});
+
+// Append a memory round
+await client.memory.append({
+  requestId: "req-001",
+  userId: "alice",
+  sessionId: "support-001",
+  roundId: "round-001",
+  messages: [
+    { messageId: "m1", role: "user",
+      content: "I prefer dark mode and vim keybindings.",
+      timestamp: "2026-01-15T10:00:00Z" },
+    { messageId: "m2", role: "assistant",
+      content: "Noted. I will remember that.",
+      timestamp: "2026-01-15T10:00:02Z" },
+  ],
+});
+
+// Recall with degradation detection
+const result = await client.memory.recall({
+  userId: "alice",
+  sessionId: "support-002",
+  query: "What UI preferences does this user have?",
+  intent: "chat",
+  l3Limit: 5,
+});
+
+if (result.degraded) {
+  console.warn("Memory service degraded:", result.degradationReasons);
+}
+for (const item of result.items) {
+  console.log(`[${item.layer}] ${item.content}`);
+}
+```
+
+</details>
+
+<details>
+<summary><b>cURL</b></summary>
 
 ```bash
 # Generate an API key from the admin console at /integration
-# Then call the API:
 curl -X POST https://your-thinkback/v1/memory/recall \
   -H "Authorization: Bearer tbk_live_xxxxxxxx" \
   -H "X-Tenant-Id: tenant_001" \
@@ -488,7 +579,27 @@ curl -X POST https://your-thinkback/v1/memory/recall \
   }'
 ```
 
+</details>
+
 See [`docs/specs/2026-10-08-thinkback-integration-protocol-v1.md`](docs/specs/2026-10-08-thinkback-integration-protocol-v1.md) for the full spec.
+
+---
+
+## ✦ What's new in v1.0
+
+> **🎉 2026-10 — Thinkback v1.0 is the first public release.**
+
+| Area | Highlights |
+| --- | --- |
+| **Memory model** | Three-layer (L1/L2/L3) with bitemporal validity (`valid_at` / `invalid_at`) |
+| **API** | HTTP + gRPC, 26+ endpoints, v1 public integration protocol |
+| **Admin dashboard** | React 19 SPA: 7 pages, ⌘K command palette, keyboard nav (j/k/x), URL deep links |
+| **Governance** | Scoped delete (memory/session/ALL), idempotent writes, audit trail |
+| **Operability** | K8s-native, Prometheus metrics, Alembic migrations, 615+ tests |
+| **Integration** | v1 public API with API key + Scope + Tenant + rate limit + idempotency |
+| **mem0 prompts** | Real-time editing of `custom_instructions` / `update_memory_prompt` / `memory_answer_prompt` |
+
+See [CHANGELOG](CHANGELOG.md) for the full release notes.
 
 ---
 
@@ -533,6 +644,75 @@ See [`docs/specs/2026-10-08-thinkback-integration-protocol-v1.md`](docs/specs/20
 gRPC surface mirrors the same operations in `proto/memory.proto` for service-to-service calls.
 
 Full interactive API documentation at **`/docs`** (Swagger UI) and **`/redoc`**.
+
+### Request / Response at a glance
+
+<details>
+<summary><b>POST /memory/append</b> — Write a user → assistant round</summary>
+
+**Request:**
+```json
+{
+  "request_id": "req-001",
+  "user_id": "alice",
+  "session_id": "support-001",
+  "round_id": "round-001",
+  "source_timestamp": "2026-01-15T10:00:00Z",
+  "messages": [
+    { "message_id": "m1", "role": "user",
+      "content": "I prefer dark mode and vim keybindings.",
+      "timestamp": "2026-01-15T10:00:00Z" },
+    { "message_id": "m2", "role": "assistant",
+      "content": "Noted. I will remember that.",
+      "timestamp": "2026-01-15T10:00:02Z" }
+  ]
+}
+```
+
+**Response:**
+```json
+{
+  "status": "completed",
+  "task_id": "task-abc123",
+  "round_id": "round-001",
+  "l3_events": []
+}
+```
+
+</details>
+
+<details>
+<summary><b>POST /memory/recall</b> — Retrieve relevant memories</summary>
+
+**Request:**
+```json
+{
+  "user_id": "alice",
+  "session_id": "support-002",
+  "query": "What UI preferences does this user have?",
+  "intent": "chat",
+  "l3_limit": 5
+}
+```
+
+**Response:**
+```json
+{
+  "status": "ok",
+  "degraded": false,
+  "degradation_reasons": [],
+  "items": [
+    {
+      "layer": "L3",
+      "content": "Prefers dark mode and vim keybindings.",
+      "memory_id": "mem-001",
+      "score": 0.92
+    }
+  ]
+}
+```
+
+</details>
 
 ---
 

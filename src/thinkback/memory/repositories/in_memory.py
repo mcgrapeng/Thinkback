@@ -30,7 +30,7 @@ from thinkback.domain.enums import (
 from thinkback.domain.errors import TaskStaleWriteError
 from thinkback.domain.keys import fingerprint, round_sort_key, scope_key, source_ref_key
 from thinkback.domain.summarization import summarize_rounds
-from thinkback.memory.repositories._l1_cache import L1CacheMixin
+from thinkback.memory.repositories._l1_cache import L1_CACHE_LIMIT, L1CacheMixin
 from thinkback.memory.schemas import AppendMemoryRequest
 
 
@@ -59,7 +59,25 @@ class InMemoryMemoryRepository(L1CacheMixin):
     def get_round(self, round_id: str) -> JournalEntry | None:
         return self.journal_by_round.get(round_id)
 
+    def get_l1(self, user_id: str, memory_scope_id: str, session_id: str) -> list[JournalEntry]:
+        """L1 读取：缓存优先，缺失时从 journal 派生（与 SQL 实现同语义）。
+
+        冷缓存（进程重启 / 其他写者）必须回源，否则召回会丢最近轮次。
+        """
+        cached = super().get_l1(user_id, memory_scope_id, session_id)
+        if cached:
+            return cached
+        rounds = self.list_rounds(user_id, memory_scope_id, session_id)
+        for entry in rounds[-L1_CACHE_LIMIT:]:
+            super().update_l1(entry, limit=L1_CACHE_LIMIT)
+        return super().get_l1(user_id, memory_scope_id, session_id)
+
     def save_round(self, request: AppendMemoryRequest) -> JournalEntry:
+        # 与 SQL 实现同语义：round_id 幂等、首写胜出（含 round_state），
+        # 重复 save 不覆盖已存回合（append 重试不得复活/改写墓碑与 pending 态）。
+        existing = self.journal_by_round.get(request.round_id)
+        if existing is not None:
+            return existing
         messages = [
             {
                 "message_id": message.message_id,

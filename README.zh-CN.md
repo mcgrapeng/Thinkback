@@ -35,6 +35,9 @@ Thinkback 让 AI 助手与智能体拥有跨会话的持久记忆。它把短期
 
 [报告问题](.github/ISSUE_TEMPLATE/bug_report.md) · [功能请求](.github/ISSUE_TEMPLATE/feature_request.md)
 
+> **立即体验治理台** — `git clone https://github.com/mcgrapeng/thinkback.git && make dev`
+> 同时启动 API + Web UI,访问 `localhost:7001` 即可看到完整界面(带 mock 数据)。
+
 **快速导航:**
 [为什么做这个](#-为什么做这个) ·
 [如何工作](#-如何工作) ·
@@ -426,6 +429,24 @@ curl -X POST https://your-thinkback/v1/memory/recall \
 
 ---
 
+## ✦ v1.0 亮点
+
+> **🎉 2026-10 — Thinkback v1.0 首个公开发布版**
+
+| 模块 | 亮点 |
+| --- | --- |
+| **记忆模型** | 三层(L1/L2/L3) + 双时态有效性(`valid_at` / `invalid_at`) |
+| **API** | HTTP + gRPC,26+ 端点,v1 公开集成协议 |
+| **治理台** | React 19 SPA:7 页面、⌘K 命令面板、键盘导航(j/k/x)、URL 深链 |
+| **治理** | Scoped 删除(memory/session/ALL)、幂等写入、审计留痕 |
+| **可观测** | K8s 原生、Prometheus metrics、Alembic 迁移、615+ 测试 |
+| **集成** | v1 公开 API:API key + Scope + Tenant + 限流 + 幂等 |
+| **mem0 提示词** | 实时编辑 `custom_instructions` / `update_memory_prompt` / `memory_answer_prompt` |
+
+详见 [CHANGELOG](CHANGELOG.md)。
+
+---
+
 ## ✦ API 参考
 
 ### 记忆核心(`/memory/*`)
@@ -467,6 +488,75 @@ curl -X POST https://your-thinkback/v1/memory/recall \
 gRPC 端点镜像同样操作,见 `proto/memory.proto`,供服务间调用。
 
 完整交互式 API 文档在 **`/docs`**(Swagger UI)和 **`/redoc`**。
+
+### 请求 / 响应速查
+
+<details>
+<summary><b>POST /memory/append</b> — 写入一轮对话</summary>
+
+**请求:**
+```json
+{
+  "request_id": "req-001",
+  "user_id": "alice",
+  "session_id": "support-001",
+  "round_id": "round-001",
+  "source_timestamp": "2026-01-15T10:00:00Z",
+  "messages": [
+    { "message_id": "m1", "role": "user",
+      "content": "我偏好深色模式和 vim 快捷键。",
+      "timestamp": "2026-01-15T10:00:00Z" },
+    { "message_id": "m2", "role": "assistant",
+      "content": "好的,已记住。",
+      "timestamp": "2026-01-15T10:00:02Z" }
+  ]
+}
+```
+
+**响应:**
+```json
+{
+  "status": "completed",
+  "task_id": "task-abc123",
+  "round_id": "round-001",
+  "l3_events": []
+}
+```
+
+</details>
+
+<details>
+<summary><b>POST /memory/recall</b> — 召回相关记忆</summary>
+
+**请求:**
+```json
+{
+  "user_id": "alice",
+  "session_id": "support-002",
+  "query": "这个用户有什么 UI 偏好?",
+  "intent": "chat",
+  "l3_limit": 5
+}
+```
+
+**响应:**
+```json
+{
+  "status": "ok",
+  "degraded": false,
+  "degradation_reasons": [],
+  "items": [
+    {
+      "layer": "L3",
+      "content": "用户偏好深色模式和 vim 快捷键。",
+      "memory_id": "mem-001",
+      "score": 0.92
+    }
+  ]
+}
+```
+
+</details>
 
 ---
 
