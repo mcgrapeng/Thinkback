@@ -98,7 +98,7 @@ flowchart LR
     A -->|append| L1
     L1 -->|trigger| L2
     L2 -->|extract| L3
-    L3 -.->|recall (degraded?)| A
+    L3 -.->|"recall (degraded?)"| A
 
     style L1 fill:#FFFFFF,stroke:#0F172A,stroke-width:2px
     style L2 fill:#FFFFFF,stroke:#0F172A,stroke-width:2px
