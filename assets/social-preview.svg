@@ -1,0 +1,162 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 640" role="img"
+     aria-label="Thinkback — Memory Layer for AI Conversations">
+  <title>Thinkback — Social Preview</title>
+  <defs>
+    <!-- Warm paper background -->
+    <linearGradient id="sp-bg" x1="0" y1="0" x2="1280" y2="640" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#FDFCF8"/>
+      <stop offset="50%" stop-color="#F8F6F0"/>
+      <stop offset="100%" stop-color="#EFE9DC"/>
+    </linearGradient>
+
+    <!-- Subtle grid pattern for editorial feel -->
+    <pattern id="sp-grid" x1="0" y1="0" width="80" height="80" patternUnits="userSpaceOnUse">
+      <path d="M 80 0 L 0 0 0 80" fill="none" stroke="#E8E2D4" stroke-width="0.5" opacity="0.5"/>
+    </pattern>
+
+    <!-- Right-side network wash -->
+    <radialGradient id="sp-wash" cx="980" cy="320" r="500" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#A78BFA" stop-opacity="0.12"/>
+      <stop offset="100%" stop-color="#A78BFA" stop-opacity="0"/>
+    </radialGradient>
+
+    <!-- Violet gradient -->
+    <linearGradient id="sp-violet" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#7C3AED"/>
+      <stop offset="100%" stop-color="#A78BFA"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Background -->
+  <rect width="1280" height="640" fill="url(#sp-bg)"/>
+  <rect width="1280" height="640" fill="url(#sp-grid)"/>
+  <rect width="1280" height="640" fill="url(#sp-wash)"/>
+
+  <!-- Top accent bar -->
+  <rect x="0" y="0" width="1280" height="4" fill="url(#sp-violet)"/>
+
+  <!-- Left side: Logo + Wordmark -->
+  <g transform="translate(80, 200)">
+    <!-- Logo mark, 3-node network -->
+    <g>
+      <circle cx="40" cy="40" r="16" fill="#0F172A"/>
+      <circle cx="120" cy="40" r="16" fill="#0F172A"/>
+      <circle cx="80" cy="120" r="20" fill="url(#sp-violet)"/>
+      <circle cx="80" cy="120" r="9.5" fill="none" stroke="#F8FAFC" stroke-width="3.5"/>
+      <circle cx="80" cy="120" r="4" fill="url(#sp-violet)"/>
+      <line x1="40" y1="40" x2="80" y2="120" stroke="#7C3AED" stroke-width="7" stroke-linecap="round" opacity="0.85"/>
+      <line x1="120" y1="40" x2="80" y2="120" stroke="#7C3AED" stroke-width="7" stroke-linecap="round" opacity="0.85"/>
+      <line x1="40" y1="40" x2="120" y2="40" stroke="#64748B" stroke-width="5" stroke-linecap="round" opacity="0.55"/>
+    </g>
+
+    <!-- Wordmark -->
+    <text x="200" y="70" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif"
+          font-size="80" font-weight="700" fill="#0F172A" letter-spacing="-2">
+      Thinkback
+    </text>
+    <text x="204" y="106" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif"
+          font-size="16" font-weight="500" fill="#64748B" letter-spacing="3.5">
+      MEMORY LAYER FOR AI
+    </text>
+  </g>
+
+  <!-- Tagline -->
+  <g transform="translate(80, 410)">
+    <text x="0" y="0" font-family="system-ui, -apple-system, sans-serif"
+          font-size="32" font-weight="500" fill="#1E293B">
+      Self-hosted memory service for AI conversations
+    </text>
+    <text x="0" y="40" font-family="system-ui, -apple-system, sans-serif"
+          font-size="18" font-weight="400" fill="#64748B">
+      Three explicit layers · Idempotent writes · Mem0 + Milvus + PostgreSQL
+    </text>
+  </g>
+
+  <!-- Right side: Decorative network echo -->
+  <g transform="translate(880, 240)" opacity="0.85">
+    <!-- Background wash -->
+    <circle cx="100" cy="0" r="200" fill="url(#sp-wash)"/>
+
+    <!-- Echo network, scaled bigger than banner -->
+    <g transform="translate(20, -50) scale(1.3)">
+      <circle cx="36" cy="36" r="14" fill="#0F172A"/>
+      <circle cx="164" cy="36" r="14" fill="#0F172A"/>
+      <circle cx="100" cy="180" r="18" fill="url(#sp-violet)"/>
+      <circle cx="100" cy="180" r="8.5" fill="none" stroke="#F8FAFC" stroke-width="3"/>
+      <circle cx="100" cy="180" r="3.5" fill="url(#sp-violet)"/>
+      <line x1="36" y1="36" x2="100" y2="180" stroke="#7C3AED" stroke-width="6"
+            stroke-linecap="round" opacity="0.6"/>
+      <line x1="164" y1="36" x2="100" y2="180" stroke="#7C3AED" stroke-width="6"
+            stroke-linecap="round" opacity="0.6"/>
+      <line x1="36" y1="36" x2="164" y2="36" stroke="#64748B" stroke-width="4.5"
+            stroke-linecap="round" opacity="0.35"/>
+
+      <!-- L1 / L2 / L3 labels -->
+      <text x="36" y="20" font-family="system-ui, -apple-system, sans-serif"
+            font-size="10" font-weight="600" fill="#475569" letter-spacing="1.5"
+            text-anchor="middle">L1</text>
+      <text x="164" y="20" font-family="system-ui, -apple-system, sans-serif"
+            font-size="10" font-weight="600" fill="#475569" letter-spacing="1.5"
+            text-anchor="middle">L2</text>
+      <text x="100" y="220" font-family="system-ui, -apple-system, sans-serif"
+            font-size="10" font-weight="600" fill="#7C3AED" letter-spacing="1.5"
+            text-anchor="middle">L3 · LONG-TERM</text>
+    </g>
+  </g>
+
+  <!-- Bottom meta badges row -->
+  <g transform="translate(80, 540)">
+    <!-- Apache -->
+    <g>
+      <rect x="0" y="0" width="120" height="30" rx="4" fill="#0F172A"/>
+      <text x="60" y="20" font-family="system-ui, -apple-system, sans-serif"
+            font-size="11" font-weight="600" fill="#FFFFFF" letter-spacing="0.5"
+            text-anchor="middle">
+        Apache 2.0
+      </text>
+    </g>
+    <!-- Production -->
+    <g transform="translate(132, 0)">
+      <rect x="0" y="0" width="140" height="30" rx="4" fill="none" stroke="#CBD5E1" stroke-width="1.2"/>
+      <text x="70" y="20" font-family="system-ui, -apple-system, sans-serif"
+            font-size="11" font-weight="500" fill="#1E293B" letter-spacing="0.5"
+            text-anchor="middle">
+        Production-ready
+      </text>
+    </g>
+    <!-- Mem0 -->
+    <g transform="translate(284, 0)">
+      <rect x="0" y="0" width="100" height="30" rx="4" fill="none" stroke="#CBD5E1" stroke-width="1.2"/>
+      <text x="50" y="20" font-family="system-ui, -apple-system, sans-serif"
+            font-size="11" font-weight="500" fill="#1E293B" letter-spacing="0.5"
+            text-anchor="middle">
+        Mem0 + Milvus
+      </text>
+    </g>
+    <!-- HTTP + gRPC -->
+    <g transform="translate(396, 0)">
+      <rect x="0" y="0" width="120" height="30" rx="4" fill="none" stroke="#CBD5E1" stroke-width="1.2"/>
+      <text x="60" y="20" font-family="system-ui, -apple-system, sans-serif"
+            font-size="11" font-weight="500" fill="#1E293B" letter-spacing="0.5"
+            text-anchor="middle">
+        HTTP + gRPC
+      </text>
+    </g>
+    <!-- Star -->
+    <g transform="translate(528, 0)">
+      <rect x="0" y="0" width="120" height="30" rx="4" fill="url(#sp-violet)"/>
+      <text x="60" y="20" font-family="system-ui, -apple-system, sans-serif"
+            font-size="11" font-weight="600" fill="#FFFFFF" letter-spacing="0.5"
+            text-anchor="middle">
+        ⭐ Star us
+      </text>
+    </g>
+  </g>
+
+  <!-- Bottom right: version + status -->
+  <text x="1200" y="560" font-family="system-ui, -apple-system, sans-serif"
+        font-size="13" font-weight="500" fill="#94A3B8" letter-spacing="1.5"
+        text-anchor="end">
+    v1.0 · STABLE
+  </text>
+</svg>

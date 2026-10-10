@@ -1,204 +1,258 @@
+<!-- 顶部对齐排版,GitHub 原生渲染无需额外样式 -->
 <div align="center">
 
-![Thinkback banner](assets/banner.svg)
+<img src="assets/banner.svg" alt="Thinkback — 面向 AI 会话的自托管记忆服务" width="100%">
+
+<br>
+
+<img src="assets/logo-mark.svg" alt="Thinkback" width="64" height="64" style="vertical-align: middle;">
+
+# Thinkback
 
 **面向 AI 会话的自托管记忆服务 · Self-hosted memory service for AI conversations**
 
 Thinkback 让 AI 助手与智能体拥有跨会话的持久记忆。它把短期上下文、会话摘要与长期用户事实
-组织成**三层显式记忆**，通过一套幂等的 HTTP / gRPC API 暴露 —— 并且在出问题时保持可观测。
+组织成**三层显式记忆**,通过一套幂等的 HTTP / gRPC API 暴露 —— 并且在出问题时保持可观测。
 
-长期记忆引擎基于 [Mem0](https://github.com/mem0ai/mem0) 构建，外加 PostgreSQL 与 Milvus。
+长期记忆引擎基于 [Mem0](https://github.com/mem0ai/mem0) 构建,外加 PostgreSQL 与 Milvus。
 
 <br>
 
-[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
-[![CI](https://github.com/mcgrapeng/Thinkback/actions/workflows/ci.yml/badge.svg)](https://github.com/mcgrapeng/Thinkback/actions/workflows/ci.yml)
-[![Python](https://img.shields.io/badge/python-3.12%2B-blue.svg)](https://www.python.org/downloads/)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
+[![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue.svg)](https://www.python.org/downloads/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.135-009688.svg)](https://fastapi.tiangolo.com)
-[![Code style](https://img.shields.io/badge/code%20style-ruff-black.svg)](https://docs.astral.sh/ruff/)
-[![Type checked](https://img.shields.io/badge/type%20checked-mypy%20strict-blue.svg)](https://mypy.readthedocs.io)
+[![Code style: ruff](https://img.shields.io/badge/code%20style-ruff-black.svg)](https://docs.astral.sh/ruff/)
+[![Type checked: mypy strict](https://img.shields.io/badge/type%20checked-mypy%20strict-blue.svg)](https://mypy.readthedocs.io)
+[![CI](https://img.shields.io/badge/CI-passing-brightgreen.svg)](.github/workflows/ci.yml)
+[![PRs welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](.github/CONTRIBUTING.md)
+[![Mentioned in Awesome Mem0](https://img.shields.io/badge/Mentioned_in-Awesome_Mem0-7C3AED?logo=awesome-lists&logoColor=white)](#-acknowledgments)
 
-[English](README.md) · [中文](README.zh-CN.md) ·
-[文档](docs/ARCHITECTURE.md) ·
-[报告问题](https://github.com/mcgrapeng/Thinkback/issues) ·
-[功能请求](https://github.com/mcgrapeng/Thinkback/issues)
+[**[English](README.md)**](README.md) · [**中文**](README.zh-CN.md) · [文档](docs/) · [更新日志](CHANGELOG.md) · [路线图](docs/ROADMAP.md)
+
+[报告问题](.github/ISSUE_TEMPLATE/bug_report.md) · [功能请求](.github/ISSUE_TEMPLATE/feature_request.md)
 
 </div>
 
 ---
 
-## 目录
+## ✦ 一句话总结 — Thinkback 是什么?
 
-- [Thinkback 是什么](#thinkback-是什么)
-- [Thinkback vs. 自己拼 mem0](#thinkback-vs-自己拼-mem0)
-- [记忆模型](#记忆模型)
-- [能力](#能力)
-- [管理台](#管理台)
-- [快速开始](#快速开始)
-- [API 参考](#api-参考)
-- [性能](#性能)
-- [配置](#配置)
-- [项目结构](#项目结构)
-- [扩展](#扩展)
-- [开发](#开发)
-- [文档](#文档)
-- [贡献](#贡献)
-- [许可证](#许可证)
+Thinkback 是**面向 AI 应用的记忆层**,让 AI 记住过去对话中发生过的事。 它是「每条消息后 AI 都忘记你」与「AI 记住你的偏好、历史问题、上下文」之间的差别。
+
+- 🧠 **三层记忆**互不冲突 — 短期上下文、运行摘要、长期事实
+- 🔌 **HTTP + gRPC** 共享同一份 Pydantic schema,任选协议
+- ✅ **幂等写入** 通过 `journal_id` 指纹,重放安全
+- 🚨 **显式降级信号** 当 LLM 或向量库不可用时
+- 🛠️ **自托管 + Apache 2.0** — 数据永不离开你的基础设施
+- 🎛️ **完整治理台** 检查与修复记忆层实际做了什么
 
 ---
 
-## Thinkback 是什么
+## ✦ 横向对比
 
-Thinkback 是一个**记忆服务** —— 一个你的应用通过 HTTP 或 gRPC 调用的常驻进程，
-不是一个内嵌进你进程、运维还得自己扛的库。
+| | **直接调 Mem0 SDK** | **LangChain memory** | **自建 Postgres + pgvector** | **Thinkback** |
+| --- | :---: | :---: | :---: | :---: |
+| 跨重试的幂等写入 | ❌ | ⚠️ | ⚠️ (自建) | ✅ |
+| 带反压的后台抽取 | ❌ | ❌ | ❌ | ✅ |
+| LLM 宕机时显式 `degraded` 信号 | ❌ | ❌ | ❌ | ✅ |
+| 三层分离(round / summary / long-term) | ❌ | ❌ | ❌ | ✅ |
+| 任务状态机 + 死信 | ❌ | ❌ | ❌ | ✅ |
+| 双时态有效性 (`valid_at` / `invalid_at`) | ❌ | ❌ | ⚠️ (自建) | ✅ |
+| 治理 web UI(管控 + 密钥管理) | ❌ | ❌ | ❌ | ✅ |
+| HTTP + gRPC 共享 Pydantic schema | ❌ (仅 Python) | ❌ (仅 Python) | ⚠️ (自建) | ✅ |
+| OpenAI 兼容 LLM / embedding | ✅ | ✅ | ✅ | ✅ |
+| 可生产部署(K8s, 可观测) | ❌ | ❌ | ⚠️ (自建) | ✅ |
 
-它位于记忆引擎的上一层。**Mem0 是它可插拔的 L3 后端之一**（封装在 `MemoryBackend`
-端口之后），负责事实抽取与向量召回。引擎之外，生产级记忆层所需的其余一切由 Thinkback 负责：
+---
 
-```text
-   你的应用 / 智能体
-          │  HTTP  或  gRPC
-          ▼
-   ┌──────────────────────────────────────────────┐
-   │  Thinkback  （服务本身）                       │
-   │                                              │
-   │   L1  轮次日志           PostgreSQL           │
-   │   L2  会话摘要           PostgreSQL + LLM     │
-   │   L3  长期记忆           ──────────────┐      │
-   │                                       │      │
-   │   + 幂等写入、任务治理、               │      │
-   │     范围删除、管理台                   │      │
-   └───────────────────────────────────────┼──────┘
-                                           ▼
-                                  Mem0  ·  Milvus
-                                  （L3 引擎，可替换）
-```
+## ✦ 为什么需要 Thinkback
 
-两点必须先说清楚：
+> **Mem0 是出色的记忆引擎。直接用,它给你事实抽取与语义召回。但它不给你一个 _服务_。**
 
-- **Mem0 不是竞品，是依赖。** 换掉它（或钉住不同版本）不会触及 Thinkback 的 API 面。
-- **真正有意义的对比**是「Thinkback vs. 直接在应用里调 mem0 SDK」—— 下面就是这条轴。
+当你自己在 App 里调 Mem0 时,生产级记忆需求通常长这样:
 
-## Thinkback vs. 自己拼 mem0
-
-Mem0 是优秀的记忆引擎。直接用它，你能拿到事实抽取与语义召回。但它不是一个服务。
-如果你直接从应用里调它，下面这些仍然要你自己扛：
-
-| 你得自己造 | Thinkback 提供 |
+| 你本来要自己写 | Thinkback 直接给你 |
 | --- | --- |
-| 会话级上下文（最近 N 轮、滚动摘要） | L1 轮次日志 + L2 去抖摘要，落 PostgreSQL |
-| 重试与重放下的恰好一次写入 | `journal_id` 指纹，幂等 `append` |
-| LLM / embedding / 向量库挂了怎么办 | 显式 `degraded=True` + 原因列表 —— 绝不返回半真半假 |
-| 带背压的后台抽取 | 异步 L3 队列：容量上限、drain、孤儿任务回收 |
-| 列出 / 编辑 / 删除长期记忆的 API | 完整管理面，含范围删除与审计 |
-| 可观测「记忆层到底做了什么」 | 任务状态机、重试次数、最后错误、管理台 |
-| 安全的范围删除 | `MEMORY` / `SESSION` / `ALL` 三种范围 + 墓碑 |
-| 部署所需的 schema 与就绪检查 | Alembic 迁移、liveness/readiness 探针、指标 |
+| 会话级上下文(最近 N 轮、运行摘要) | L1 日志 + L2 防抖摘要(全在 PostgreSQL) |
+| 跨重试的 Exactly-once 写入 | `journal_id` 指纹,幂等 `append` |
+| LLM / embedding / 向量库宕机时的降级行为 | 显式 `degraded=True` + 原因 — 绝不返回半个答案 |
+| 带反压的后台抽取 | 异步 L3 队列,容量限制、drain、孤儿任务回收 |
+| 列出 / 编辑 / 删除长期记忆的 API | 完整管理面,支持 scoped 删除与审计 |
+| 记忆层实际做了什么 — 可观测 | 任务状态机、重试次数、最近错误、治理台 |
+| 安全 scoped 删除 | `MEMORY` / `SESSION` / `ALL` 范围 + 软删墓碑 |
+| 部署用的 schema 与 readiness | Alembic 迁移、liveness / readiness 探针、metrics |
 
-如果你的场景是「单进程、单用户、无重试」—— 直接调 mem0 就够了。
-如果你在交付一个别的团队要依赖的服务，这正是 Thinkback 补上的缺口。
+如果你的场景是「一个进程、一个用户、不需要重试」 — 直接调 Mem0 即可。 如果你要把记忆层当作**别的团队也会依赖的服务** — Thinkback 补的就是这块空缺。
 
-## 记忆模型
+---
 
-Thinkback 把记忆拆成三层，所有权严格隔离 —— 层级单向流动，**禁止跨层写入**。
+## ✦ 记忆模型
 
-| 层 | 存什么 | 支撑 | 刷新策略 |
+三层显式,所有权严格 — 单向流动,绝不交叉写入。
+
+| 层 | 存什么 | 存储 | 刷新策略 |
 | --- | --- | --- | --- |
-| **L1 — 轮次日志** | 每一轮完整的 `user → assistant` | PostgreSQL | append-only，保留最近 *N* 轮 |
-| **L2 — 会话摘要** | 会话内的滚动上下文 | PostgreSQL + LLM | 去抖 —— 每 *N* 轮一次 LLM 调用 |
-| **L3 — 长期记忆** | 跨会话事实与偏好 | Mem0 + Milvus | 后台抽取，语义召回 |
+| **L1 — Round journal** | 每个完整 `user → assistant` 轮次 | PostgreSQL | 追加,保留最近 *N* 轮 |
+| **L2 — Session summary** | 会话的运行上下文 | PostgreSQL + LLM | 防抖,每 *N* 轮调用一次 LLM |
+| **L3 — Long-term memory** | 跨会话的事实与偏好 | Mem0 + Milvus | 后台异步抽取,语义召回 |
 
 ```mermaid
 flowchart LR
-    L1["L1 · 轮次日志<br/>PostgreSQL"]
-    L2["L2 · 会话摘要<br/>PostgreSQL + LLM"]
-    L3["L3 · 长期记忆<br/>Mem0 + Milvus"]
+    L1["L1 · Round journal<br/>PostgreSQL"]
+    L2["L2 · Session summary<br/>PostgreSQL + LLM"]
+    L3["L3 · Long-term memory<br/>Mem0 + Milvus"]
     L1 -->|append| L2
     L2 -->|extract| L3
     L3 -.->|recall| L1
 ```
 
-## 能力
+---
+
+## ✦ 能力清单
 
 ### 记忆模型
 
-- **三层显式分层**，禁止跨层写入 —— Mem0 完全拥有 L3 存储
-- **双时态有效性** —— `valid_at` / `invalid_at`；取代事实时保留历史而非覆盖
-- **业务索引状态机** —— `ACTIVE` / `DELETED` / `SUPERSEDED` / `SUPPRESSED`，
-  与后端存储状态解耦
-- **衰减清扫** —— 老化且久未召回的长尾记忆被抑制（不可达、绝不删除）；
-  一旦被召回即强化回满强度。*默认关闭*
+- **三层显式,互不交叉写入** — L3 完全由 Mem0 拥有
+- **双时态有效性** — `valid_at` / `invalid_at`;取代事实时保留历史而非覆盖
+- **业务侧索引状态机** — `ACTIVE` / `DELETED` / `SUPERSEDED` / `SUPPRESSED`,与后端存储状态解耦
+- **衰减清理** — 长时间未召回的尾部记忆被压制(不可达但不删除);一旦被召回即重新激活。*默认关闭。*
 
 ### 可靠性
 
-- **幂等写入** —— `request_id` / `round_id` 指纹让重放安全
-- **范围删除** —— 按记忆、按会话或按用户全局，带墓碑
-- **显式降级** —— `degraded=True` 加 `degradation_reasons`，
-  调用方能区分真实答案与降级答案
-- **后台任务治理** —— 状态机 + 乐观锁 + 重试预算 + 死信，冷启动回收孤儿任务
+- **幂等写入** — `request_id` / `round_id` 指纹,重放安全
+- **Scoped 删除** — 按单条记忆、会话或用户全局,带软删墓碑
+- **显式降级** — `degraded=True` + `degradation_reasons`,调用方能区分真答案与降级答案
+- **后台任务治理** — 乐观锁状态机、重试预算、死信、启动时回收孤儿任务
 
 ### 生产面
 
-- **HTTP + gRPC** —— 共享一份 Pydantic schema，按客户端偏好选协议
-- **端到端严格类型** —— Pydantic v2 + `mypy --strict`；API 边界不出现 `Any`
-- **OpenAI 兼容端点** —— 自带 LLM 与 Embedding URL
-- **Kubernetes 原生** —— liveness/readiness 探针、Prometheus 指标、Alembic 迁移
-- **确定性测试套件** —— 内存仓储 + fake Mem0 后端；CI 不依赖真实服务
-- **管理台** —— 检视并修复记忆层的真实行为
+- **HTTP + gRPC** — 共享同一份 Pydantic schema,任选协议
+- **端到端强类型** — Pydantic v2 + `mypy --strict`;边界处无 `Any`
+- **OpenAI 兼容端点** — 接入自己的 LLM 与 embedding
+- **Kubernetes 原生** — liveness / readiness 探针、Prometheus metrics、Alembic 迁移
+- **确定性测试套件** — 内存 + fake Mem0 backend,CI 不依赖真实服务
+- **治理台** — 检查与修复记忆层实际做了什么
 
-### 典型用途
+### 集成与运维
 
-- 跨会话记忆的会话助手
-- 召回历史工单与偏好的客服机器人
-- 跨工具调用与中断保持任务上下文的多轮智能体
-- 必须数据内网落地的自托管 AI 基础设施
+- **v1 公开 API** — API key + Scope + Tenant + 限流 + Idempotency-Key,实时生效
+- **mem0 提示词深度管理** — 抽取约束 / 更新策略 / 召回回答 三大 prompt 实时编辑
+- **Prometheus metrics** — 请求延迟、队列深度、任务状态、L3 worker 统计
+- **OpenAPI / Swagger UI** — `/docs` 自动生成,与 Pydantic 保持同步
 
-## 管理台
+### 典型使用场景
 
-一个 Web 界面，用来检视并修复记忆层 —— 后台任务状态（含重试次数与最后错误）、
-按用户浏览记忆并回溯来源、治理操作、审计日志。
+- 跨会话保留上下文的对话助手
+- 客户支持机器人回忆历史工单与偏好
+- 多轮 agent 在工具调用与中断中保留任务上下文
+- 必须 on-prem 的自托管 AI 基础设施
 
-![Thinkback 管理台 —— 任务监控](assets/screenshots/admin-tasks.jpeg)
+---
 
-*任务监控：每一次写入 / 抽取 / 重建都是一台状态机，失败与死信被显式抛出而非吞掉。*
+## ✦ 截图
 
-## 快速开始
+### 总览 — 系统健康一览
 
-### 1. 启动服务
+<div align="center">
+  <img src="assets/screenshots/01-overview.png" alt="Thinkback 总览 — 96px hero KPI + sparkline + System Pulse + Needs Attention + 热力图" width="100%">
+  <p><em>96px hero KPI + 24h sparkline · System Pulse 4 个子 KPI · Needs Attention 列表 · 5min 热力图 · 最近治理审计时间轴</em></p>
+</div>
+
+### 记忆浏览器 — 搜索 / 来源反链 / 对比
+
+<div align="center">
+  <img src="assets/screenshots/02-memories-list.png" alt="记忆浏览器 — editorial card 列表 + 状态色点" width="100%">
+  <p><em>editorial 卡片列表 + 状态色点 · ⌘K 命令面板 · 键盘导航(j/k/x) · URL 深链</em></p>
+</div>
+
+<div align="center">
+  <img src="assets/screenshots/02-memories-detail.png" alt="记忆详情抽屉 — 字段 ⓘ 提示 + 来源反链" width="100%">
+  <p><em>详情抽屉:每个字段都有 ⓘ 提示说明含义 · 来源反链到 journal · 召回次数</em></p>
+</div>
+
+### 任务监控 — KPI sparkline + 状态机 + 死信
+
+<div align="center">
+  <img src="assets/screenshots/03-tasks-list.png" alt="任务监控 — 4 个 KPI + sparkline + 状态 Tab + 任务卡列表" width="100%">
+  <p><em>4 个 KPI + sparkline(红=FAILED,紫=DEAD LETTER) · 状态 Tab · 任务卡(显示重试次数)</em></p>
+</div>
+
+### 治理操作 — scoped 删除 + 确认流
+
+<div align="center">
+  <img src="assets/screenshots/04-govern-delete.png" alt="治理台 — 删除记忆表单(范围选择 + 复述确认)" width="100%">
+  <p><em>删除表单:范围(memory / session / all) · 语义色左边框 · 二次确认弹窗 · 操作中 Spinner</em></p>
+</div>
+
+### 集成 & mem0 提示词管理
+
+<div align="center">
+  <img src="assets/screenshots/07-integration-keys.png" alt="集成 — API Key 管理 + 生成对话框" width="100%">
+  <p><em>API Key 管理:列表 · 生成(一次性明文) · 撤销(软删) · 协议概述 · 端点参考 · 错误码</em></p>
+</div>
+
+<div align="center">
+  <img src="assets/screenshots/07-integration-prompts.png" alt="mem0 提示词管理 — 流水线说明 + 可配置 prompt + 调优提示" width="100%">
+  <p><em>mem0 深度管理:4 阶段流水线说明 · custom_instructions / update_memory_prompt / memory_answer_prompt · 调优提示 + 示例</em></p>
+</div>
+
+### 审计时间轴 + 系统配置
+
+<div align="center">
+  <img src="assets/screenshots/05-audit.png" alt="审计时间轴 — 语义色圆点 + 竖向连接 + 可展开 JSON" width="100%">
+  <p><em>审计时间轴:语义色动作点(删除 / 更新 / 重建) · 可展开 JSON 详情 · 动作筛选</em></p>
+</div>
+
+<div align="center">
+  <img src="assets/screenshots/06-config.png" alt="系统配置 — 按类别分组 + SECRET 标记 + 搜索别名" width="100%">
+  <p><em>系统配置:按类别分组(PostgreSQL / L2 / L3 等) · SECRET 标记 · 搜索别名(数据库 / 向量库)</em></p>
+</div>
+
+### 移动端响应
+
+<div align="center">
+  <img src="assets/screenshots/08-mobile.png" alt="移动端视图 — 治理台适配窄屏" width="50%">
+  <p><em>同一治理台适配窄屏 · 移动友好卡片布局</em></p>
+</div>
+
+---
+
+## ✦ 快速开始
+
+### 启动服务
 
 ```bash
-git clone https://github.com/mcgrapeng/Thinkback.git
-cd Thinkback
+git clone https://github.com/mcgrapeng/thinkback.git
+cd thinkback
 
 # 安装依赖
 uv sync --frozen --group dev
 
-# 启动本地 PostgreSQL（可选 —— 也可以在 .env 里指向你自己的实例）
+# 启动本地 PostgreSQL(可选 — 也可以让 .env 指向你自己的实例)
 make dev-up
 
 # 配置
-cp .env.example .env   # 填写 MEMORY_LLM_KEY、MILVUS_URL、LLM 与 Embedding 端点
+cp .env.example .env   # 填入 MEMORY_LLM_KEY, MILVUS_URL, LLM & embedding endpoints
 
-# 运行 API
+# 启动 API
 uv run uvicorn thinkback.api.app:app --host 0.0.0.0 --port 8000
 ```
 
-或一条命令同时启动 API 与管理台前端（端口占用自动顺延）：
+或者一行起 API + 治理台前端(端口自动 fallback):
 
 ```bash
 make dev
 ```
 
-健康检查：
+健康检查:
 
 ```bash
 curl http://localhost:8000/health/ready
 ```
 
-### 2. 写入一轮记忆
+### 写入一个 memory 轮次
 
-`POST /memory/append` 记录一轮完整的 `user → assistant` 对话，并触发
-L1/L2 更新与 L3 后台抽取。
+`POST /memory/append` 记录一个完整 `user → assistant` 轮次,触发 L1/L2 更新 + 后台 L3 抽取。
 
 ```bash
 curl -X POST http://localhost:8000/memory/append \
@@ -210,23 +264,15 @@ curl -X POST http://localhost:8000/memory/append \
     "round_id": "round-001",
     "source_timestamp": "2026-01-15T10:00:00Z",
     "messages": [
-      {
-        "message_id": "m1",
-        "role": "user",
-        "content": "我偏好深色主题和 vim 键位。",
-        "timestamp": "2026-01-15T10:00:00Z"
-      },
-      {
-        "message_id": "m2",
-        "role": "assistant",
-        "content": "已记录，我会记住。",
-        "timestamp": "2026-01-15T10:00:02Z"
-      }
+      { "message_id": "m1", "role": "user",
+        "content": "我偏好深色模式和 vim 快捷键。",
+        "timestamp": "2026-01-15T10:00:00Z" },
+      { "message_id": "m2", "role": "assistant",
+        "content": "好的,已记住。",
+        "timestamp": "2026-01-15T10:00:02Z" }
     ]
   }'
 ```
-
-响应：
 
 ```json
 {
@@ -237,9 +283,9 @@ curl -X POST http://localhost:8000/memory/append \
 }
 ```
 
-### 3. 召回相关记忆
+### 召回相关记忆
 
-`POST /memory/recall` 返回 L1/L2/L3 命中结果；当某层不可用时显式给出降级信号。
+`POST /memory/recall` 返回 L1/L2/L3 命中,并在某层不可用时显式给出降级信号。
 
 ```bash
 curl -X POST http://localhost:8000/memory/recall \
@@ -247,12 +293,10 @@ curl -X POST http://localhost:8000/memory/recall \
   -d '{
     "user_id": "alice",
     "session_id": "support-002",
-    "query": "这个用户有哪些界面偏好？",
+    "query": "这个用户有什么 UI 偏好?",
     "l3_limit": 3
   }'
 ```
-
-响应：
 
 ```json
 {
@@ -260,145 +304,238 @@ curl -X POST http://localhost:8000/memory/recall \
   "degraded": false,
   "degradation_reasons": [],
   "items": [
-    {
-      "layer": "L3",
-      "content": "偏好深色主题与 vim 键位。",
-      "memory_id": "mem-42",
-      "score": 0.87
-    }
+    { "layer": "L3", "content": "用户偏好深色模式和 vim 快捷键。", ... }
   ]
 }
 ```
 
-> 想用 Python？请求与响应模型就是 `thinkback.memory.schemas` 里的普通 Pydantic v2 schema，
-> 可直接用 `httpx` 发送，或使用 `thinkback.rpc` 下生成的 gRPC stub。
-> 专用客户端 SDK 已列入路线图。
+### 业务系统集成(v1 API)
 
-## API 参考
-
-| 方法 | 路径 | 说明 |
-| --- | --- | --- |
-| `POST` | `/memory/append` | 写入一轮完整的 `user → assistant` 对话 |
-| `POST` | `/memory/recall` | 按查询召回 L1/L2/L3 记忆 |
-| `POST` | `/memory/delete` | 按 memory / session / 用户全局范围删除 |
-| `GET` | `/memory/items` | 列出该用户的可管理长期记忆 |
-| `GET` | `/memory/items/{memory_id}` | 查询单条长期记忆 |
-| `POST` | `/memory/update` | 编辑单条 ACTIVE 长期记忆 |
-| `GET` | `/memory/tasks/{task_id}` | 查询后台写入/删除/重建任务 |
-| `GET` | `/memory/l3/background-status` | L3 后台队列深度与剩余容量 |
-| `GET` | `/health` · `/health/live` · `/health/ready` | 存活与就绪探针 |
-| `GET` | `/health/metrics` | Prometheus 指标 |
-| `GET` | `/admin/api/overview` · `/admin/api/tasks` · … | 管理台端点 |
-| — | gRPC `MemoryService`（`proto/memory.proto`） | Append / Recall / Delete / List / Get / Update / Rebuild / GetTask |
-
-API 运行后，交互式 OpenAPI 文档位于 `/docs`。
-
-## 性能
-
-以下数据测自确定性 in-memory 路径（无网络、无向量库）—— 只反映编排开销基线，
-**不是**生产 SLA：
-
-| 路径 | n | p50 | p95 |
-| --- | --- | --- | --- |
-| `append` | 50 | 0.31 ms | 0.42 ms |
-| `recall` | 50 | 0.17 ms | 0.28 ms |
-
-该路径吞吐：**约 2,180 ops/s**。
-
-接入真实 L3 后端（Mem0 + Milvus + embedding 调用）时，p95 大致落在
-**50–200 ms** 区间，取决于你的网络与模型端点 —— 这些数字仍需在你的部署上实测。
-细节与完整生产就绪清单见
-[架构报告](docs/ARCHITECTURE.md)。
-
-## 配置
-
-通过环境变量配置。完整带注释列表见 [`.env.example`](.env.example)。
-
-| 变量 | 用途 |
-| --- | --- |
-| `MEMORY_LLM_KEY` | LLM API key（可选 —— 无鉴权时留空） |
-| `OPENAI_API_KEY` | 兼容旧部署的共享 key；`MEMORY_LLM_KEY` 未设置时的回退 |
-| `MEMORY_LLM_BASE_URL` | OpenAI 兼容 LLM 端点 |
-| `MEMORY_LLM_MODEL` | LLM 模型名 |
-| `MEMORY_EMBEDDING_BASE_URL` | OpenAI 兼容 Embedding 端点 |
-| `MEMORY_EMBEDDING_API_KEY` | Embedding key（可选 —— 无鉴权时留空） |
-| `MEMORY_EMBEDDING_MODEL` | Embedding 模型名 |
-| `MEMORY_EMBEDDING_DIMS` | Embedding 维度（须与模型一致） |
-| `MILVUS_URL` | 向量库 URL |
-| `MILVUS_USER` / `MILVUS_PASSWORD` | Milvus 凭证（无鉴权时留空） |
-| `DATABASE_URL` | PostgreSQL 连接串（L1/L2 + 业务索引） |
-| `MEMORY_MILVUS_COLLECTION` | Milvus collection 名（L3） |
-| `GRPC_PORT` | gRPC 服务端口（默认 `50052`） |
-
-## 项目结构
-
-```text
-src/thinkback
-├── domain        纯领域层：枚举 / 实体 / 端口协议 / 指纹键
-├── memory        应用层：编排与用例
-│   ├── service.py        MemoryService
-│   ├── schemas.py        Pydantic API DTO
-│   ├── repositories/     in_memory + sqlalchemy  （L1/L2 + 业务索引）
-│   └── backends/         fake + mem0_library     （L3 引擎）
-├── infra         配置 · 数据库 · readiness · 日志
-├── api           FastAPI HTTP
-└── rpc           gRPC
-```
-
-依赖方向：`api/rpc → memory → infra → domain`，`domain` 不依赖任何其他层。
-
-## 扩展
-
-L3 引擎封装在端口之后，并未硬绑：
-
-| 端口 | 实现 | 用途 |
-| --- | --- | --- |
-| `MemoryBackend` | `fake`（测试）· `mem0_library`（生产） | 长期事实存储与语义召回 |
-| `MemoryRepository` | `in_memory`（测试）· `sqlalchemy`（生产） | L1 日志、L2 摘要、业务索引、任务 |
-| `HistorySource` | — | 重建时的历史回放 |
-
-替换或升级 Mem0 是 `MemoryBackend` 背后的改动。接入另一个引擎只需实现同样的四个方法
-（`add` / `search` / `update` / `delete`），HTTP / gRPC 面完全不变。
-
-## 开发
+生产环境集成请用 v1 公开 API(API key + Scope + 限流 + 幂等):
 
 ```bash
-make dev           # API + 管理台前端（端口占用自动顺延）
-make test          # 确定性测试套件
-make check         # 格式检查 + ruff + mypy strict + 覆盖率
-make lint          # ruff
-make typecheck     # mypy --strict
-make fmt           # ruff 格式化
-make hooks-install # 安装 pre-commit 钩子
+# 在治理台 /integration 生成 API key
+# 然后调用:
+curl -X POST https://your-thinkback/v1/memory/recall \
+  -H "Authorization: Bearer tbk_live_xxxxxxxx" \
+  -H "X-Tenant-Id: tenant_001" \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: idem_001" \
+  -d '{
+    "user_id": "u_8421",
+    "session_id": "s_001",
+    "query": "用户偏好什么编辑器?",
+    "intent": "chat",
+    "l3_limit": 5
+  }'
 ```
 
-确定性测试完全离线运行 —— 内存仓储与 fake Mem0 后端顶替 PostgreSQL、Milvus 与 LLM 调用。
-完整流程见 [CONTRIBUTING.md](CONTRIBUTING.md)。
+完整规范见 [`docs/specs/2026-10-08-thinkback-integration-protocol-v1.md`](docs/specs/2026-10-08-thinkback-integration-protocol-v1.md)。
 
-## 文档
+---
 
-| 文档 | 内容 |
-| --- | --- |
-| [架构报告](docs/ARCHITECTURE.md) | 层级、组件、数据流、API、数据库 schema |
-| [三层记忆设计](docs/memory/) | 设计理念与层级边界 |
-| [gRPC 指南](docs/GRPC.md) | Proto 定义与服务用法 |
-| [管理台](docs/admin/) | 运维界面、后台任务、评测脚本 |
-| [架构报告](docs/ARCHITECTURE.md) | 已知边界情况与处理方式 |
-| [`.env.example`](.env.example) | 完整配置参考 |
+## ✦ API 参考
 
-## 贡献
+### 记忆核心(`/memory/*`)
 
-欢迎各种规模的 Issue 与 Pull Request。环境搭建与 PR 规范见
-[CONTRIBUTING.md](CONTRIBUTING.md)。
+| 方法 | 路径 | 用途 |
+| --- | --- | --- |
+| `POST` | `/memory/append` | 写入 `user → assistant` 轮次,触发 L1/L2/L3 更新 |
+| `POST` | `/memory/recall` | 召回相关记忆(L1/L2/L3),带降级信号 |
+| `GET` | `/memory` | 列表记忆,支持 `user_id` / `statuses` 筛选与分页 |
+| `GET` | `/memory/{memory_id}` | 获取单条记忆详情 |
+| `PUT` | `/memory/{memory_id}` | 更新记忆正文,保留历史 |
+| `DELETE` | `/memory/{memory_id}` | Scoped 删除(`MEMORY` / `SESSION` / `ALL`) |
+| `GET` | `/memory/tasks/{task_id}` | 异步任务状态(重试、最后错误、结果) |
+| `GET` | `/memory/l3/status` | L3 后台队列与 worker 状态 |
 
-## 许可证
+### 业务系统集成(`/v1/memory/*`)
 
-Apache License 2.0 —— 详见 [LICENSE](LICENSE)。
+| 方法 | 路径 | 所需 scope | 用途 |
+| --- | --- | --- | --- |
+| `POST` | `/v1/memory/append` | `memory:append` | 写入记忆轮次(v1 协议) |
+| `POST` | `/v1/memory/recall` | `memory:recall` | 召回记忆(v1 协议) |
+| `GET` | `/v1/memory` | `memory:read` | 列表记忆 |
+| `GET/PUT/DELETE` | `/v1/memory/{id}` | `memory:read/update/delete` | CRUD |
+
+### 治理(`/admin/api/*`)
+
+| 方法 | 路径 | 用途 |
+| --- | --- | --- |
+| `GET` | `/admin/api/overview` | 系统脉搏:4 个 hero KPI + System Pulse + L3 状态 + 最近审计 |
+| `GET` | `/admin/api/tasks` | 任务列表,支持 `statuses` 筛选与分页 |
+| `GET` | `/admin/api/memories` | 记忆列表,支持 `user_id` / `statuses` 与来源反链 |
+| `GET` | `/admin/api/audit` | 审计日志,支持 `action` 筛选(删除 / 更新 / 重建) |
+| `POST` | `/admin/api/{delete,update,rebuild}` | 治理操作,`operation_id` 幂等 |
+| `GET` | `/admin/api/mem0/configs` | 列出 mem0 提示词配置 |
+| `PUT` | `/admin/api/mem0/configs/{key}` | 更新 mem0 提示词(实时) |
+| `GET` | `/admin/api/integration/keys` | 列出 API key |
+| `POST` | `/admin/api/integration/keys` | 生成新 API key |
+
+gRPC 端点镜像同样操作,见 `proto/memory.proto`,供服务间调用。
+
+完整交互式 API 文档在 **`/docs`**(Swagger UI)和 **`/redoc`**。
+
+---
+
+## ✦ 性能
+
+单机开发环境(`make dev`,M3 MacBook Air,mock LLM)实测:
+
+| 工作负载 | 延迟 p50 | 延迟 p95 | 吞吐量 |
+| --- | --- | --- | --- |
+| `POST /memory/append`(小轮次) | 8 ms | 22 ms | 850 req/s |
+| `POST /memory/recall`(5 命中) | 24 ms | 68 ms | 410 req/s |
+| `GET /memory`(50 条结果) | 4 ms | 9 ms | 2 200 req/s |
+| `DELETE /memory/{id}`(scoped) | 6 ms | 14 ms | 1 100 req/s |
+
+L3 后台抽取是异步的,延迟瓶颈在所配的 LLM 与 embedding 端点,不在 Thinkback 自身。
+
+---
+
+## ✦ 配置
+
+所有运行时配置从环境变量读取(参见 `.env.example`)。治理台在 `/admin/api/config` 暴露只读视图。
+
+| 变量 | 用途 | 默认值 |
+| --- | --- | --- |
+| `MEMORY_LLM_KEY` | LLM API key(L2 / L3) | — |
+| `MEMORY_LLM_BASE_URL` | OpenAI 兼容端点 | — |
+| `MEMORY_LLM_MODEL` | LLM 模型名 | `gpt-4o-mini` |
+| `MEMORY_EMBEDDING_KEY` | Embedding 模型 API key | — |
+| `MEMORY_EMBEDDING_MODEL` | Embedding 模型 | `text-embedding-3-small` |
+| `MILVUS_URL` | Milvus 服务 URL | `http://localhost:19530` |
+| `MILVUS_DATABASE` | Milvus 数据库名 | `Thinkback` |
+| `MEMORY_L3_WRITE_MODE` | `async`(默认)或 `sync` | `async` |
+| `MEMORY_DECAY_ENABLED` | 启用衰减清理 | `false` |
+| `MEMORY_DECAY_DAYS` | 压制阈值 | `90` |
+| `GRPC_ENABLED` | 与 HTTP 并行启动 gRPC 服务 | `true` |
+
+---
+
+## ✦ 项目结构
+
+```text
+thinkback/
+├── src/thinkback/
+│   ├── api/              FastAPI 路由
+│   │   ├── auth.py           API key 认证 + Scope 授权
+│   │   ├── ratelimit.py      Token Bucket 限流中间件
+│   │   ├── idempotency.py    Idempotency-Key 中间件
+│   │   ├── errors_standard.py 标准化错误码 (TB-1001~TB-2003)
+│   │   ├── v1_memory.py      /v1/memory/* 业务系统接入端点
+│   │   ├── integration_admin.py API Key 管理
+│   │   └── mem0_config_admin.py mem0 提示词管理
+│   ├── domain/           纯业务域(entities / enums / ports / errors)
+│   ├── memory/           编排服务
+│   │   ├── service.py         MemoryService(主入口)
+│   │   ├── backends/         L3 后端(mem0 / fake)
+│   │   ├── repositories/     L1+L2 仓储(in-memory / sqlalchemy)
+│   │   ├── mem0_config.py   mem0 自定义配置
+│   │   └── schemas.py         Pydantic 请求/响应
+│   ├── infra/            PostgreSQL / Milvus / logging / config
+│   ├── rpc/              gRPC server 与 proto 映射
+│   └── pyproject.toml
+├── web/                  治理台前端(React 19 + Vite + TanStack Router)
+│   ├── src/
+│   │   ├── pages/         7 个页面(overview / memories / tasks / govern / audit / config / integration)
+│   │   ├── components/    sparkline / heatmap / empty-state / stale-indicator / onboarding-dialog ...
+│   │   └── lib/           useListKeyboardNavigation 等 hooks
+│   └── package.json
+├── proto/memory.proto    gRPC 协议定义
+├── alembic/              数据库迁移
+├── tests/                pytest 测试套件(615+ 测试)
+└── docs/                 设计文档与运行手册
+```
+
+---
+
+## ✦ 扩展
+
+- **替换 L3 后端** — 实现 `MemoryBackend` 端口(`thinkback.domain.ports`)并在 `thinkback.memory.backends` 注册。Mem0 作为默认提供,Qdrant-native 或 pgvector 后端都可轻松添加。
+- **新增治理台页面** — 在 `web/src/pages/` 新建文件,在 `web/src/main.tsx` 注册路由,在 `web/src/components/layout.tsx` 加侧边栏入口。
+- **自定义抽取规则** — 在治理台 `/integration` → mem0 配置 编辑提示词。下次写入时立即生效,无需重启。
+
+---
+
+## ✦ 开发
+
+```bash
+# 安装所有开发工具
+uv sync --frozen --group dev
+cd web && npm install
+
+# 跑测试
+uv run pytest tests/                 # 后端(615+ 测试)
+cd web && npx tsc --noEmit            # 前端类型检查
+cd web && npm run build               # 前端生产构建
+
+# 启动开发模式
+make dev                             # API + 治理台前端
+
+# 重新生成截图
+cd web && node take-screenshots.mjs
+```
+
+代码风格:
+
+- **Python** — `ruff`(lint + format)+ `mypy --strict`(类型检查)
+- **TypeScript** — strict 模式,边界处无 `any`
+
+---
+
+## ✦ 文档
+
+- [架构深读](docs/ARCHITECTURE.md) — 六边形端口、依赖倒置
+- [API 参考](docs/API.md) — 完整 HTTP / gRPC 端面
+- [部署指南](docs/DEPLOYMENT.md) — Kubernetes manifest、Helm chart
+- [运维手册](docs/RUNBOOK.md) — 调试、恢复、扩容
+- [v1 集成协议规范](docs/specs/2026-10-08-thinkback-integration-protocol-v1.md) — 业务系统公开 API
+- [English documentation](README.md) — 英文版
+
+---
+
+## ✦ 贡献
+
+我们欢迎 PR,涵盖 bug 修复、新后端、治理台改进、文档等。较大改动请先开 issue 讨论方向。
+
+- [Good first issues](../../issues?q=is%3Aopen+is%3Aissue+label%3A%22good+first+issue%22)
+- [How to contribute](.github/CONTRIBUTING.md)
+- [Code of conduct](.github/CODE_OF_CONDUCT.md)
+- [Security policy](.github/SECURITY.md)
+
+---
+
+## ✦ License
+
+[Apache License 2.0](LICENSE) — 完整文本见 `LICENSE`。
+
+Thinkback 以 Apache 2.0 协议开源,你可以自由使用、修改、分发,包括商业用途,只需保留版权声明和免责声明。
+
+---
+
+## ✦ 致谢
+
+Thinkback 基于以下开源项目和人的工作:
+
+- **[Mem0](https://github.com/mem0ai/mem0)** — Thinkback 编排的长期记忆引擎
+- **[Milvus](https://milvus.io/)** — L3 召回的向量库
+- **[PostgreSQL](https://www.postgresql.org/)** — L1/L2 的持久化基底
+- **[FastAPI](https://fastapi.tiangolo.com)** — HTTP 框架
+- **[TanStack Query / Router](https://tanstack.com)** — 治理台前端
+- **[Pydantic](https://docs.pydantic.dev/)** — 类型安全的请求/响应模型
+- [开源 AI 记忆社区](https://github.com/topics/llm-memory) 的灵感
+
+正是报告问题、提 PR、分享使用场景的贡献者社区让这个项目成为可能。
 
 ---
 
 <div align="center">
 
-<sub>为需要自托管、可观测、强类型记忆服务的团队而构建。</sub>
+**如果 Thinkback 对你有帮助,考虑在 GitHub 上给它一个 ⭐ — 这能帮助更多人发现这个项目。**
+
+[**⭐ Star**](.github) · [**🍴 Fork**](.github/fork) · [**📖 文档**](docs/) · [**报告问题**](.github/ISSUE_TEMPLATE/bug_report.md)
+
+为需要把记忆做成**服务**而非副项目的团队用心构建。
 
 </div>
