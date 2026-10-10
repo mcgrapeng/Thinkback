@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 from fastapi.testclient import TestClient
 
-from thinkback.api.auth import Scope, _API_KEYS
+from thinkback.api.auth import _API_KEYS
 
 
 @pytest.fixture(autouse=True)

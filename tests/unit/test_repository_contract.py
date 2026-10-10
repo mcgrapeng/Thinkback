@@ -170,7 +170,9 @@ def test_list_rounds_null_round_index_sorts_first(repository) -> None:  # type: 
         make_append(round_id="round-3", source_timestamp="2026-05-04T10:00:03Z", round_index=3)
     )
     repository.save_round(
-        make_append(round_id="round-null", source_timestamp="2026-05-04T10:00:03Z", round_index=None)
+        make_append(
+            round_id="round-null", source_timestamp="2026-05-04T10:00:03Z", round_index=None
+        )
     )
 
     rounds = repository.list_rounds("user-1", "session-1")
@@ -207,9 +209,9 @@ def test_mark_rounds_deleted_bulk_counts_and_scopes(repository) -> None:  # type
 
     assert repository.mark_rounds_deleted("user-1", "session-a", "session-a") == 1
     assert repository.list_rounds("user-1", "session-a", "session-a") == []
-    assert [entry.round_id for entry in repository.list_rounds("user-1", "session-b", "session-b")] == [
-        "r3"
-    ]
+    assert [
+        entry.round_id for entry in repository.list_rounds("user-1", "session-b", "session-b")
+    ] == ["r3"]
 
     assert repository.mark_rounds_deleted("user-1", "session-b") == 1
     assert repository.list_rounds("user-1", "session-b") == []
@@ -237,8 +239,12 @@ def test_get_l1_falls_back_to_journal_and_clears(repository) -> None:  # type: i
 
 
 def test_upsert_summary_from_rounds_tracks_cursor(repository) -> None:  # type: ignore[no-untyped-def]
-    repository.save_round(make_append(round_id="r1", content="第一句", source_timestamp="2026-05-04T10:00:00Z"))
-    repository.save_round(make_append(round_id="r2", content="第二句", source_timestamp="2026-05-04T10:00:03Z"))
+    repository.save_round(
+        make_append(round_id="r1", content="第一句", source_timestamp="2026-05-04T10:00:00Z")
+    )
+    repository.save_round(
+        make_append(round_id="r2", content="第二句", source_timestamp="2026-05-04T10:00:03Z")
+    )
 
     summary = repository.upsert_summary_from_rounds(
         "user-1", "session-1", repository.list_rounds("user-1", "session-1")
@@ -288,8 +294,8 @@ def test_upsert_summary_preserve_llm_blocks_concat_overwrite(repository) -> None
 
 
 def test_upsert_summary_from_journal_excludes_deleted_memory_sources(
-    repository,
-) -> None:  # type: ignore[no-untyped-def]
+    repository: InMemoryMemoryRepository | SqlAlchemyMemoryRepository,
+) -> None:
     repository.save_round(make_append(round_id="r1", content="请记住我叫阿鹏"))
     repository.save_round(make_append(round_id="r2", content="我住在沈阳"))
     memory = repository.add_memory_index(
@@ -328,7 +334,9 @@ def test_add_memory_index_upserts_by_backend_id(repository) -> None:  # type: ig
     assert second.memory_id == first.memory_id
     active = repository.active_memories("user-1", "thinkback")
     assert [entry.memory_text for entry in active] == ["新文本"]
-    assert repository.get_active_memory_by_backend_id("user-1", "thinkback", "backend-1") is not None
+    assert (
+        repository.get_active_memory_by_backend_id("user-1", "thinkback", "backend-1") is not None
+    )
 
 
 def test_add_memory_index_reuses_backend_id_after_delete(repository) -> None:  # type: ignore[no-untyped-def]
@@ -444,7 +452,7 @@ def test_touch_memory_recalled_counts_reaches(repository) -> None:  # type: igno
     assert entry.last_recalled_at is not None
 
     assert repository.touch_memory_recalled([memory.memory_id]) == 1
-    assert repository.get_memory_index(memory.memory_id).recall_count == 2  # type: ignore[union-attr]
+    assert repository.get_memory_index(memory.memory_id).recall_count == 2
     assert repository.touch_memory_recalled([]) == 0
     assert repository.touch_memory_recalled(["missing"]) == 0
 
@@ -534,9 +542,7 @@ def test_save_task_cas_rejects_stale_versions(repository) -> None:  # type: igno
     assert untouched.retry_count == 1
 
 
-def test_reclaim_stale_running_tasks_recycles_only_aged_running(
-    repository, age_task
-) -> None:  # type: ignore[no-untyped-def]
+def test_reclaim_stale_running_tasks_recycles_only_aged_running(repository, age_task) -> None:  # type: ignore[no-untyped-def]
     repository.claim_task(_make_task("orphan"))
     repository.claim_task(_make_task("fresh", status=TaskStatus.RUNNING))
     repository.save_task(_make_task("done", status=TaskStatus.COMPLETED))
@@ -548,8 +554,8 @@ def test_reclaim_stale_running_tasks_recycles_only_aged_running(
     assert orphan is not None
     assert orphan.status is TaskStatus.FAILED
     assert orphan.last_error is not None and "reclaimed" in orphan.last_error
-    assert repository.get_task("fresh").status is TaskStatus.RUNNING  # type: ignore[union-attr]
-    assert repository.get_task("done").status is TaskStatus.COMPLETED  # type: ignore[union-attr]
+    assert repository.get_task("fresh").status is TaskStatus.RUNNING
+    assert repository.get_task("done").status is TaskStatus.COMPLETED
 
     assert repository.reclaim_stale_running_tasks(max_age_seconds=1800.0) == []
 

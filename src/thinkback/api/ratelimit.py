@@ -10,15 +10,15 @@ from __future__ import annotations
 
 import time
 from collections import defaultdict
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from fastapi import Request, Response
 from loguru import logger
-from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.responses import JSONResponse
+from starlette.types import ASGIApp
 
-from thinkback.api.auth import get_api_key
-from thinkback.api.auth import _parse_api_key
+from thinkback.api.auth import _parse_api_key, get_api_key
 
 
 @dataclass
@@ -48,10 +48,13 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
     /memory/*、/admin/api/*、/health 等内部路径不走限流。
     """
 
-    def __init__(self, app, exclude_paths: set[str] | None = None):
+    def __init__(self, app: ASGIApp, exclude_paths: set[str] | None = None) -> None:
         super().__init__(app)
         self.exclude_paths = exclude_paths or {
-            "/health", "/docs", "/redoc", "/openapi.json",
+            "/health",
+            "/docs",
+            "/redoc",
+            "/openapi.json",
         }
         self.buckets: dict[str, TokenBucket] = defaultdict(
             lambda: TokenBucket(tokens=0, last_refill=0, rate_per_second=0, burst=0)
@@ -66,7 +69,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             bucket.last_refill = time.time()
         return bucket
 
-    async def dispatch(self, request: Request, call_next):
+    async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
         path = request.url.path
         # 只限流 /v1/* 业务系统接入路径
         if not path.startswith("/v1/"):

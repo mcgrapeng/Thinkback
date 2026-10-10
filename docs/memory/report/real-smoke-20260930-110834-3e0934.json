@@ -1,0 +1,35 @@
+{
+  "report_type": "real_link_smoke_test",
+  "run_id": "real-smoke-20260930-110834-3e0934",
+  "generated_at": "2026-09-30T11:08:50.416978+00:00",
+  "milvus_url": "http://localhost:19530",
+  "embedding_base_url": "http://101.237.37.116:7345/v1",
+  "embedding_model": "zhiman-embedding",
+  "embedding_dims": 1024,
+  "results": [
+    {
+      "name": "check_mem0_embedder_round_trip",
+      "passed": true,
+      "detail": "dim=1024 (target 1024)",
+      "elapsed_ms": 639.9372500600293
+    },
+    {
+      "name": "check_milvus_collection_can_be_built",
+      "passed": true,
+      "detail": "collection=smoke_test_7a08c53f client_ready=True",
+      "elapsed_ms": 2158.1552079878747
+    },
+    {
+      "name": "check_real_mem0_add_search_delete_round_trip",
+      "passed": true,
+      "detail": "pet=['User has a cat named Mashu (麻薯)', \"User's name is Xiaopeng (小鹏)\", 'User lives in Xuhui District, Shanghai'] loc=['User lives in Xuhui District, Shanghai', 'User is planning a business trip to Beijing the week of October 5, 2026', \"User's name is Xiaopeng (小鹏)\", 'User has a cat named Mashu (麻薯)'] nick=[\"User's name is Xiaopeng (小鹏)\", 'User has a cat named Mashu (麻薯)', 'User lives in Xuhui District, Shanghai', 'User is planning a business trip to Beijing the week of October 5, 2026'] has_pet=True has_loc=True has_nick=True",
+      "elapsed_ms": 9156.986374990083
+    },
+    {
+      "name": "check_real_thinkback_service_round_trip",
+      "passed": true,
+      "detail": "nick=['User prefers to be called 小鹏'] pet=[] loc=[] backend_pet=['User has a cat named 麻薯', 'User prefers to be called 小鹏', 'User lives in 杭州']",
+      "elapsed_ms": 3599.457834032364
+    }
+  ]
+}

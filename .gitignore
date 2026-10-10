@@ -50,6 +50,10 @@ coverage.xml
 .hypothesis/
 .pytest_cache/
 cover/
+# mutmut 变异树（make mutation-audit 生成）
+mutants/
+# pytest-testmon 影响分析数据库（make test-fast 生成）
+.testmondata
 
 # Translations
 *.mo
@@ -310,4 +314,3 @@ blob-report/
 playwright/.cache/
 
 # Untracked 2026-10 — docs/ is local-only iteration; kept on disk, not in git
-docs/

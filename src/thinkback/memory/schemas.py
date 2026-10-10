@@ -53,8 +53,10 @@ __all__ = [
 
 # PG model 端 id 字段统一为 String(128)；schema 端必须先于 DB 拒绝超长 id，
 # 否则客户端 bug 就会直接触发 PG DataError 500。
+# min_length=1 同步进 OpenAPI schema：运行时校验拒绝空 id，schema 必须如实声明
+# （schemathesis fuzz 发现：未声明时会生成 schema 合规的空串，被 422 拒绝）。
 ID_MAX_LENGTH = 128
-IdStr = Annotated[str, StringConstraints(max_length=ID_MAX_LENGTH)]
+IdStr = Annotated[str, StringConstraints(min_length=1, max_length=ID_MAX_LENGTH)]
 
 # AppendMemoryRequest.metadata 软上限：避免超大 JSON 触发 PG JSONB TOAST / 失败。
 # 64KB 既能覆盖合理 metadata，也能在请求体层早期失败。
@@ -267,7 +269,10 @@ class UpdateMemoryRequest(BaseModel):
     user_id: IdStr = Field(description="用户 ID；编辑只能影响该用户范围内的长期记忆。")
     operation_id: IdStr = Field(description="编辑操作 ID；重复提交同一 operation_id 会做幂等处理。")
     memory_id: IdStr = Field(description="要编辑的业务记忆 ID，必须来自管理列表或召回结果。")
-    content: str = Field(description="编辑后的长期记忆正文；服务端会去除首尾空白。")
+    content: str = Field(
+        min_length=1,
+        description="编辑后的长期记忆正文；服务端会去除首尾空白。",
+    )
     memory_type: MemoryType | None = Field(default=None, description="可选的新记忆分类。")
 
     @field_validator("user_id", "request_id", "operation_id", "memory_id")

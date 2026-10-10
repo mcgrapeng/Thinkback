@@ -1,0 +1,293 @@
+{
+  "report_type": "production_readiness_evaluation",
+  "run_id": "prd-20260930-105638-57f041",
+  "generated_at": "2026-09-30T10:56:39.165427+00:00",
+  "aggregate": {
+    "total": {
+      "correct": 34,
+      "count": 34
+    },
+    "by_category": {
+      "功能覆盖": {
+        "correct": 8,
+        "count": 8,
+        "pass_rate": 1.0
+      },
+      "安全": {
+        "correct": 3,
+        "count": 3,
+        "pass_rate": 1.0
+      },
+      "幂等": {
+        "correct": 2,
+        "count": 2,
+        "pass_rate": 1.0
+      },
+      "并发压力": {
+        "correct": 4,
+        "count": 4,
+        "pass_rate": 1.0
+      },
+      "性能基准": {
+        "correct": 3,
+        "count": 3,
+        "pass_rate": 1.0
+      },
+      "故障注入": {
+        "correct": 5,
+        "count": 5,
+        "pass_rate": 1.0
+      },
+      "状态机": {
+        "correct": 4,
+        "count": 4,
+        "pass_rate": 1.0
+      },
+      "边界": {
+        "correct": 5,
+        "count": 5,
+        "pass_rate": 1.0
+      }
+    }
+  },
+  "results": [
+    {
+      "name": "case_append_requires_user_then_assistant",
+      "category": "功能覆盖",
+      "passed": true,
+      "detail": "raises ValueError when message order is reversed: True",
+      "elapsed_ms": 0.056875054724514484
+    },
+    {
+      "name": "case_append_rejects_non_two_messages",
+      "category": "功能覆盖",
+      "passed": true,
+      "detail": "n=0 OK n=1 OK n=3 OK",
+      "elapsed_ms": 0.032250070944428444
+    },
+    {
+      "name": "case_recall_empty_history_returns_no_l3",
+      "category": "功能覆盖",
+      "passed": true,
+      "detail": "status=ok items=0",
+      "elapsed_ms": 0.606624991632998
+    },
+    {
+      "name": "case_recall_sensitive_intent_is_fail_closed",
+      "category": "功能覆盖",
+      "passed": true,
+      "detail": "raises on SENSITIVE: True",
+      "elapsed_ms": 0.06883300375193357
+    },
+    {
+      "name": "case_delete_scope_all_requires_no_extra_ids",
+      "category": "功能覆盖",
+      "passed": true,
+      "detail": "raises on memory_id + scope=ALL: True",
+      "elapsed_ms": 0.012874952517449856
+    },
+    {
+      "name": "case_delete_scope_memory_requires_memory_id",
+      "category": "功能覆盖",
+      "passed": true,
+      "detail": "raises on missing memory_id: True",
+      "elapsed_ms": 0.0034170225262641907
+    },
+    {
+      "name": "case_list_memory_items_returns_admin_view",
+      "category": "功能覆盖",
+      "passed": true,
+      "detail": "count=1 first_keys=['memory_id', 'content', 'status', 'source_type', 'data_classification']",
+      "elapsed_ms": 0.026541994884610176
+    },
+    {
+      "name": "case_update_memory_writes_through_backend",
+      "category": "功能覆盖",
+      "passed": true,
+      "detail": "status=completed backend='User has a cat named 豆包'",
+      "elapsed_ms": 0.16358401626348495
+    },
+    {
+      "name": "case_task_state_machine_no_skip_terminal_states",
+      "category": "状态机",
+      "passed": true,
+      "detail": "task.status=completed op_type=write_round",
+      "elapsed_ms": 0.9669580031186342
+    },
+    {
+      "name": "case_memory_status_no_inverse_transition",
+      "category": "状态机",
+      "passed": true,
+      "detail": "after_delete status=DELETED",
+      "elapsed_ms": 0.03950006794184446
+    },
+    {
+      "name": "case_summary_state_stale_is_dead_state",
+      "category": "状态机",
+      "passed": true,
+      "detail": "l3_texts=['User has a cat named 麻薯']",
+      "elapsed_ms": 0.10079191997647285
+    },
+    {
+      "name": "case_memory_status_suppressed_excluded_from_rebuild",
+      "category": "状态机",
+      "passed": true,
+      "detail": "excluded=True (refs=1)",
+      "elapsed_ms": 0.0036249402910470963
+    },
+    {
+      "name": "case_recall_survives_backend_search_failure",
+      "category": "故障注入",
+      "passed": true,
+      "detail": "raised=False degraded=True reasons=['l3_backend_unreachable']",
+      "elapsed_ms": 0.09345798753201962
+    },
+    {
+      "name": "case_recall_survives_intermittent_backend_failure",
+      "category": "故障注入",
+      "passed": true,
+      "detail": "raised=False status=ok",
+      "elapsed_ms": 0.08866691496223211
+    },
+    {
+      "name": "case_append_survives_backend_add_failure_in_sync_mode",
+      "category": "故障注入",
+      "passed": true,
+      "detail": "raised=True task_status=failed",
+      "elapsed_ms": 0.13033300638198853
+    },
+    {
+      "name": "case_update_memory_continues_when_backend_update_fails",
+      "category": "故障注入",
+      "passed": true,
+      "detail": "raised=False local_updated=True",
+      "elapsed_ms": 0.1411670818924904
+    },
+    {
+      "name": "case_recover_orphan_running_tasks",
+      "category": "故障注入",
+      "passed": true,
+      "detail": "reclaimed_count=1 after_status=failed",
+      "elapsed_ms": 0.012500095181167126
+    },
+    {
+      "name": "case_concurrent_appends_no_data_loss",
+      "category": "并发压力",
+      "passed": true,
+      "detail": "errors=0 rounds=10/10",
+      "elapsed_ms": 5.083958967588842
+    },
+    {
+      "name": "case_concurrent_same_round_id_is_idempotent",
+      "category": "并发压力",
+      "passed": true,
+      "detail": "statuses=['completed', 'already_done', 'already_done', 'already_done', 'already_done'] rounds_in_db=1 completed=1 already_done=4",
+      "elapsed_ms": 1.1639170115813613
+    },
+    {
+      "name": "case_concurrent_appends_distinct_users_dont_block_each_other",
+      "category": "并发压力",
+      "passed": true,
+      "detail": "rounds=20/20 max_call=0.01s",
+      "elapsed_ms": 10.497958050109446
+    },
+    {
+      "name": "case_concurrent_append_during_delete_no_deadlock",
+      "category": "并发压力",
+      "passed": true,
+      "detail": "errors=0",
+      "elapsed_ms": 2.426082966849208
+    },
+    {
+      "name": "case_append_unicode_and_emoji",
+      "category": "边界",
+      "passed": true,
+      "detail": "mems=1 has_emoji=True",
+      "elapsed_ms": 0.37554209120571613
+    },
+    {
+      "name": "case_append_very_long_text",
+      "category": "边界",
+      "passed": true,
+      "detail": "raised=False text_len=35005",
+      "elapsed_ms": 24.616333073936403
+    },
+    {
+      "name": "case_append_metadata_size_limit",
+      "category": "边界",
+      "passed": true,
+      "detail": "rejected_at_schema=True",
+      "elapsed_ms": 0.18041697330772877
+    },
+    {
+      "name": "case_round_id_id_max_length_enforced",
+      "category": "边界",
+      "passed": true,
+      "detail": "rejected_at_schema=True",
+      "elapsed_ms": 0.009499955922365189
+    },
+    {
+      "name": "case_recall_handles_empty_query",
+      "category": "边界",
+      "passed": true,
+      "detail": "raised=False",
+      "elapsed_ms": 0.10437495075166225
+    },
+    {
+      "name": "case_prompt_injection_does_not_pollute_l3",
+      "category": "安全",
+      "passed": true,
+      "detail": "active_after_injections=0 leaked_secrets=0",
+      "elapsed_ms": 0.5168749485164881
+    },
+    {
+      "name": "case_restricted_keywords_filtered",
+      "category": "安全",
+      "passed": true,
+      "detail": "active_count=1 normal_text_kept=True",
+      "elapsed_ms": 0.6883339956402779
+    },
+    {
+      "name": "case_metadata_does_not_leak_to_logs",
+      "category": "安全",
+      "passed": true,
+      "detail": "raised=False",
+      "elapsed_ms": 0.32400002237409353
+    },
+    {
+      "name": "case_append_per_call_p95",
+      "category": "性能基准",
+      "passed": true,
+      "detail": "n=50 p50=0.33ms p95=0.36ms (target p95<50ms)",
+      "elapsed_ms": 16.448416048660874
+    },
+    {
+      "name": "case_recall_per_call_p95",
+      "category": "性能基准",
+      "passed": true,
+      "detail": "n=50 p50=0.17ms p95=0.19ms (target p95<50ms)",
+      "elapsed_ms": 9.256458026356995
+    },
+    {
+      "name": "case_throughput_under_concurrent_load",
+      "category": "性能基准",
+      "passed": true,
+      "detail": "total=200 elapsed=0.10s throughput=2101.9 ops/s (target>100)",
+      "elapsed_ms": 95.15345806721598
+    },
+    {
+      "name": "case_repeated_delete_with_same_operation_id",
+      "category": "幂等",
+      "passed": true,
+      "detail": "r1=completed r2=already_done",
+      "elapsed_ms": 0.21462503354996443
+    },
+    {
+      "name": "case_repeated_update_with_same_operation_id",
+      "category": "幂等",
+      "passed": true,
+      "detail": "r1=completed r2=already_done",
+      "elapsed_ms": 0.19579206127673388
+    }
+  ]
+}

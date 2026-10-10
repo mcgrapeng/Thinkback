@@ -62,14 +62,16 @@ async def get_sections(
     """返回每个配置项的分区说明、调优提示和示例。"""
     sections = []
     for key, info in CONFIG_SECTIONS.items():
-        sections.append(ConfigSection(
-            key=key,
-            title=info["title"],
-            category=info["category"],
-            icon=info.get("icon", "Settings"),
-            tips=info.get("tips", []),
-            examples=info.get("examples", []),
-        ))
+        sections.append(
+            ConfigSection(
+                key=key,
+                title=info["title"],
+                category=info["category"],
+                icon=info.get("icon", "Settings"),
+                tips=info.get("tips", []),
+                examples=info.get("examples", []),
+            )
+        )
     return sections
 
 

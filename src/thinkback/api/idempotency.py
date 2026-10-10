@@ -11,15 +11,15 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import time
 from collections import OrderedDict
 from dataclasses import dataclass
 
 from fastapi import Request, Response
 from loguru import logger
-from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.responses import JSONResponse
+from starlette.types import ASGIApp
 
 CACHE_TTL = 24 * 3600  # 24h
 MAX_CACHE_SIZE = 10000
@@ -36,7 +36,7 @@ class CachedResponse:
 class IdempotencyCache:
     """LRU 缓存,按 (key, body_hash) 存储响应。"""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._store: OrderedDict[str, CachedResponse] = OrderedDict()
 
     def _make_key(self, idem_key: str, body_hash: str) -> str:
@@ -86,11 +86,11 @@ def get_idempotency_cache() -> IdempotencyCache:
 class IdempotencyMiddleware(BaseHTTPMiddleware):
     """只对 /v1/* 的写操作(POST/PUT/DELETE/PATCH)做幂等保护。"""
 
-    def __init__(self, app):
+    def __init__(self, app: ASGIApp) -> None:
         super().__init__(app)
         self.cache = _idempotency_cache
 
-    async def dispatch(self, request: Request, call_next):
+    async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
         # 只处理 /v1/* 路径
         if not request.url.path.startswith("/v1/"):
             return await call_next(request)
@@ -116,7 +116,9 @@ class IdempotencyMiddleware(BaseHTTPMiddleware):
                     "error": {
                         "code": "TB-1005",
                         "message": "Idempotency key reused with different request body",
-                        "request_id": request.state.request_id if hasattr(request.state, "request_id") else "unknown",
+                        "request_id": request.state.request_id
+                        if hasattr(request.state, "request_id")
+                        else "unknown",
                     }
                 },
             )

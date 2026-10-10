@@ -1238,7 +1238,13 @@ L2 更新 (缓存失效)
 
         items: list[MemoryItem] = []
         degradation_reasons: list[str] = []
+        # 与重建/摘要同口径：已删/被取代/被遗忘事实的来源轮次不进召回。
+        # delete 只 clear_l1 不墓碑 journal（多事实共享轮次时保留原文），
+        # 但 get_l1 冷缓存会回源 journal —— 不过滤就等于把已删除事实原文复活。
+        excluded_refs = self.repository.excluded_source_refs(request.user_id, l3_scope_id)
         for entry in self.repository.get_l1(request.user_id, session_scope_id, request.session_id):
+            if (entry.session_id, entry.round_id) in excluded_refs:
+                continue
             content = " ".join(
                 message["content"]
                 for message in entry.messages

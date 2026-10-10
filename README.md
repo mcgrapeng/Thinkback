@@ -37,7 +37,7 @@ Built on [Mem0](https://github.com/mem0ai/mem0) as its long-term engine, plus Po
 [![GitHub stars](https://img.shields.io/github/stars/mcgrapeng/thinkback?style=social)](../../stargazers)
 [![GitHub forks](https://img.shields.io/github/forks/mcgrapeng/thinkback?style=social)](../../network/members)
 [![GitHub watchers](https://img.shields.io/github/watchers/mcgrapeng/thinkback?style=social)](../../watchers)
-[![Docker pulls](https://img.shields.io/docker/pulls/yourorg/thinkback?style=social)](https://hub.docker.com/r/yourorg/thinkback)
+[![Docker pulls](https://img.shields.io/docker/pulls/mcgrapeng/thinkback?style=social)](https://hub.docker.com/r/mcgrapeng/thinkback)
 
 [**English**](README.md) · [**中文**](README.zh-CN.md) · [Docs](docs/) · [Changelog](CHANGELOG.md) · [Roadmap](docs/ROADMAP.md)
 
@@ -490,12 +490,18 @@ response = client.memory.append(
     session_id="support-001",
     round_id="round-001",
     messages=[
-        {"message_id": "m1", "role": "user",
-         "content": "I prefer dark mode and vim keybindings.",
-         "timestamp": "2026-01-15T10:00:00Z"},
-        {"message_id": "m2", "role": "assistant",
-         "content": "Noted. I will remember that.",
-         "timestamp": "2026-01-15T10:00:02Z"},
+        {
+            "message_id": "m1",
+            "role": "user",
+            "content": "I prefer dark mode and vim keybindings.",
+            "timestamp": "2026-01-15T10:00:00Z",
+        },
+        {
+            "message_id": "m2",
+            "role": "assistant",
+            "content": "Noted. I will remember that.",
+            "timestamp": "2026-01-15T10:00:02Z",
+        },
     ],
 )
 print(response.task_id)  # track async L3 extraction
@@ -1019,7 +1025,7 @@ Code style:
 - 🔔 **[Watch this repo](.github)** — get notified about releases and security fixes
 
 If you're using Thinkback in production and want to share your story, please open a
-Discussion — we'd love to feature it in our [wiki](docs/USER_STORIES.md) (coming soon).
+Discussion — we'd love to feature it in our [wiki](.github/DISCUSSIONS) (coming soon).
 
 ---
 

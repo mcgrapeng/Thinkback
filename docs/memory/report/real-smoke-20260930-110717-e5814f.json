@@ -1,0 +1,35 @@
+{
+  "report_type": "real_link_smoke_test",
+  "run_id": "real-smoke-20260930-110717-e5814f",
+  "generated_at": "2026-09-30T11:07:27.638861+00:00",
+  "milvus_url": "http://localhost:19530",
+  "embedding_base_url": "http://101.237.37.116:7345/v1",
+  "embedding_model": "zhiman-embedding",
+  "embedding_dims": 1024,
+  "results": [
+    {
+      "name": "check_mem0_embedder_round_trip",
+      "passed": true,
+      "detail": "dim=1024 (target 1024)",
+      "elapsed_ms": 620.1849579811096
+    },
+    {
+      "name": "check_milvus_collection_can_be_built",
+      "passed": true,
+      "detail": "collection=smoke_test_ec79199b client_ready=True",
+      "elapsed_ms": 2010.2517500054091
+    },
+    {
+      "name": "check_real_mem0_add_search_delete_round_trip",
+      "passed": true,
+      "detail": "pet=['我养了一只猫，名字叫麻薯', '我现在住在上海', '好的。'] loc=['我现在住在上海', '我下周要去北京出差', '我养了一只猫，名字叫麻薯'] unrelated=['好的，记下了。', '我下周要去北京出差', '好的。']",
+      "elapsed_ms": 3835.96325002145
+    },
+    {
+      "name": "check_real_thinkback_service_round_trip",
+      "passed": true,
+      "detail": "nick=['User prefers to be called 小鹏'] pet=[] loc=[] backend_pet=['User has a cat named 麻薯', 'User prefers to be called 小鹏', 'User lives in 杭州']",
+      "elapsed_ms": 3625.547792064026
+    }
+  ]
+}

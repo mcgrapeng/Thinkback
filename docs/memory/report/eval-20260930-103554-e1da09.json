@@ -1,0 +1,209 @@
+{
+  "report_type": "thinking_memory_self_contained_evaluation",
+  "run_id": "eval-20260930-103554-e1da09",
+  "generated_at": "2026-09-30T10:35:54.780570+00:00",
+  "aggregate": {
+    "total_pass_rate": 0.95,
+    "total_passed": 19,
+    "total_count": 20,
+    "by_category": {
+      "主路径": {
+        "pass_rate": 1.0,
+        "passed": 2,
+        "count": 2
+      },
+      "冲突解决": {
+        "pass_rate": 1.0,
+        "passed": 3,
+        "count": 3
+      },
+      "删除": {
+        "pass_rate": 0.5,
+        "passed": 1,
+        "count": 2
+      },
+      "召回质量": {
+        "pass_rate": 1.0,
+        "passed": 3,
+        "count": 3
+      },
+      "安全": {
+        "pass_rate": 1.0,
+        "passed": 1,
+        "count": 1
+      },
+      "幂等性": {
+        "pass_rate": 1.0,
+        "passed": 2,
+        "count": 2
+      },
+      "并发安全": {
+        "pass_rate": 1.0,
+        "passed": 2,
+        "count": 2
+      },
+      "管理面": {
+        "pass_rate": 1.0,
+        "passed": 2,
+        "count": 2
+      },
+      "跨 session": {
+        "pass_rate": 1.0,
+        "passed": 1,
+        "count": 1
+      },
+      "降级": {
+        "pass_rate": 1.0,
+        "passed": 1,
+        "count": 1
+      },
+      "隔离": {
+        "pass_rate": 1.0,
+        "passed": 1,
+        "count": 1
+      }
+    }
+  },
+  "results": [
+    {
+      "name": "case_basic_recall_finds_user_fact",
+      "category": "主路径",
+      "passed": true,
+      "detail": "l3_texts=['User prefers to be called 小鹏']",
+      "elapsed_ms": 17.17287499923259
+    },
+    {
+      "name": "case_basic_recall_finds_pet_name",
+      "category": "主路径",
+      "passed": true,
+      "detail": "l3_texts=['User has a cat named 麻薯']",
+      "elapsed_ms": 14.439292019233108
+    },
+    {
+      "name": "case_recall_works_across_sessions",
+      "category": "跨 session",
+      "passed": true,
+      "detail": "l3_texts=['User lives in 上海']",
+      "elapsed_ms": 12.928167008794844
+    },
+    {
+      "name": "case_conflict_resolution_supersedes_old_fact",
+      "category": "冲突解决",
+      "passed": true,
+      "detail": "has_new=True old_still_active=False texts=['User prefers to be called 小鹏']",
+      "elapsed_ms": 0.8794579189270735
+    },
+    {
+      "name": "case_conflict_resolution_update_memory_works",
+      "category": "冲突解决",
+      "passed": true,
+      "detail": "has_new=True backend_updated=True texts=['User has a cat named 麻薯']",
+      "elapsed_ms": 0.665667001157999
+    },
+    {
+      "name": "case_update_memory_refreshes_valid_at",
+      "category": "冲突解决",
+      "passed": true,
+      "detail": "orig=2026-09-30 10:35:54.740718+00:00 updated=2026-09-30 10:35:54.753515+00:00",
+      "elapsed_ms": 13.099542004056275
+    },
+    {
+      "name": "case_delete_memory_removes_from_recall",
+      "category": "删除",
+      "passed": true,
+      "detail": "l3_texts=[]",
+      "elapsed_ms": 0.628374982625246
+    },
+    {
+      "name": "case_delete_all_user_removes_all_recall",
+      "category": "删除",
+      "passed": false,
+      "detail": "nick_texts=['User prefers to be called 小鹏'] pet_texts=[]",
+      "elapsed_ms": 1.1007919674739242
+    },
+    {
+      "name": "case_cross_user_isolation",
+      "category": "隔离",
+      "passed": true,
+      "detail": "a_texts=['User has a cat named 麻薯'] b_texts=['User has a cat named 豆包']",
+      "elapsed_ms": 0.9035409893840551
+    },
+    {
+      "name": "case_idempotent_append_same_round",
+      "category": "幂等性",
+      "passed": true,
+      "detail": "status=already_done",
+      "elapsed_ms": 0.44049997813999653
+    },
+    {
+      "name": "case_idempotent_delete_same_operation",
+      "category": "幂等性",
+      "passed": true,
+      "detail": "r1=completed r2=already_done",
+      "elapsed_ms": 0.5700420588254929
+    },
+    {
+      "name": "case_h3_supersede_lock_outside",
+      "category": "并发安全",
+      "passed": true,
+      "detail": "all_outside=True superseded=True delete_calls=[False]",
+      "elapsed_ms": 0.4240419948473573
+    },
+    {
+      "name": "case_concurrent_appends_no_deadlock",
+      "category": "并发安全",
+      "passed": true,
+      "detail": "errors=[]",
+      "elapsed_ms": 2.972249989397824
+    },
+    {
+      "name": "case_recall_degrades_when_backend_fails",
+      "category": "降级",
+      "passed": true,
+      "detail": "status=ok degraded=True reasons=['l3_backend_unreachable']",
+      "elapsed_ms": 0.9582500206306577
+    },
+    {
+      "name": "case_restricted_content_does_not_enter_l3",
+      "category": "安全",
+      "passed": true,
+      "detail": "l3_texts=[] active_count=0",
+      "elapsed_ms": 0.22137502674013376
+    },
+    {
+      "name": "case_recall_precision_at_10",
+      "category": "召回质量",
+      "passed": true,
+      "detail": "l3_count=1 relevant=1 texts=['User has a cat named 小猫']",
+      "elapsed_ms": 4.079332924447954
+    },
+    {
+      "name": "case_recall_recall_at_5_for_broad_query",
+      "category": "召回质量",
+      "passed": true,
+      "detail": "l3_count=5 relevant=5 top5=['用户喜欢音乐类型 jazz 0 好的，记下了。', '用户喜欢音乐类型 jazz 1 好的，记下了。', '用户喜欢音乐类型 jazz 2 好的，记下了。', '用户喜欢音乐类型 jazz 3 好的，记下了。', '用户喜欢音乐类型 jazz 4 好的，记下了。']",
+      "elapsed_ms": 3.1126670073717833
+    },
+    {
+      "name": "case_recall_token_budget_clip",
+      "category": "召回质量",
+      "passed": true,
+      "detail": "l3_count=1 (budget=100 l3_limit=10)",
+      "elapsed_ms": 9.250332950614393
+    },
+    {
+      "name": "case_list_memory_items_excludes_deleted_by_default",
+      "category": "管理面",
+      "passed": true,
+      "detail": "deleted_in_list=False nick_in_list=True count=1",
+      "elapsed_ms": 1.0267499601468444
+    },
+    {
+      "name": "case_update_memory_conflicts_on_operation_id_scope_mismatch",
+      "category": "管理面",
+      "passed": true,
+      "detail": "conflict_raised=True",
+      "elapsed_ms": 1.0129170259460807
+    }
+  ]
+}

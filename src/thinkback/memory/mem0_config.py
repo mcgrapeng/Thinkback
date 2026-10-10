@@ -32,12 +32,16 @@
 from __future__ import annotations
 
 import threading
+from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 from sqlalchemy import select
 
 from thinkback.infra.database.models import Mem0ConfigRecord
 from thinkback.memory.backends.mem0_library import THINKBACK_CUSTOM_INSTRUCTIONS
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 # 线程锁:防止并发写入冲突
 _lock = threading.Lock()
@@ -100,7 +104,7 @@ CONFIG_SECTIONS = {
             },
             {
                 "label": "记忆粒度",
-                "code": "One fact per memory. If a turn contains multiple distinct facts, emit one memory per fact. Never combine \"X is Y\" + \"X is Z\" into a single memory.",
+                "code": 'One fact per memory. If a turn contains multiple distinct facts, emit one memory per fact. Never combine "X is Y" + "X is Z" into a single memory.',
             },
         ],
     },
@@ -149,7 +153,7 @@ CONFIG_SECTIONS = {
 }
 
 
-def _get_session_factory():
+def _get_session_factory() -> async_sessionmaker[AsyncSession]:
     """延迟获取 session factory,避免循环导入。"""
     from thinkback.infra.database.engine import SessionLocal
 
@@ -234,7 +238,7 @@ async def set_config_value(key: str, value: str, description: str = "") -> None:
     logger.info(f"mem0_config.updated key={key} value_length={len(value)}")
 
 
-async def list_all_configs() -> list[dict]:
+async def list_all_configs() -> list[dict[str, Any]]:
     """列出所有配置项(含默认值,即使 DB 中不存在)。"""
     factory = _get_session_factory()
     async with factory() as session:
@@ -244,13 +248,15 @@ async def list_all_configs() -> list[dict]:
     configs = []
     for key, (default_value, description) in DEFAULT_CONFIGS.items():
         db_row = rows.get(key)
-        configs.append({
-            "key": key,
-            "value": db_row.value if db_row else default_value,
-            "description": db_row.description if db_row else description,
-            "is_active": db_row.is_active if db_row else True,
-            "updated_at": db_row.updated_at.isoformat() if db_row else None,
-        })
+        configs.append(
+            {
+                "key": key,
+                "value": db_row.value if db_row else default_value,
+                "description": db_row.description if db_row else description,
+                "is_active": db_row.is_active if db_row else True,
+                "updated_at": db_row.updated_at.isoformat() if db_row else None,
+            }
+        )
     return configs
 
 

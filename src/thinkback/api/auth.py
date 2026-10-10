@@ -16,6 +16,7 @@ import hashlib
 import hmac
 import secrets
 import time
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Annotated
@@ -132,6 +133,7 @@ def get_api_key(key_id: str) -> ApiKey | None:
 
 # ─── 认证依赖 ──────────────────────────────────────────────────────────
 
+
 def _parse_api_key(authorization: str) -> tuple[str, str] | None:
     """解析 Authorization: Bearer tbk_live_<key_id>_<secret>"""
     if not authorization.startswith("Bearer "):
@@ -147,7 +149,9 @@ def _parse_api_key(authorization: str) -> tuple[str, str] | None:
 def _verify_secret(record: ApiKey, secret: str) -> bool:
     """验证 secret(用 record.key_id + secret 做 HMAC)。"""
     expected = hashlib.sha256(f"{record.key_id}:{secret}".encode()).hexdigest()
-    return hmac.compare_digest(expected, hashlib.sha256(f"{record.key_id}:{secret}".encode()).hexdigest())
+    return hmac.compare_digest(
+        expected, hashlib.sha256(f"{record.key_id}:{secret}".encode()).hexdigest()
+    )
 
 
 async def require_auth(
@@ -218,15 +222,18 @@ async def require_auth(
     return AuthContext(api_key=record, tenant_id=record.tenant_id, request_id=request_id)
 
 
-def require_scope(scope: Scope):
+def require_scope(scope: Scope) -> Callable[..., Awaitable[AuthContext]]:
     """生成 scope 检查依赖。"""
+
     async def _check(auth: Annotated[AuthContext, Depends(require_auth)]) -> AuthContext:
         auth.require_scope(scope)
         return auth
+
     return _check
 
 
 # ─── 预置测试 key(开发用,生产替换为 DB 注册) ──────────────────────────
+
 
 def init_default_keys() -> None:
     """启动时注册默认测试 key(仅开发环境)。"""

@@ -33,6 +33,11 @@ dev = [
     "mypy>=1.14.0,<2",
     "grpcio-tools>=1.60,<2.0",
     "aiosqlite>=0.22.1",
+    "mutmut>=3.8.0",
+    "hypothesis>=6.168.5",
+    "pytest-testmon>=2.2.0",
+    "pip-audit>=2.10.1",
+    "schemathesis>=4.30.1",
 ]
 
 [build-system]
@@ -45,6 +50,8 @@ packages = ["src/thinkback"]
 [tool.ruff]
 line-length = 100
 target-version = "py312"
+# mutmut 生成的变异树（make mutation-audit 产物）不参与格式/静态检查
+extend-exclude = ["mutants"]
 
 [tool.ruff.lint]
 select = ["E", "W", "F", "I", "B", "C4", "UP", "ASYNC", "ARG", "SIM"]
@@ -68,6 +75,7 @@ plugins = ["pydantic.mypy"]
 mypy_path = "src"
 packages = ["thinkback"]
 ignore_missing_imports = true
+exclude = "^mutants/"
 
 [[tool.mypy.overrides]]
 module = [
@@ -79,10 +87,37 @@ ignore_errors = true
 [tool.pytest.ini_options]
 minversion = "8.0"
 addopts = "-ra -q --strict-markers"
-testpaths = ["tests"]
+# 默认套件只含确定性用例；tests/e2e 由 make test-e2e 显式运行（要起前端）。
+testpaths = ["tests/unit"]
 python_functions = ["test"]
 pythonpath = ["src"]
 asyncio_mode = "auto"
+
+[tool.coverage.run]
+# protoc 生成代码不计入覆盖率（其正确性由编译器与测试间接保证）
+omit = [
+    "src/thinkback/rpc/memory_pb2.py",
+    "src/thinkback/rpc/memory_pb2_grpc.py",
+]
+
+[tool.mutmut]
+# 变异测试审计范围：小而纯的逻辑模块。source_paths 必须整棵 src
+# （mutants 树要能 import 完整包），用 only_mutate 收窄变异目标；
+# service.py（1500+ 行）全量变异留给 CI 夜间任务。
+source_paths = ["src"]
+only_mutate = [
+    "src/thinkback/domain/keys.py",
+    "src/thinkback/domain/summarization.py",
+    "src/thinkback/memory/decay.py",
+    "src/thinkback/memory/repositories/_l1_cache.py",
+]
+pytest_add_cli_args_test_selection = [
+    "tests/unit/test_memory_decay.py",
+    "tests/unit/test_memory_repositories.py",
+    "tests/unit/test_repository_contract.py",
+    "tests/unit/test_domain_pure_functions.py",
+    "tests/unit/test_l2_llm_summary.py",
+]
 
 [tool.hatch.build.targets.wheel.force-include]
 "src/thinkback/py.typed" = "thinkback/py.typed"

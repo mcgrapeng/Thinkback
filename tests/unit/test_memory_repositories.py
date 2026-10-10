@@ -490,3 +490,103 @@ def test_l1_cache_mixin_exposes_lock_field() -> None:
         assert acquired is True
     finally:
         repository._l1_lock.release()
+
+
+def _make_l1_entry(*, round_id: str, user_id: str, scope_id: str, session_id: str) -> JournalEntry:
+    """构造 (user, scope, session) 三维可独立变化的 L1 条目。"""
+    return JournalEntry(
+        journal_id=f"journal-{round_id}",
+        user_id=user_id,
+        memory_scope_id=scope_id,
+        session_id=session_id,
+        round_id=round_id,
+        messages=[{"role": "user", "content": f"content-{round_id}"}],
+        source_timestamp=datetime(2026, 5, 4, 10, 0, 0),
+        round_fingerprint=f"fp-{round_id}",
+    )
+
+
+def test_l1_cache_clear_l1_targets_only_the_named_session() -> None:
+    """clear_l1 语义钉死：按 session 清、不越界到同前缀的其它 session。"""
+    repository = InMemoryMemoryRepository()
+    for session_id in ("s-1", "s-10", "s-2"):
+        repository.update_l1(
+            _make_l1_entry(
+                round_id=f"r-{session_id}",
+                user_id="user-1",
+                scope_id="scope-1",
+                session_id=session_id,
+            ),
+            limit=10,
+        )
+
+    repository.clear_l1("user-1", "scope-1", "s-1")
+
+    assert repository.get_l1("user-1", "scope-1", "s-1") == []
+    assert [entry.round_id for entry in repository.get_l1("user-1", "scope-1", "s-10")] == [
+        "r-s-10"
+    ]
+    assert [entry.round_id for entry in repository.get_l1("user-1", "scope-1", "s-2")] == ["r-s-2"]
+
+
+def test_l1_cache_clear_l1_without_session_clears_scope_and_isolates_users() -> None:
+    repository = InMemoryMemoryRepository()
+    repository.update_l1(
+        _make_l1_entry(round_id="r-a", user_id="user-1", scope_id="scope-1", session_id="s-a"),
+        limit=10,
+    )
+    repository.update_l1(
+        _make_l1_entry(round_id="r-b", user_id="user-1", scope_id="scope-1", session_id="s-b"),
+        limit=10,
+    )
+    repository.update_l1(
+        _make_l1_entry(round_id="r-x", user_id="user-other", scope_id="scope-1", session_id="s-a"),
+        limit=10,
+    )
+
+    repository.clear_l1("user-1", "scope-1")
+    assert repository.get_l1("user-1", "scope-1", "s-a") == []
+    assert repository.get_l1("user-1", "scope-1", "s-b") == []
+    assert [entry.round_id for entry in repository.get_l1("user-other", "scope-1", "s-a")] == [
+        "r-x"
+    ]
+
+
+def test_l1_cache_update_l1_deduplicates_and_caps_by_limit() -> None:
+    repository = InMemoryMemoryRepository()
+    for index in range(4):
+        repository.update_l1(
+            _make_journal_entry(round_id=f"r-{index}", session_id="session-1"),
+            limit=2,
+        )
+    assert [entry.round_id for entry in repository.get_l1("user-1", "session-1", "session-1")] == [
+        "r-2",
+        "r-3",
+    ]
+
+    repository.update_l1(
+        _make_journal_entry(round_id="r-3", session_id="session-1"),
+        limit=2,
+    )
+    assert [entry.round_id for entry in repository.get_l1("user-1", "session-1", "session-1")] == [
+        "r-2",
+        "r-3",
+    ]
+
+    repository.update_l1(
+        _make_journal_entry(round_id="r-1", session_id="session-1"),
+        limit=2,
+    )
+    assert [entry.round_id for entry in repository.get_l1("user-1", "session-1", "session-1")] == [
+        "r-3",
+        "r-1",
+    ]
+
+
+def test_l1_cache_update_l1_default_limit_is_ten() -> None:
+    repository = InMemoryMemoryRepository()
+    for index in range(12):
+        repository.update_l1(_make_journal_entry(round_id=f"r-{index:02d}", session_id="session-1"))
+
+    cached = repository.get_l1("user-1", "session-1", "session-1")
+    assert [entry.round_id for entry in cached] == [f"r-{index:02d}" for index in range(2, 12)]

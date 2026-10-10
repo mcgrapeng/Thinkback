@@ -14,11 +14,10 @@ import pytest
 from fastapi.testclient import TestClient
 
 from thinkback.api.auth import (
-    Scope,
     _API_KEYS,
+    Scope,
     generate_api_key,
 )
-from thinkback.api.memory import _run_write_memory_call
 from thinkback.memory.backends.fake import FakeMemoryBackend
 from thinkback.memory.repositories.in_memory import InMemoryMemoryRepository
 from thinkback.memory.service import MemoryService
@@ -85,8 +84,18 @@ def test_v1_succeeds_with_valid_key() -> None:
                 "round_id": "r_001",
                 "source_timestamp": "2026-10-08T10:00:00Z",
                 "messages": [
-                    {"role": "user", "content": "测试记忆", "message_id": "m_001", "timestamp": "2026-10-08T10:00:00Z"},
-                    {"role": "assistant", "content": "已记住", "message_id": "m_002", "timestamp": "2026-10-08T10:00:05Z"},
+                    {
+                        "role": "user",
+                        "content": "测试记忆",
+                        "message_id": "m_001",
+                        "timestamp": "2026-10-08T10:00:00Z",
+                    },
+                    {
+                        "role": "assistant",
+                        "content": "已记住",
+                        "message_id": "m_002",
+                        "timestamp": "2026-10-08T10:00:05Z",
+                    },
                 ],
             },
             headers={"Authorization": f"Bearer {plaintext}"},
@@ -145,8 +154,18 @@ def test_idempotency_same_key_same_body_returns_cached() -> None:
             "round_id": "r_idem",
             "source_timestamp": "2026-10-08T10:00:00Z",
             "messages": [
-                {"role": "user", "content": "幂等测试", "message_id": "m_idem_1", "timestamp": "2026-10-08T10:00:00Z"},
-                {"role": "assistant", "content": "已记住", "message_id": "m_idem_2", "timestamp": "2026-10-08T10:00:05Z"},
+                {
+                    "role": "user",
+                    "content": "幂等测试",
+                    "message_id": "m_idem_1",
+                    "timestamp": "2026-10-08T10:00:00Z",
+                },
+                {
+                    "role": "assistant",
+                    "content": "已记住",
+                    "message_id": "m_idem_2",
+                    "timestamp": "2026-10-08T10:00:05Z",
+                },
             ],
         }
         headers = {
@@ -179,20 +198,44 @@ def test_idempotency_same_key_different_body_returns_409() -> None:
         }
         body1 = {
             "request_id": "req_v1_conflict_1",
-            "user_id": "u1", "session_id": "s1", "round_id": "r1",
+            "user_id": "u1",
+            "session_id": "s1",
+            "round_id": "r1",
             "source_timestamp": "2026-10-08T10:00:00Z",
             "messages": [
-                {"role": "user", "content": "first", "message_id": "m_c1", "timestamp": "2026-10-08T10:00:00Z"},
-                {"role": "assistant", "content": "ok1", "message_id": "m_c1a", "timestamp": "2026-10-08T10:00:05Z"},
+                {
+                    "role": "user",
+                    "content": "first",
+                    "message_id": "m_c1",
+                    "timestamp": "2026-10-08T10:00:00Z",
+                },
+                {
+                    "role": "assistant",
+                    "content": "ok1",
+                    "message_id": "m_c1a",
+                    "timestamp": "2026-10-08T10:00:05Z",
+                },
             ],
         }
         body2 = {
             "request_id": "req_v1_conflict_1",
-            "user_id": "u1", "session_id": "s1", "round_id": "r1",
+            "user_id": "u1",
+            "session_id": "s1",
+            "round_id": "r1",
             "source_timestamp": "2026-10-08T10:00:00Z",
             "messages": [
-                {"role": "user", "content": "second", "message_id": "m_c2", "timestamp": "2026-10-08T10:00:00Z"},
-                {"role": "assistant", "content": "ok2", "message_id": "m_c2a", "timestamp": "2026-10-08T10:00:05Z"},
+                {
+                    "role": "user",
+                    "content": "second",
+                    "message_id": "m_c2",
+                    "timestamp": "2026-10-08T10:00:00Z",
+                },
+                {
+                    "role": "assistant",
+                    "content": "ok2",
+                    "message_id": "m_c2a",
+                    "timestamp": "2026-10-08T10:00:05Z",
+                },
             ],  # different
         }
         client.post("/v1/memory/append", json=body1, headers=h)

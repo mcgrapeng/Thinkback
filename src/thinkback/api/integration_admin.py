@@ -7,16 +7,15 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
-from typing import Annotated
+from datetime import UTC, datetime
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
 from thinkback.api.auth import (
+    _API_KEYS,
     ApiKey,
     Scope,
-    _API_KEYS,
     generate_api_key,
     revoke_api_key,
 )
@@ -64,7 +63,7 @@ def _key_to_info(record: ApiKey) -> KeyInfo:
         rate_limit_per_minute=record.rate_limit_per_minute,
         rate_limit_burst=record.rate_limit_burst,
         is_active=record.is_active,
-        created_at=datetime.fromtimestamp(record.created_at, tz=timezone.utc).isoformat(),
+        created_at=datetime.fromtimestamp(record.created_at, tz=UTC).isoformat(),
     )
 
 
