@@ -11,6 +11,10 @@
 
 **Self-hosted memory service for AI conversations.**
 
+[![Release v1.0](https://img.shields.io/badge/release-v1.0-7C3AED?style=for-the-badge&logo=github&logoColor=white)](../../releases)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
+[![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue.svg)](https://www.python.org/downloads/)
+
 Thinkback gives AI assistants and agents persistent memory across conversations. It keeps
 short-term context, running session summaries, and long-term user facts as **three explicit
 layers** — exposed through one idempotent HTTP/gRPC API — and stays observable when something
@@ -28,6 +32,13 @@ Built on [Mem0](https://github.com/mem0ai/mem0) as its long-term engine, plus Po
 [![CI](https://img.shields.io/badge/CI-passing-brightgreen.svg)](.github/workflows/ci.yml)
 [![PRs welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](.github/CONTRIBUTING.md)
 [![Mentioned in Awesome Mem0](https://img.shields.io/badge/Mentioned_in-Awesome_Mem0-7C3AED?logo=awesome-lists&logoColor=white)](#-acknowledgments)
+
+<br>
+
+[![GitHub stars](https://img.shields.io/github/stars/mcgrapeng/thinkback?style=social)](../../stargazers)
+[![GitHub forks](https://img.shields.io/github/forks/mcgrapeng/thinkback?style=social)](../../network/members)
+[![GitHub watchers](https://img.shields.io/github/watchers/mcgrapeng/thinkback?style=social)](../../watchers)
+[![Docker pulls](https://img.shields.io/docker/pulls/yourorg/thinkback?style=social)](https://hub.docker.com/r/yourorg/thinkback)
 
 [**English**](README.md) · [**中文**](README.zh-CN.md) · [Docs](docs/) · [Changelog](CHANGELOG.md) · [Roadmap](docs/ROADMAP.md)
 
@@ -49,6 +60,58 @@ remembers your preferences, past issues, and context.
 - 🚨 **Explicit degradation** signals when the LLM or vector store is down
 - 🛠️ **Self-hosted** with Apache 2.0 — your data never leaves your infra
 - 🎛️ **Full admin dashboard** to inspect and repair what the memory layer actually did
+
+---
+
+## ✦ Why we built this
+
+> *We were shipping a multi-tenant customer-support agent. After three rewrites of "the memory
+> layer" — once in Postgres, once in Redis, once as a Sidekiq cron job — we realised the memory
+> layer wasn't our product. It was a tax on the product. Thinkback is the thing we wish existed
+> before we started: a boring, reliable, observable memory service that does not go down at 3am.*
+
+The pattern: you ship an AI that **works** in the first conversation but **fails** in the tenth because
+it forgets the user's preferences, the issue from yesterday, or the tool call you spent three turns
+debugging. Every AI app eventually needs persistent memory. Thinkback is the version of that you
+don't have to build yourself.
+
+---
+
+## ✦ How it works
+
+A conversation flows through three layers. Each layer has a strict ownership — nothing
+cross-writes.
+
+```mermaid
+flowchart LR
+    subgraph App["Your app / agent"]
+        A[user -> assistant<br/>conversation turn]
+    end
+
+    subgraph Thinkback["Thinkback service"]
+        direction LR
+        L1["**L1 — Round journal**<br/>PostgreSQL<br/><i>last-N rounds</i>"]
+        L2["**L2 — Session summary**<br/>PostgreSQL + LLM<br/><i>debounced, 1 call / N rounds</i>"]
+        L3["**L3 — Long-term memory**<br/>Mem0 + Milvus<br/><i>background, semantic recall</i>"]
+    end
+
+    A -->|append| L1
+    L1 -->|trigger| L2
+    L2 -->|extract| L3
+    L3 -.->|recall (degraded?)| A
+
+    style L1 fill:#FFFFFF,stroke:#0F172A,stroke-width:2px
+    style L2 fill:#FFFFFF,stroke:#0F172A,stroke-width:2px
+    style L3 fill:#7C3AED,stroke:#A78BFA,stroke-width:2px,color:#FFFFFF
+```
+
+A request flow:
+
+1. **Your app** calls `POST /memory/append` with a `user → assistant` round
+2. **L1** stores the raw round (PostgreSQL, append-only)
+3. **L2** is debounced-updated to a running session summary (LLM call)
+4. **L3** is background-extracted by Mem0 into a vector store (Milvus)
+5. On the next `POST /memory/recall`, **L1 / L2 / L3** are queried in parallel, and the response is marked `degraded=true` if any layer is unavailable — never a half-answer
 
 ---
 
@@ -114,6 +177,53 @@ flowchart LR
 ---
 
 ## ✦ Capabilities
+
+### Key features at a glance
+
+<table>
+<tr>
+<td width="50%" valign="top">
+
+**🧠 Three-layer memory model**
+Short-term context · running summaries · long-term facts. Each layer has a strict ownership — no cross-writes.
+
+</td>
+<td width="50%" valign="top">
+
+**✅ Idempotent writes**
+`journal_id` fingerprints make replays safe. Append the same round twice, get the same result. No duplicate memories, no corruption.
+
+</td>
+</tr>
+<tr>
+<td width="50%" valign="top">
+
+**🚨 Explicit degradation**
+When the LLM or vector store is down, responses are marked `degraded=True` with `degradation_reasons`. Never a half-answer — always honest.
+
+</td>
+<td width="50%" valign="top">
+
+**🎛️ Full admin dashboard**
+React 19 web UI to inspect every memory, replay every task, revoke or supersede on demand. Plus a `⌘K` command palette for power users.
+
+</td>
+</tr>
+<tr>
+<td width="50%" valign="top">
+
+**🔌 HTTP + gRPC, one schema**
+Pydantic models are the source of truth. Pick your protocol, share your types. Strict typing end-to-end with `mypy --strict`.
+
+</td>
+<td width="50%" valign="top">
+
+**🛠️ Self-hosted, Apache 2.0**
+Your data never leaves your infra. Postgres + Milvus + Mem0 — all open source. Kubernetes-native with liveness/readiness probes.
+
+</td>
+</tr>
+</table>
 
 ### Memory model
 
@@ -508,6 +618,18 @@ Code style:
 
 ---
 
+## ✦ Community
+
+- 💬 **[GitHub Discussions](.github/DISCUSSIONS)** — questions, ideas, show-and-tell
+- 🐛 **[Issue tracker](.github/ISSUE_TEMPLATE/bug_report.md)** — bug reports
+- ✨ **[Feature requests](.github/ISSUE_TEMPLATE/feature_request.md)** — what should Thinkback do next?
+- 🔔 **[Watch this repo](.github)** — get notified about releases and security fixes
+
+If you're using Thinkback in production and want to share your story, please open a
+Discussion — we'd love to feature it in our [wiki](docs/USER_STORIES.md) (coming soon).
+
+---
+
 ## ✦ Contributing
 
 We welcome PRs for bug fixes, new backends, admin dashboard improvements, and docs. For
@@ -517,6 +639,36 @@ larger changes please open an issue first to discuss direction.
 - [How to contribute](.github/CONTRIBUTING.md)
 - [Code of conduct](.github/CODE_OF_CONDUCT.md)
 - [Security policy](.github/SECURITY.md)
+
+---
+
+## ✦ Featured by
+
+<!--
+If your company / publication / community uses Thinkback, please open a PR and add your
+logo + link here. We'll feature you in the next release notes.
+-->
+<a href="https://github.com/mem0ai/mem0"><img src="https://img.shields.io/badge/powered%20by-Mem0-7C3AED?style=for-the-badge&logo=data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxNiAxNiI+PHBhdGggZD0iTTggMUw0IDd2NkwxMS41TDE0IDh2NEgydjZoM2w0LTJ2Nkg5eiIvPjwvc3ZnPg==" alt="Mem0"/></a>
+
+<sub>Want your logo here? [Open a PR](.github/PULL_REQUEST_TEMPLATE.md) to add your company — usage of Thinkback in production is the only requirement.</sub>
+
+---
+
+## ✦ Sponsors
+
+Thinkback is independently developed and open source under Apache 2.0. If your company benefits
+from this project and wants to see it grow faster, consider sponsoring its development.
+
+<!--
+Sponsorship tiers (per CONTRIBUTING.md):
+  - $100/mo: listed in README sponsors section
+  - $500/mo: logo on landing page + README + release notes
+  - $2k+/mo:  prioritized feature requests + private support channel
+
+To become a sponsor, open an issue with title [sponsor] and we'll get back to you.
+-->
+
+**Current sponsors:** *(be the first!)*
 
 ---
 
