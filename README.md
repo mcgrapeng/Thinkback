@@ -724,81 +724,12 @@ Full interactive API documentation at **`/docs`** (Swagger UI) and **`/redoc`**.
 
 ## ✦ Architecture
 
-```svg
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 400" width="100%" height="400">
-  <defs>
-    <linearGradient id="ag-bg" x1="0" y1="0" x2="1200" y2="400">
-      <stop offset="0%" stop-color="#FDFCF8"/>
-      <stop offset="100%" stop-color="#F5F2EC"/>
-    </linearGradient>
-  </defs>
-  <rect width="1200" height="400" fill="url(#ag-bg)"/>
-  <text x="600" y="35" text-anchor="middle" font-family="system-ui,sans-serif" font-size="18" font-weight="700" fill="#0F172A">Thinkback — Three-Layer Memory Architecture</text>
+<img src="assets/architecture.svg" alt="Architecture diagram" width="100%">
 
-  <!-- Your app -->
-  <rect x="40" y="70" width="180" height="110" rx="12" fill="#FFFFFF" stroke="#E8E2D4" stroke-width="1.5"/>
-  <text x="130" y="105" text-anchor="middle" font-family="system-ui,sans-serif" font-size="14" font-weight="600" fill="#0F172A">Your App / Agent</text>
-  <text x="130" y="128" text-anchor="middle" font-family="system-ui,sans-serif" font-size="11" fill="#64748B">user → assistant</text>
-  <text x="130" y="148" text-anchor="middle" font-family="system-ui,sans-serif" font-size="11" fill="#64748B">conversation turn</text>
+<details>
+<summary>View SVG source</summary>
 
-  <!-- Thinkback service box -->
-  <rect x="280" y="50" width="560" height="300" rx="16" fill="#FFFFFF" stroke="#E8E2D4" stroke-width="1.5"/>
-  <text x="560" y="80" text-anchor="middle" font-family="system-ui,sans-serif" font-size="16" font-weight="700" fill="#0F172A">Thinkback Service</text>
-
-  <!-- L1 -->
-  <rect x="310" y="110" width="160" height="90" rx="10" fill="#F8F6F0" stroke="#E8E2D4" stroke-width="1"/>
-  <text x="390" y="135" text-anchor="middle" font-family="system-ui,sans-serif" font-size="11" font-weight="600" fill="#475569">L1 · Round Journal</text>
-  <text x="390" y="155" text-anchor="middle" font-family="system-ui,sans-serif" font-size="10" fill="#64748B">PostgreSQL</text>
-  <text x="390" y="172" text-anchor="middle" font-family="system-ui,sans-serif" font-size="9" fill="#94A3B8">last-N rounds</text>
-  <text x="390" y="190" text-anchor="middle" font-family="system-ui,sans-serif" font-size="9" fill="#94A3B8">append-only</text>
-
-  <!-- L2 -->
-  <rect x="490" y="110" width="160" height="90" rx="10" fill="#F8F6F0" stroke="#E8E2D4" stroke-width="1"/>
-  <text x="570" y="135" text-anchor="middle" font-family="system-ui,sans-serif" font-size="11" font-weight="600" fill="#475569">L2 · Session Summary</text>
-  <text x="570" y="155" text-anchor="middle" font-family="system-ui,sans-serif" font-size="10" fill="#64748B">PostgreSQL + LLM</text>
-  <text x="570" y="172" text-anchor="middle" font-family="system-ui,sans-serif" font-size="9" fill="#94A3B8">debounced</text>
-  <text x="570" y="190" text-anchor="middle" font-family="system-ui,sans-serif" font-size="9" fill="#94A3B8">1 call / N rounds</text>
-
-  <!-- L3 (highlighted) -->
-  <rect x="670" y="110" width="160" height="90" rx="10" fill="#7C3AED" stroke="#7C3AED" stroke-width="1"/>
-  <text x="750" y="135" text-anchor="middle" font-family="system-ui,sans-serif" font-size="11" font-weight="600" fill="#FFFFFF">L3 · Long-term</text>
-  <text x="750" y="155" text-anchor="middle" font-family="system-ui,sans-serif" font-size="10" fill="#E9E4FA">Mem0 + Milvus</text>
-  <text x="750" y="172" text-anchor="middle" font-family="system-ui,sans-serif" font-size="9" fill="#C4B5FD">background</text>
-  <text x="750" y="190" text-anchor="middle" font-family="system-ui,sans-serif" font-size="9" fill="#C4B5FD">semantic recall</text>
-
-  <!-- Idempotent + degradation layer -->
-  <rect x="310" y="220" width="520" height="40" rx="8" fill="#F8F6F0" stroke="#E8E2D4" stroke-width="1"/>
-  <text x="570" y="243" text-anchor="middle" font-family="system-ui,sans-serif" font-size="11" fill="#475569">Idempotent writes · Task governance · Scoped deletes · Degradation signals</text>
-
-  <!-- Arrows -->
-  <path d="M 220 125 L 310 125" stroke="#64748B" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
-  <text x="265" y="118" text-anchor="middle" font-family="system-ui,sans-serif" font-size="9" fill="#64748B">append</text>
-  <path d="M 220 155 L 310 155" stroke="#64748B" stroke-width="2" stroke-dasharray="4,3" fill="none" marker-end="url(#arrow)"/>
-  <text x="265" y="148" text-anchor="middle" font-family="system-ui,sans-serif" font-size="9" fill="#64748B">recall</text>
-
-  <!-- Definition for arrow -->
-  <defs>
-    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto">
-      <path d="M 0 0 L 10 5 L 0 10 z" fill="#64748B"/>
-    </marker>
-  </defs>
-
-  <!-- Side callouts -->
-  <rect x="900" y="70" width="280" height="70" rx="10" fill="#FFFFFF" stroke="#E8E2D4" stroke-width="1"/>
-  <text x="1040" y="95" text-anchor="middle" font-family="system-ui,sans-serif" font-size="11" font-weight="600" fill="#0F172A">HTTP + gRPC</text>
-  <text x="1040" y="115" text-anchor="middle" font-family="system-ui,sans-serif" font-size="10" fill="#64748B">Same Pydantic schema, choose your protocol</text>
-
-  <rect x="900" y="160" width="280" height="70" rx="10" fill="#FFFFFF" stroke="#E8E2D4" stroke-width="1"/>
-  <text x="1040" y="185" text-anchor="middle" font-family="system-ui,sans-serif" font-size="11" font-weight="600" fill="#0F172A">Admin Dashboard</text>
-  <text x="1040" y="205" text-anchor="middle" font-family="system-ui,sans-serif" font-size="10" fill="#64748B">React 19 + TanStack · Keyboard nav</text>
-
-  <rect x="900" y="250" width="280" height="70" rx="10" fill="#FFFFFF" stroke="#E8E2D4" stroke-width="1"/>
-  <text x="1040" y="275" text-anchor="middle" font-family="system-ui,sans-serif" font-size="11" font-weight="600" fill="#0F172A">Observability</text>
-  <text x="1040" y="295" text-anchor="middle" font-family="system-ui,sans-serif" font-size="10" fill="#64748B">Task state machine · Prometheus metrics</text>
-
-  <text x="600" y="380" text-anchor="middle" font-family="system-ui,sans-serif" font-size="11" fill="#94A3B8">Mem0 + Milvus + PostgreSQL — all open source</text>
-</svg>
-```
+</details>
 
 ---
 
@@ -812,6 +743,11 @@ Representative numbers from a single-node dev profile (`make dev`, M3 MacBook Ai
 | `POST /memory/recall` (5 hits) | 24 ms | 68 ms | 410 req/s |
 | `GET /memory` (50 results) | 4 ms | 9 ms | 2 200 req/s |
 | `DELETE /memory/{id}` (scoped) | 6 ms | 14 ms | 1 100 req/s |
+
+<img src="assets/performance.svg" alt="✦ Performance diagram" width="100%">
+
+<details>
+<summary>View SVG source</summary>
 
 ```svg
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 320" width="100%" height="320">
@@ -865,34 +801,20 @@ Representative numbers from a single-node dev profile (`make dev`, M3 MacBook Ai
 </svg>
 ```
 
+</details>
+
 L3 background extraction runs asynchronously; latency is dominated by the configured LLM and embedding endpoints, not by Thinkback itself.
 
 ---
 
 ## ✦ Roadmap
 
-```svg
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 220" width="100%" height="220">
-  <rect width="1200" height="220" fill="#FDFCF8"/>
-  <text x="60" y="35" font-family="system-ui,sans-serif" font-size="16" font-weight="700" fill="#0F172A">Roadmap</text>
+<img src="assets/roadmap.svg" alt="Roadmap diagram" width="100%">
 
-  <!-- Timeline line -->
-  <line x1="150" y1="110" x2="1150" y2="110" stroke="#E8E2D4" stroke-width="2"/>
+<details>
+<summary>View SVG source</summary>
 
-  <!-- Q1 -->
-  <circle cx="250" cy="110" r="12" fill="#7C3AED" stroke="#FFFFFF" stroke-width="2"/>
-  <text x="250" y="85" text-anchor="middle" font-family="system-ui,sans-serif" font-size="11" font-weight="600" fill="#0F172A">✅ Q1 2026</text>
-  <text x="250" y="145" text-anchor="middle" font-family="system-ui,sans-serif" font-size="10" fill="#475569">Core memory layer</text>
-  <text x="250" y="162" text-anchor="middle" font-family="system-ui,sans-serif" font-size="10" fill="#475569">Admin dashboard v1</text>
-
-  <!-- Q2 -->
-  <circle cx="500" cy="110" r="12" fill="#7C3AED" stroke="#FFFFFF" stroke-width="2"/>
-  <text x="500" y="85" text-anchor="middle" font-family="system-ui,sans-serif" font-size="11" font-weight="600" fill="#0F172A">✅ Q2 2026</text>
-  <text x="500" y="145" text-anchor="middle" font-family="system-ui,sans-serif" font-size="10" fill="#475569">v1 integration API</text>
-  <text x="500" y="162" text-anchor="middle" font-family="system-ui,sans-serif" font-size="10" fill="#475569">mem0 prompt mgmt</text>
-
-  <!-- Q3 -->
-  <circle cx="750" cy="110" r="12" fill="#7C3AED" stroke="#FFFFFF" stroke-width="2"/>
+110" r="12" fill="#7C3AED" stroke="#FFFFFF" stroke-width="2"/>
   <text x="750" y="85" text-anchor="middle" font-family="system-ui,sans-serif" font-size="11" font-weight="600" fill="#0F172A">🔄 Q3 2026</text>
   <text x="750" y="145" text-anchor="middle" font-family="system-ui,sans-serif" font-size="10" fill="#475569">Webhook events</text>
   <text x="750" y="162" text-anchor="middle" font-family="system-ui,sans-serif" font-size="10" fill="#475569">Python SDK</text>
@@ -904,6 +826,8 @@ L3 background extraction runs asynchronously; latency is dominated by the config
   <text x="1000" y="162" text-anchor="middle" font-family="system-ui,sans-serif" font-size="10" fill="#64748B">Multi-tenant isolation</text>
 </svg>
 ```
+
+</details>
 
 > [!NOTE]
 > Roadmap is a living document. Vote on issues and we'll prioritize accordingly.

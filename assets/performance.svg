@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 320" width="100%" height="320">
+  <rect width="1200" height="320" fill="#FDFCF8"/>
+  <text x="60" y="35" font-family="system-ui,sans-serif" font-size="16" font-weight="700" fill="#0F172A">Latency (ms) — p50 vs p95</text>
+
+  <!-- Grid -->
+  <line x1="200" y1="60" x2="200" y2="280" stroke="#E8E2D4" stroke-width="1"/>
+  <line x1="400" y1="60" x2="400" y2="280" stroke="#E8E2D4" stroke-width="1"/>
+  <line x1="600" y1="60" x2="600" y2="280" stroke="#E8E2D4" stroke-width="1"/>
+  <line x1="800" y1="60" x2="800" y2="280" stroke="#E8E2D4" stroke-width="1"/>
+  <text x="200" y="295" text-anchor="middle" font-family="system-ui,sans-serif" font-size="10" fill="#64748B">20ms</text>
+  <text x="400" y="295" text-anchor="middle" font-family="system-ui,sans-serif" font-size="10" fill="#64748B">40ms</text>
+  <text x="600" y="295" text-anchor="middle" font-family="system-ui,sans-serif" font-size="10" fill="#64748B">60ms</text>
+  <text x="800" y="295" text-anchor="middle" font-family="system-ui,sans-serif" font-size="10" fill="#64748B">80ms</text>
+
+  <!-- Bars: workload / p50 / p95 -->
+  <!-- POST append (8ms / 22ms) -->
+  <text x="60" y="80" font-family="system-ui,sans-serif" font-size="11" fill="#475569">POST /memory/append</text>
+  <rect x="200" y="68" width="80" height="14" rx="3" fill="#7C3AED"/>
+  <text x="290" y="78" font-family="system-ui,sans-serif" font-size="10" fill="#7C3AED">p50 8ms</text>
+  <rect x="200" y="84" width="220" height="14" rx="3" fill="#A78BFA" opacity="0.5"/>
+  <text x="430" y="94" font-family="system-ui,sans-serif" font-size="10" fill="#A78BFA">p95 22ms</text>
+
+  <!-- POST recall (24ms / 68ms) -->
+  <text x="60" y="125" font-family="system-ui,sans-serif" font-size="11" fill="#475569">POST /memory/recall</text>
+  <rect x="200" y="113" width="240" height="14" rx="3" fill="#7C3AED"/>
+  <text x="450" y="123" font-family="system-ui,sans-serif" font-size="10" fill="#7C3AED">p50 24ms</text>
+  <rect x="200" y="129" width="680" height="14" rx="3" fill="#A78BFA" opacity="0.5"/>
+  <text x="890" y="139" font-family="system-ui,sans-serif" font-size="10" fill="#A78BFA">p95 68ms</text>
+
+  <!-- GET memory (4ms / 9ms) -->
+  <text x="60" y="170" font-family="system-ui,sans-serif" font-size="11" fill="#475569">GET /memory</text>
+  <rect x="200" y="158" width="40" height="14" rx="3" fill="#7C3AED"/>
+  <text x="250" y="168" font-family="system-ui,sans-serif" font-size="10" fill="#7C3AED">p50 4ms</text>
+  <rect x="200" y="174" width="90" height="14" rx="3" fill="#A78BFA" opacity="0.5"/>
+  <text x="300" y="184" font-family="system-ui,sans-serif" font-size="10" fill="#A78BFA">p95 9ms</text>
+
+  <!-- DELETE memory (6ms / 14ms) -->
+  <text x="60" y="215" font-family="system-ui,sans-serif" font-size="11" fill="#475569">DELETE /memory</text>
+  <rect x="200" y="203" width="60" height="14" rx="3" fill="#7C3AED"/>
+  <text x="270" y="213" font-family="system-ui,sans-serif" font-size="10" fill="#7C3AED">p50 6ms</text>
+  <rect x="200" y="219" width="140" height="14" rx="3" fill="#A78BFA" opacity="0.5"/>
+  <text x="350" y="229" font-family="system-ui,sans-serif" font-size="10" fill="#A78BFA">p95 14ms</text>
+
+  <!-- Legend -->
+  <rect x="200" y="265" width="12" height="12" fill="#7C3AED" rx="2"/>
+  <text x="220" y="275" font-family="system-ui,sans-serif" font-size="10" fill="#475569">p50</text>
+  <rect x="270" y="265" width="12" height="12" fill="#A78BFA" opacity="0.5" rx="2"/>
+  <text x="290" y="275" font-family="system-ui,sans-serif" font-size="10" fill="#475569">p95</text>
+</svg>
