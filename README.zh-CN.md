@@ -1,353 +1,258 @@
-<!-- 顶部对齐排版,GitHub 原生渲染无需额外样式 -->
 <div align="center">
 
-<img src="assets/banner.svg" alt="Thinkback — 面向 AI 会话的自托管记忆服务" width="100%">
+<img src="assets/hero.svg" alt="Thinkback — 面向 AI 会话的自托管记忆服务" width="100%">
 
 <br>
 
-<img src="assets/logo-mark.svg" alt="Thinkback" width="64" height="64" style="vertical-align: middle;">
-
-# Thinkback
-
-**面向 AI 会话的自托管记忆服务 · Self-hosted memory service for AI conversations**
-
-Thinkback 让 AI 助手与智能体拥有跨会话的持久记忆。它把短期上下文、会话摘要与长期用户事实
-组织成**三层显式记忆**,通过一套幂等的 HTTP / gRPC API 暴露 —— 并且在出问题时保持可观测。
-
-长期记忆引擎基于 [Mem0](https://github.com/mem0ai/mem0) 构建,外加 PostgreSQL 与 Milvus。
-
-<br>
+[![Release v1.0](https://img.shields.io/badge/release-v1.0-7C3AED?style=for-the-badge&logo=github&logoColor=white)](../../releases)
+[![Latest commit](https://img.shields.io/github/last-commit/mcgrapeng/thinkback?color=7C3AED&style=for-the-badge)](../../commits/master)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-7C3AED.svg)](LICENSE)
+[![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-7C3AED.svg)](https://www.python.org/downloads/)
+[![CI passing](https://img.shields.io/badge/CI-passing-brightgreen.svg)](.github/workflows/ci.yml)
 
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.135-009688.svg)](https://fastapi.tiangolo.com)
-[![Code style: ruff](https://img.shields.io/badge/code%20style-ruff-black.svg)](https://docs.astral.sh/ruff/)
-[![Type checked: mypy strict](https://img.shields.io/badge/type%20checked-mypy%20strict-blue.svg)](https://mypy.readthedocs.io)
-[![CI](https://img.shields.io/badge/CI-passing-brightgreen.svg)](.github/workflows/ci.yml)
-[![PRs welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](.github/CONTRIBUTING.md)
-[![Mentioned in Awesome Mem0](https://img.shields.io/badge/Mentioned_in-Awesome_Mem0-7C3AED?logo=awesome-lists&logoColor=white)](#-acknowledgments)
+[![ruff](https://img.shields.io/badge/style-ruff-000000.svg)](https://docs.astral.sh/ruff/)
+[![mypy strict](https://img.shields.io/badge/types-mypy%20strict-009688.svg)](https://mypy.readthedocs.io)
+
+[![Stars](https://img.shields.io/github/stars/mcgrapeng/thinkback?style=social)](../../stargazers)
+[![Forks](https://img.shields.io/github/forks/mcgrapeng/thinkback?style=social)](../../network/members)
+[![Watchers](https://img.shields.io/github/watchers/mcgrapeng/thinkback?style=social)](../../watchers)
+[![Awesome Mem0](https://img.shields.io/badge/Mentioned_in-Awesome_Mem0-7C3AED?logo=awesome-lists&logoColor=white)](#致谢)
 
 <br>
 
-[![GitHub stars](https://img.shields.io/github/stars/mcgrapeng/thinkback?style=social)](../../stargazers)
-[![GitHub forks](https://img.shields.io/github/forks/mcgrapeng/thinkback?style=social)](../../network/members)
-[![GitHub watchers](https://img.shields.io/github/watchers/mcgrapeng/thinkback?style=social)](../../watchers)
+**三层显式记忆。一套幂等 API。完全自托管。**
 
-[**English**](README.md) · [**中文**](README.zh-CN.md) · [文档](docs/) · [更新日志](CHANGELOG.md) · [路线图](docs/ROADMAP.md)
+```bash
+git clone https://github.com/mcgrapeng/thinkback.git && cd thinkback && make dev
+```
 
+→ API 在 `:8000` · 治理台在 `:7001`
+
+<br>
+
+[**English**](README.md) · [**中文**](README.zh-CN.md) ·
+[文档](docs/) · [更新日志](CHANGELOG.md) · [路线图](docs/ROADMAP.md) ·
 [报告问题](.github/ISSUE_TEMPLATE/bug_report.md) · [功能请求](.github/ISSUE_TEMPLATE/feature_request.md)
-
-> **立即体验治理台** — `git clone https://github.com/mcgrapeng/thinkback.git && make dev`
-> 同时启动 API + Web UI,访问 `localhost:7001` 即可看到完整界面(带 mock 数据)。
-
-**快速导航:**
-[为什么做这个](#-为什么做这个) ·
-[如何工作](#-如何工作) ·
-[截图](#-截图) ·
-[快速开始](#-快速开始) ·
-[API 参考](#-api-参考) ·
-[架构图](#-架构图) ·
-[FAQ](#-faq) ·
-[社区](#-社区) ·
-[贡献](#-贡献)
 
 </div>
 
----
+<img src="assets/rule.svg" alt="" width="100%">
 
-## ✦ 一句话总结 — Thinkback 是什么?
+## 目录
 
-Thinkback 是**面向 AI 应用的记忆层**,让 AI 记住过去对话中发生过的事。 它是「每条消息后 AI 都忘记你」与「AI 记住你的偏好、历史问题、上下文」之间的差别。
-
-- 🧠 **三层记忆**互不冲突 — 短期上下文、运行摘要、长期事实
-- 🔌 **HTTP + gRPC** 共享同一份 Pydantic schema,任选协议
-- ✅ **幂等写入** 通过 `journal_id` 指纹,重放安全
-- 🚨 **显式降级信号** 当 LLM 或向量库不可用时
-- 🛠️ **自托管 + Apache 2.0** — 数据永不离开你的基础设施
-- 🎛️ **完整治理台** 检查与修复记忆层实际做了什么
-
----
-
-## ✦ 目录
-
-| 章节 | 内容 |
-| --- | --- |
-| [一句话总结](#-一句话总结--thinkback-是什么) | 6 句核心能力 |
-| [为什么做这个](#-为什么做这个) | 创作故事 |
-| [如何工作](#-如何工作) | 架构流程 + 流程图 |
-| [横向对比](#-横向对比) | Thinkback vs Mem0 SDK / LangChain / 自建 |
-| [为什么需要 Thinkback](#-为什么需要-thinkback) | 差异化价值 |
-| [记忆模型](#-记忆模型) | L1 / L2 / L3 分层 |
-| [能力清单](#-能力清单) | 完整功能列表 |
-| [截图](#-截图) | 治理台视觉导览 |
-| [快速开始](#-快速开始) | curl 三步走 |
-| [API 参考](#-api-参考) | 26+ 端点 |
-| [架构图](#-架构图) | 非 mermaid 架构 SVG |
-| [性能](#-性能) | 基准数据 |
-| [配置](#-配置) | 环境变量 |
-| [路线图](#-路线图) | 未来计划 |
-| [项目结构](#-项目结构) | 仓库结构 |
-| [扩展](#-扩展) | 自定义指南 |
-| [开发](#-开发) | 开发环境 |
-| [文档](#-文档) | 完整文档 |
-| [社区](#-社区) | Discussions / Issues |
-| [FAQ](#-faq) | 常见问题 |
-| [贡献](#-贡献) | 如何参与 |
-| [Featured by](#-featured-by) | 使用者 |
-| [Sponsors](#-sponsors) | 赞助我们 |
-| [License](#-license) | Apache 2.0 |
-| [致谢](#-致谢) | 致谢 |
-
----
-
-## ✦ 为什么做这个
-
-> *我们当时在做一个多租户的客服 agent。「记忆层」这件事我们重写了三遍 —— 第一遍 Postgres,第二遍 Redis,第三遍 Sidekiq cron job。最后我们意识到:记忆层不是我们的产品,它是产品上的税。Thinkback 是我们希望一开始就有的一样东西:一个无聊、可靠、可观测,不会在凌晨 3 点挂掉的记忆服务。*
-
-规律是这样的:你做出的 AI 在第一次对话里**能用**,但到第十次就**翻车**了 —— 它忘了用户的偏好、昨天的问题、你花三轮调试的工具调用。每一个 AI 应用最终都需要持久记忆。Thinkback 就是那个你不用自己造、自己调、自己运维的版本。
-
----
-
-## ✦ 如何工作
-
-一次对话穿过三层。每一层都有严格的所有权 —— 绝不交叉写入。
-
-```mermaid
-flowchart LR
-    subgraph App["你的应用 / agent"]
-        A[user → assistant<br/>对话轮次]
-    end
-
-    subgraph Thinkback["Thinkback 服务"]
-        direction LR
-        L1["**L1 — Round journal**<br/>PostgreSQL<br/><i>保留最近 N 轮</i>"]
-        L2["**L2 — Session summary**<br/>PostgreSQL + LLM<br/><i>防抖,每 N 轮 1 次</i>"]
-        L3["**L3 — Long-term memory**<br/>Mem0 + Milvus<br/><i>后台抽取,语义召回</i>"]
-    end
-
-    A -->|append| L1
-    L1 -->|trigger| L2
-    L2 -->|extract| L3
-    L3 -.->|"recall (degraded?)"| A
-
-    style L1 fill:#FFFFFF,stroke:#0F172A,stroke-width:2px
-    style L2 fill:#FFFFFF,stroke:#0F172A,stroke-width:2px
-    style L3 fill:#7C3AED,stroke:#A78BFA,stroke-width:2px,color:#FFFFFF
-```
-
-一次请求的流程:
-
-1. **你的应用** 调用 `POST /memory/append`,传入 `user → assistant` 轮次
-2. **L1** 存原始轮次(PostgreSQL,仅追加)
-3. **L2** 防抖更新运行摘要(LLM 调用)
-4. **L3** 后台抽取到向量库(Milvus)
-5. 下次 `POST /memory/recall`,**L1 / L2 / L3** 并行查询;响应标记 `degraded=true`(任一层不可用时),绝不返回半个答案
-
----
-
-## ✦ 横向对比
-
-| | **直接调 Mem0 SDK** | **LangChain memory** | **自建 Postgres + pgvector** | **Thinkback** |
-| --- | :---: | :---: | :---: | :---: |
-| 跨重试的幂等写入 | ❌ | ⚠️ | ⚠️ (自建) | ✅ |
-| 带反压的后台抽取 | ❌ | ❌ | ❌ | ✅ |
-| LLM 宕机时显式 `degraded` 信号 | ❌ | ❌ | ❌ | ✅ |
-| 三层分离(round / summary / long-term) | ❌ | ❌ | ❌ | ✅ |
-| 任务状态机 + 死信 | ❌ | ❌ | ❌ | ✅ |
-| 双时态有效性 (`valid_at` / `invalid_at`) | ❌ | ❌ | ⚠️ (自建) | ✅ |
-| 治理 web UI(管控 + 密钥管理) | ❌ | ❌ | ❌ | ✅ |
-| HTTP + gRPC 共享 Pydantic schema | ❌ (仅 Python) | ❌ (仅 Python) | ⚠️ (自建) | ✅ |
-| OpenAI 兼容 LLM / embedding | ✅ | ✅ | ✅ | ✅ |
-| 可生产部署(K8s, 可观测) | ❌ | ❌ | ⚠️ (自建) | ✅ |
-
----
-
-## ✦ 为什么需要 Thinkback
-
-> **Mem0 是出色的记忆引擎。直接用,它给你事实抽取与语义召回。但它不给你一个 _服务_。**
-
-当你自己在 App 里调 Mem0 时,生产级记忆需求通常长这样:
-
-| 你本来要自己写 | Thinkback 直接给你 |
-| --- | --- |
-| 会话级上下文(最近 N 轮、运行摘要) | L1 日志 + L2 防抖摘要(全在 PostgreSQL) |
-| 跨重试的 Exactly-once 写入 | `journal_id` 指纹,幂等 `append` |
-| LLM / embedding / 向量库宕机时的降级行为 | 显式 `degraded=True` + 原因 — 绝不返回半个答案 |
-| 带反压的后台抽取 | 异步 L3 队列,容量限制、drain、孤儿任务回收 |
-| 列出 / 编辑 / 删除长期记忆的 API | 完整管理面,支持 scoped 删除与审计 |
-| 记忆层实际做了什么 — 可观测 | 任务状态机、重试次数、最近错误、治理台 |
-| 安全 scoped 删除 | `MEMORY` / `SESSION` / `ALL` 范围 + 软删墓碑 |
-| 部署用的 schema 与 readiness | Alembic 迁移、liveness / readiness 探针、metrics |
-
-如果你的场景是「一个进程、一个用户、不需要重试」 — 直接调 Mem0 即可。 如果你要把记忆层当作**别的团队也会依赖的服务** — Thinkback 补的就是这块空缺。
-
----
-
-## ✦ 记忆模型
-
-三层显式,所有权严格 — 单向流动,绝不交叉写入。
-
-| 层 | 存什么 | 存储 | 刷新策略 |
+| | 章节 | 内容 | 阅读时长 |
 | --- | --- | --- | --- |
-| **L1 — Round journal** | 每个完整 `user → assistant` 轮次 | PostgreSQL | 追加,保留最近 *N* 轮 |
-| **L2 — Session summary** | 会话的运行上下文 | PostgreSQL + LLM | 防抖,每 *N* 轮调用一次 LLM |
-| **L3 — Long-term memory** | 跨会话的事实与偏好 | Mem0 + Milvus | 后台异步抽取,语义召回 |
+| **01** | [60 秒看懂 Thinkback](#01--60-秒看懂-thinkback) | 它是什么,你能得到什么 | 30 秒 |
+| **02** | [为什么做这个](#02--为什么做这个) | Mem0 与「记忆服务」之间的空白 | 1 分钟 |
+| **03** | [它如何工作](#03--它如何工作) | L1 / L2 / L3、请求流程、架构 | 2 分钟 |
+| **04** | [快速开始](#04--快速开始) | 跑起来、写入一轮、召回 | 2 分钟 |
+| **05** | [治理台](#05--治理台) | 7 个页面完整导览 | 1 分钟 |
+| **06** | [生产运维](#06--生产运维) | 性能、配置、目录结构、扩展 | 3 分钟 |
+| **07** | [参考手册](#07--参考手册) | 接口清单、FAQ、去哪找什么 | 按需 |
+
+<img src="assets/rule.svg" alt="" width="100%">
+
+## 01 · 60 秒看懂 Thinkback
+
+大多数 AI 应用在第一轮对话里表现良好,到第十轮就崩了 —— 助手忘了用户偏好、忘了昨天的问题、忘了你花三轮才调通的工具调用。到这一步,持久记忆已经不是可选项。
+
+Thinkback 就是那层记忆,做成一个你自己运行的服务。它把三种记忆放在显式且互相独立的层里,通过一套 HTTP / gRPC API 暴露,并且在出问题时明确告诉你。
+
+长期记忆引擎基于 [Mem0](https://github.com/mem0ai/mem0),外加 PostgreSQL 与 Milvus。
+
+<table>
+<tr>
+<td width="50%" valign="top">
+
+<strong>🧠 三层互不打架</strong><br>
+
+短期上下文、运行中的会话摘要、长期事实 —— 每层都有明确归属,不跨层写入,不会被意外覆盖。
+
+</td>
+<td width="50%" valign="top">
+
+<strong>✅ 天生幂等</strong><br>
+
+`journal_id` / `request_id` 指纹让每次写入都可安全重放。同一个 round 发两次,结果一致,不会产生重复记忆。
+
+</td>
+</tr>
+<tr>
+<td width="50%" valign="top">
+
+<strong>🚨 诚实的失败</strong><br>
+
+LLM 或向量库不可用时,响应会带上 `degraded=true` 与 `degradation_reasons`。绝不会把半截答案伪装成完整结果。
+
+</td>
+<td width="50%" valign="top">
+
+<strong>🔌 HTTP + gRPC,同一套 schema</strong><br>
+
+Pydantic 模型是唯一事实来源。协议随你选,类型可共享,`mypy --strict` 全链路类型安全。
+
+</td>
+</tr>
+<tr>
+<td width="50%" valign="top">
+
+<strong>🎛️ 真能用的治理台</strong><br>
+
+React 19 控制台:查看每一条记忆、重放每一个任务、按需吊销或取代,配 ⌘K 命令面板与完整键盘导航。
+
+</td>
+<td width="50%" valign="top">
+
+<strong>🛠️ 你自己掌控</strong><br>
+
+Postgres + Milvus + Mem0,全部开源。K8s 原生,带存活/就绪探针与 Prometheus 指标。Apache 2.0 协议。
+
+</td>
+</tr>
+</table>
+
+### 还包括什么
+
+| 领域 | 你得到什么 |
+| --- | --- |
+| **记忆模型** | 三层结构(L1/L2/L3)与双时态有效性 —— `valid_at` / `invalid_at`。取代一条事实时保留历史,而不是覆盖 |
+| **生命周期** | 索引状态机:`ACTIVE` / `DELETED` / `SUPERSEDED` / `SUPPRESSED`,与后端存储状态解耦 |
+| **可靠性** | 任务状态机,乐观锁、重试预算、死信队列,冷启动时回收孤儿任务 |
+| **治理** | 作用域删除(`MEMORY` / `SESSION` / `ALL`)配合墓碑标记,外加完整审计 |
+| **接入** | v1 公开 API —— API Key + Scope + 租户 + 限流 + 幂等键 |
+| **mem0 提示词** | 在治理台实时编辑 `custom_instructions`、`update_memory_prompt`、`memory_answer_prompt` |
+| **运维** | K8s 清单、Helm chart、Alembic 迁移、Prometheus 指标、确定性测试套件 |
+
+> **v1.0 已发布。** 完整发布说明见[更新日志](CHANGELOG.md)。
+
+<img src="assets/rule.svg" alt="" width="100%">
+
+## 02 · 为什么做这个
+
+> *我们做过一个多租户客服助手。它的「记忆层」被我们重写了三遍 —— 一次在 Postgres,一次在 Redis,一次做成 Sidekiq 定时任务 —— 直到意识到:记忆层不是我们的产品,它只是产品上的税。*
+
+Mem0 是一个很棒的记忆**引擎**,给你事实抽取与语义召回。但它给不了你一个**服务** —— 而把它接进生产应用,意味着这些都得你自己扛:
+
+| 你本该自己造的东西 | Thinkback 直接给你 |
+| --- | --- |
+| 会话级上下文(最近 N 轮、滚动摘要) | PostgreSQL 里的 L1 journal + L2 去抖摘要 |
+| 重试与重放下的恰好一次写入 | 基于指纹的幂等 `append` |
+| LLM / embedding / 向量库宕机时的行为 | 显式 `degraded=true` + 原因,绝不返回半截答案 |
+| 带背压的后台抽取 | 异步 L3 队列,含容量限制、排空、孤儿任务回收 |
+| 列出 / 修改 / 删除长期记忆的 API | 完整管理面,带作用域删除与审计 |
+| 「记忆层到底干了什么」的可观测性 | 任务状态机、重试次数、最近一次错误、治理台 |
+| 安全的作用域删除 | `MEMORY` / `SESSION` / `ALL` 三种作用域 + 墓碑 |
+| 可部署的 schema 与就绪状态 | Alembic 迁移、存活/就绪探针、指标 |
+
+### 横向对比
+
+| | **裸用 Mem0** | **LangChain memory** | **自建 Postgres + pgvector** | **Thinkback** |
+| --- | :---: | :---: | :---: | :---: |
+| 重试下的幂等写入 | ❌ | ⚠️ | ⚠️ 自己造 | ✅ |
+| 带背压的后台抽取 | ❌ | ❌ | ❌ | ✅ |
+| LLM 宕机时显式 `degraded` | ❌ | ❌ | ❌ | ✅ |
+| 三层分离 | ❌ | ❌ | ❌ | ✅ |
+| 任务状态机 + 死信 | ❌ | ❌ | ❌ | ✅ |
+| 双时态有效性 | ❌ | ❌ | ⚠️ 自己造 | ✅ |
+| 治理台(治理 + 密钥管理) | ❌ | ❌ | ❌ | ✅ |
+| HTTP + gRPC,共享 schema | ❌ 仅 Python | ❌ 仅 Python | ⚠️ 自己造 | ✅ |
+| 自带 LLM / embedding 端点 | ✅ | ✅ | ✅ | ✅ |
+| 可生产部署 | ❌ | ❌ | ⚠️ 自己造 | ✅ |
+
+**如果你的场景是「单进程、单用户、无重试」—— 直接调 Mem0。** 如果你交付的是其他团队依赖的服务,Thinkback 填的就是这段空白。
+
+<img src="assets/rule.svg" alt="" width="100%">
+
+## 03 · 它如何工作
+
+### 三层记忆,单向流动
+
+各层之间从不跨层写入,每层的数据完全归自己所有。
+
+<table>
+<tr>
+<td width="33%" valign="top">
+
+<strong>L1 —— 轮次日志</strong><br>
+
+每一轮完整的 `user → assistant` 对话。
+
+<em>存储</em> PostgreSQL<br>
+<em>更新</em> 仅追加,保留最近 <em>N</em> 轮
+
+</td>
+<td width="33%" valign="top">
+
+<strong>L2 —— 会话摘要</strong><br>
+
+该会话的滚动上下文。
+
+<em>存储</em> PostgreSQL + LLM<br>
+<em>更新</em> 去抖 —— 每 <em>N</em> 轮才调一次 LLM
+
+</td>
+<td width="33%" valign="top">
+
+<strong>L3 —— 长期记忆</strong><br>
+
+跨会话的事实与偏好。
+
+<em>存储</em> Mem0 + Milvus<br>
+<em>更新</em> 后台抽取、语义召回
+
+</td>
+</tr>
+</table>
 
 ```mermaid
 flowchart LR
-    L1["L1 · Round journal<br/>PostgreSQL"]
-    L2["L2 · Session summary<br/>PostgreSQL + LLM"]
-    L3["L3 · Long-term memory<br/>Mem0 + Milvus"]
+    L1["L1 · 轮次日志<br/>PostgreSQL"]
+    L2["L2 · 会话摘要<br/>PostgreSQL + LLM"]
+    L3["L3 · 长期记忆<br/>Mem0 + Milvus"]
     L1 -->|append| L2
     L2 -->|extract| L3
     L3 -.->|recall| L1
 ```
 
----
+### 请求流程
 
-## ✦ 能力清单
+1. **`append`** 同步把这一轮写入 L1 并返回。L2 排期更新,L3 抽取进入后台队列。
+2. **`recall`** 读取三层记忆并合并结果,每条命中都标注来源层级,调用方因此知道这条事实从哪来。
+3. **后台 worker** 排空 L3 队列:经 Mem0 抽取事实、向量化后写入 Milvus。重试有上限,超限进死信。
+4. **任何降级都会被标记**并附上原因。由调用方决定是降级回退还是直接报错。
 
-### 记忆模型
+<img src="assets/architecture.svg" alt="Thinkback 架构图" width="100%">
 
-- **三层显式,互不交叉写入** — L3 完全由 Mem0 拥有
-- **双时态有效性** — `valid_at` / `invalid_at`;取代事实时保留历史而非覆盖
-- **业务侧索引状态机** — `ACTIVE` / `DELETED` / `SUPERSEDED` / `SUPPRESSED`,与后端存储状态解耦
-- **衰减清理** — 长时间未召回的尾部记忆被压制(不可达但不删除);一旦被召回即重新激活。*默认关闭。*
+内部实现 —— 六边形 ports、依赖反转、确切 schema —— 见
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。
 
-### 可靠性
+<img src="assets/rule.svg" alt="" width="100%">
 
-- **幂等写入** — `request_id` / `round_id` 指纹,重放安全
-- **Scoped 删除** — 按单条记忆、会话或用户全局,带软删墓碑
-- **显式降级** — `degraded=True` + `degradation_reasons`,调用方能区分真答案与降级答案
-- **后台任务治理** — 乐观锁状态机、重试预算、死信、启动时回收孤儿任务
+## 04 · 快速开始
 
-### 生产面
-
-- **HTTP + gRPC** — 共享同一份 Pydantic schema,任选协议
-- **端到端强类型** — Pydantic v2 + `mypy --strict`;边界处无 `Any`
-- **OpenAI 兼容端点** — 接入自己的 LLM 与 embedding
-- **Kubernetes 原生** — liveness / readiness 探针、Prometheus metrics、Alembic 迁移
-- **确定性测试套件** — 内存 + fake Mem0 backend,CI 不依赖真实服务
-- **治理台** — 检查与修复记忆层实际做了什么
-
-### 集成与运维
-
-- **v1 公开 API** — API key + Scope + Tenant + 限流 + Idempotency-Key,实时生效
-- **mem0 提示词深度管理** — 抽取约束 / 更新策略 / 召回回答 三大 prompt 实时编辑
-- **Prometheus metrics** — 请求延迟、队列深度、任务状态、L3 worker 统计
-- **OpenAPI / Swagger UI** — `/docs` 自动生成,与 Pydantic 保持同步
-
-### 典型使用场景
-
-- 跨会话保留上下文的对话助手
-- 客户支持机器人回忆历史工单与偏好
-- 多轮 agent 在工具调用与中断中保留任务上下文
-- 必须 on-prem 的自托管 AI 基础设施
-
----
-
-## ✦ 截图
-
-### 总览 — 系统健康一览
-
-<div align="center">
-  <img src="assets/screenshots/01-overview.png" alt="Thinkback 总览 — 96px hero KPI + sparkline + System Pulse + Needs Attention + 热力图" width="100%">
-  <p><em>96px hero KPI + 24h sparkline · System Pulse 4 个子 KPI · Needs Attention 列表 · 5min 热力图 · 最近治理审计时间轴</em></p>
-</div>
-
-### 记忆浏览器 — 搜索 / 来源反链 / 对比
-
-<div align="center">
-  <img src="assets/screenshots/02-memories-list.png" alt="记忆浏览器 — editorial card 列表 + 状态色点" width="100%">
-  <p><em>editorial 卡片列表 + 状态色点 · ⌘K 命令面板 · 键盘导航(j/k/x) · URL 深链</em></p>
-</div>
-
-<div align="center">
-  <img src="assets/screenshots/02-memories-detail.png" alt="记忆详情抽屉 — 字段 ⓘ 提示 + 来源反链" width="100%">
-  <p><em>详情抽屉:每个字段都有 ⓘ 提示说明含义 · 来源反链到 journal · 召回次数</em></p>
-</div>
-
-### 任务监控 — KPI sparkline + 状态机 + 死信
-
-<div align="center">
-  <img src="assets/screenshots/03-tasks-list.png" alt="任务监控 — 4 个 KPI + sparkline + 状态 Tab + 任务卡列表" width="100%">
-  <p><em>4 个 KPI + sparkline(红=FAILED,紫=DEAD LETTER) · 状态 Tab · 任务卡(显示重试次数)</em></p>
-</div>
-
-### 治理操作 — scoped 删除 + 确认流
-
-<div align="center">
-  <img src="assets/screenshots/04-govern-delete.png" alt="治理台 — 删除记忆表单(范围选择 + 复述确认)" width="100%">
-  <p><em>删除表单:范围(memory / session / all) · 语义色左边框 · 二次确认弹窗 · 操作中 Spinner</em></p>
-</div>
-
-### 集成 & mem0 提示词管理
-
-<div align="center">
-  <img src="assets/screenshots/07-integration-keys.png" alt="集成 — API Key 管理 + 生成对话框" width="100%">
-  <p><em>API Key 管理:列表 · 生成(一次性明文) · 撤销(软删) · 协议概述 · 端点参考 · 错误码</em></p>
-</div>
-
-<div align="center">
-  <img src="assets/screenshots/07-integration-prompts.png" alt="mem0 提示词管理 — 流水线说明 + 可配置 prompt + 调优提示" width="100%">
-  <p><em>mem0 深度管理:4 阶段流水线说明 · custom_instructions / update_memory_prompt / memory_answer_prompt · 调优提示 + 示例</em></p>
-</div>
-
-### 审计时间轴 + 系统配置
-
-<div align="center">
-  <img src="assets/screenshots/05-audit.png" alt="审计时间轴 — 语义色圆点 + 竖向连接 + 可展开 JSON" width="100%">
-  <p><em>审计时间轴:语义色动作点(删除 / 更新 / 重建) · 可展开 JSON 详情 · 动作筛选</em></p>
-</div>
-
-<div align="center">
-  <img src="assets/screenshots/06-config.png" alt="系统配置 — 按类别分组 + SECRET 标记 + 搜索别名" width="100%">
-  <p><em>系统配置:按类别分组(PostgreSQL / L2 / L3 等) · SECRET 标记 · 搜索别名(数据库 / 向量库)</em></p>
-</div>
-
-### 移动端响应
-
-<div align="center">
-  <img src="assets/screenshots/08-mobile.png" alt="移动端视图 — 治理台适配窄屏" width="50%">
-  <p><em>同一治理台适配窄屏 · 移动友好卡片布局</em></p>
-</div>
-
----
-
-## ✦ 快速开始
-
-### 启动服务
+### 跑起来
 
 ```bash
 git clone https://github.com/mcgrapeng/thinkback.git
 cd thinkback
 
-# 安装依赖
-uv sync --frozen --group dev
+uv sync --frozen --group dev     # 安装依赖
+make dev-up                      # 启动本地 PostgreSQL(或在 .env 里指向你自己的)
+cp .env.example .env             # 填入 MEMORY_LLM_KEY、MILVUS_URL、各类端点
 
-# 启动本地 PostgreSQL(可选 — 也可以让 .env 指向你自己的实例)
-make dev-up
-
-# 配置
-cp .env.example .env   # 填入 MEMORY_LLM_KEY, MILVUS_URL, LLM & embedding endpoints
-
-# 启动 API
-uv run uvicorn thinkback.api.app:app --host 0.0.0.0 --port 8000
+make dev                         # API 在 :8000 + 治理台在 :7001
 ```
 
-或者一行起 API + 治理台前端(端口自动 fallback):
-
-```bash
-make dev
-```
-
-健康检查:
+验证:
 
 ```bash
 curl http://localhost:8000/health/ready
 ```
 
-### 写入一个 memory 轮次
+### 写入一轮记忆
 
-`POST /memory/append` 记录一个完整 `user → assistant` 轮次,触发 L1/L2 更新 + 后台 L3 抽取。
+`POST /memory/append` 记录一轮完整的 `user → assistant` 对话,触发 L1/L2 更新,并把 L3 抽取排入后台队列。
 
 ```bash
 curl -X POST http://localhost:8000/memory/append \
@@ -360,10 +265,10 @@ curl -X POST http://localhost:8000/memory/append \
     "source_timestamp": "2026-01-15T10:00:00Z",
     "messages": [
       { "message_id": "m1", "role": "user",
-        "content": "我偏好深色模式和 vim 快捷键。",
+        "content": "I prefer dark mode and vim keybindings.",
         "timestamp": "2026-01-15T10:00:00Z" },
       { "message_id": "m2", "role": "assistant",
-        "content": "好的,已记住。",
+        "content": "Noted. I will remember that.",
         "timestamp": "2026-01-15T10:00:02Z" }
     ]
   }'
@@ -380,7 +285,7 @@ curl -X POST http://localhost:8000/memory/append \
 
 ### 召回相关记忆
 
-`POST /memory/recall` 返回 L1/L2/L3 命中,并在某层不可用时显式给出降级信号。
+`POST /memory/recall` 返回 L1/L2/L3 的命中结果,并在某一层不可用时给出明确的降级信号。
 
 ```bash
 curl -X POST http://localhost:8000/memory/recall \
@@ -388,7 +293,7 @@ curl -X POST http://localhost:8000/memory/recall \
   -d '{
     "user_id": "alice",
     "session_id": "support-002",
-    "query": "这个用户有什么 UI 偏好?",
+    "query": "What UI preferences does this user have?",
     "l3_limit": 3
   }'
 ```
@@ -399,604 +304,349 @@ curl -X POST http://localhost:8000/memory/recall \
   "degraded": false,
   "degradation_reasons": [],
   "items": [
-    { "layer": "L3", "content": "用户偏好深色模式和 vim 快捷键。", ... }
+    { "layer": "L3", "content": "Prefers dark mode and vim keybindings." }
   ]
 }
 ```
 
-### 业务系统集成(v1 API)
+### 接入业务系统
 
-生产环境集成请用 v1 公开 API(API key + Scope + 限流 + 幂等):
+生产流量请使用 v1 公开 API —— API Key、基于 scope 的鉴权、租户隔离、限流、幂等键。
 
 ```bash
-# 在治理台 /integration 生成 API key
-# 然后调用:
 curl -X POST https://your-thinkback/v1/memory/recall \
   -H "Authorization: Bearer tbk_live_xxxxxxxx" \
   -H "X-Tenant-Id: tenant_001" \
-  -H "Content-Type: application/json" \
   -H "Idempotency-Key: idem_001" \
-  -d '{
-    "user_id": "u_8421",
-    "session_id": "s_001",
-    "query": "用户偏好什么编辑器?",
-    "intent": "chat",
-    "l3_limit": 5
-  }'
+  -H "Content-Type: application/json" \
+  -d '{ "user_id": "u_8421", "session_id": "s_001", "query": "用户偏好什么编辑器?", "l3_limit": 5 }'
 ```
 
-完整规范见 [`docs/specs/2026-10-08-thinkback-integration-protocol-v1.md`](docs/specs/2026-10-08-thinkback-integration-protocol-v1.md)。
+Python / TypeScript / cURL 完整示例:**[docs/SDK.md](docs/SDK.md)**。
+协议规范:
+**[docs/specs/2026-10-08-thinkback-integration-protocol-v1.md](docs/specs/2026-10-08-thinkback-integration-protocol-v1.md)**。
 
----
+<img src="assets/rule.svg" alt="" width="100%">
 
-## ✦ v1.0 亮点
+## 05 · 治理台
 
-> **🎉 2026-10 — Thinkback v1.0 首个公开发布版**
+React 19 + Vite + TanStack Router。7 个页面、⌘K 命令面板、`j` / `k` / `x` 键盘导航、URL 深链,以及响应式布局。
 
-| 模块 | 亮点 |
-| --- | --- |
-| **记忆模型** | 三层(L1/L2/L3) + 双时态有效性(`valid_at` / `invalid_at`) |
-| **API** | HTTP + gRPC,26+ 端点,v1 公开集成协议 |
-| **治理台** | React 19 SPA:7 页面、⌘K 命令面板、键盘导航(j/k/x)、URL 深链 |
-| **治理** | Scoped 删除(memory/session/ALL)、幂等写入、审计留痕 |
-| **可观测** | K8s 原生、Prometheus metrics、Alembic 迁移、615+ 测试 |
-| **集成** | v1 公开 API:API key + Scope + Tenant + 限流 + 幂等 |
-| **mem0 提示词** | 实时编辑 `custom_instructions` / `update_memory_prompt` / `memory_answer_prompt` |
+### 总览 —— 系统健康一屏掌握
 
-详见 [CHANGELOG](CHANGELOG.md)。
+<img src="assets/screenshots/01-overview.png" alt="总览" width="100%">
 
----
+四个核心 KPI、系统脉搏、L3 队列状态与最近审计动态。
 
-## ✦ API 参考
+### 记忆浏览器 —— 搜索、来源回链、对比
 
-### 记忆核心(`/memory/*`)
+<img src="assets/screenshots/02-memories-list.png" alt="记忆浏览器" width="100%">
 
-| 方法 | 路径 | 用途 |
-| --- | --- | --- |
-| `POST` | `/memory/append` | 写入 `user → assistant` 轮次,触发 L1/L2/L3 更新 |
-| `POST` | `/memory/recall` | 召回相关记忆(L1/L2/L3),带降级信号 |
-| `GET` | `/memory` | 列表记忆,支持 `user_id` / `statuses` 筛选与分页 |
-| `GET` | `/memory/{memory_id}` | 获取单条记忆详情 |
-| `PUT` | `/memory/{memory_id}` | 更新记忆正文,保留历史 |
-| `DELETE` | `/memory/{memory_id}` | Scoped 删除(`MEMORY` / `SESSION` / `ALL`) |
-| `GET` | `/memory/tasks/{task_id}` | 异步任务状态(重试、最后错误、结果) |
-| `GET` | `/memory/l3/status` | L3 后台队列与 worker 状态 |
+按用户与状态过滤,从一条记忆跳回产生它的那一轮对话,对比不同版本。
 
-### 业务系统集成(`/v1/memory/*`)
+### 任务 —— 状态、重试与死信
 
-| 方法 | 路径 | 所需 scope | 用途 |
-| --- | --- | --- | --- |
-| `POST` | `/v1/memory/append` | `memory:append` | 写入记忆轮次(v1 协议) |
-| `POST` | `/v1/memory/recall` | `memory:recall` | 召回记忆(v1 协议) |
-| `GET` | `/v1/memory` | `memory:read` | 列表记忆 |
-| `GET/PUT/DELETE` | `/v1/memory/{id}` | `memory:read/update/delete` | CRUD |
+<img src="assets/screenshots/03-tasks-list.png" alt="任务" width="100%">
 
-### 治理(`/admin/api/*`)
+KPI 迷你趋势图、完整任务状态机、重试次数、最近错误,以及死信排查入口。
 
-| 方法 | 路径 | 用途 |
-| --- | --- | --- |
-| `GET` | `/admin/api/overview` | 系统脉搏:4 个 hero KPI + System Pulse + L3 状态 + 最近审计 |
-| `GET` | `/admin/api/tasks` | 任务列表,支持 `statuses` 筛选与分页 |
-| `GET` | `/admin/api/memories` | 记忆列表,支持 `user_id` / `statuses` 与来源反链 |
-| `GET` | `/admin/api/audit` | 审计日志,支持 `action` 筛选(删除 / 更新 / 重建) |
-| `POST` | `/admin/api/{delete,update,rebuild}` | 治理操作,`operation_id` 幂等 |
-| `GET` | `/admin/api/mem0/configs` | 列出 mem0 提示词配置 |
-| `PUT` | `/admin/api/mem0/configs/{key}` | 更新 mem0 提示词(实时) |
-| `GET` | `/admin/api/integration/keys` | 列出 API key |
-| `POST` | `/admin/api/integration/keys` | 生成新 API key |
+### 治理 —— 带确认的作用域删除
 
-gRPC 端点镜像同样操作,见 `proto/memory.proto`,供服务间调用。
+<img src="assets/screenshots/04-govern-delete.png" alt="治理" width="100%">
 
-完整交互式 API 文档在 **`/docs`**(Swagger UI)和 **`/redoc`**。
+按记忆、按会话或按用户删除。始终有作用域、始终要确认、始终留审计。
 
-### 请求 / 响应速查
+### 审计时间线
+
+<img src="assets/screenshots/05-audit.png" alt="审计" width="100%">
+
+每一次删除、更新、重建,都可按动作过滤,含操作人与时间戳。
+
+### 系统配置
+
+<img src="assets/screenshots/06-config.png" alt="配置" width="100%">
+
+运行时配置的精选只读视图。
+
+### 接入 —— 密钥与 mem0 提示词
+
+<img src="assets/screenshots/07-integration-keys.png" alt="接入" width="100%">
+
+生成与吊销 API Key;实时编辑 mem0 的抽取、更新、召回提示词。改动在下一次写入即生效,无需重启。
 
 <details>
-<summary><b>POST /memory/append</b> — 写入一轮对话</summary>
+<summary><b>更多截图</b></summary>
 
-**请求:**
-```json
-{
-  "request_id": "req-001",
-  "user_id": "alice",
-  "session_id": "support-001",
-  "round_id": "round-001",
-  "source_timestamp": "2026-01-15T10:00:00Z",
-  "messages": [
-    { "message_id": "m1", "role": "user",
-      "content": "我偏好深色模式和 vim 快捷键。",
-      "timestamp": "2026-01-15T10:00:00Z" },
-    { "message_id": "m2", "role": "assistant",
-      "content": "好的,已记住。",
-      "timestamp": "2026-01-15T10:00:02Z" }
-  ]
-}
-```
+**记忆 —— 详情视图**
 
-**响应:**
-```json
-{
-  "status": "completed",
-  "task_id": "task-abc123",
-  "round_id": "round-001",
-  "l3_events": []
-}
-```
+<img src="assets/screenshots/02-memories-detail.png" alt="记忆详情" width="100%">
+
+**任务 —— 展开行**
+
+<img src="assets/screenshots/03-tasks-expanded.png" alt="任务展开" width="100%">
+
+**治理 —— 更新一条记忆**
+
+<img src="assets/screenshots/04-govern-update.png" alt="治理更新" width="100%">
+
+**接入 —— mem0 提示词编辑**
+
+<img src="assets/screenshots/07-integration-prompts.png" alt="mem0 提示词" width="100%">
+
+**移动端响应式布局**
+
+<img src="assets/screenshots/08-mobile.png" alt="移动端" width="100%">
 
 </details>
 
-<details>
-<summary><b>POST /memory/recall</b> — 召回相关记忆</summary>
+<img src="assets/rule.svg" alt="" width="100%">
 
-**请求:**
-```json
-{
-  "user_id": "alice",
-  "session_id": "support-002",
-  "query": "这个用户有什么 UI 偏好?",
-  "intent": "chat",
-  "l3_limit": 5
-}
-```
+## 06 · 生产运维
 
-**响应:**
-```json
-{
-  "status": "ok",
-  "degraded": false,
-  "degradation_reasons": [],
-  "items": [
-    {
-      "layer": "L3",
-      "content": "用户偏好深色模式和 vim 快捷键。",
-      "memory_id": "mem-001",
-      "score": 0.92
-    }
-  ]
-}
-```
+### 性能
 
-</details>
+单机开发环境实测 —— `make dev`,M3 MacBook Air,mock LLM。
 
----
-
-## ✦ 架构图
-
-```svg
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 400" width="100%" height="400">
-  <defs>
-    <linearGradient id="ag-bg" x1="0" y1="0" x2="1200" y2="400">
-      <stop offset="0%" stop-color="#FDFCF8"/>
-      <stop offset="100%" stop-color="#F5F2EC"/>
-    </linearGradient>
-  </defs>
-  <rect width="1200" height="400" fill="url(#ag-bg)"/>
-  <text x="600" y="35" text-anchor="middle" font-family="system-ui,sans-serif" font-size="18" font-weight="700" fill="#0F172A">Thinkback — 三层记忆架构</text>
-
-  <rect x="40" y="70" width="180" height="110" rx="12" fill="#FFFFFF" stroke="#E8E2D4" stroke-width="1.5"/>
-  <text x="130" y="105" text-anchor="middle" font-family="system-ui,sans-serif" font-size="14" font-weight="600" fill="#0F172A">你的应用 / Agent</text>
-  <text x="130" y="128" text-anchor="middle" font-family="system-ui,sans-serif" font-size="11" fill="#64748B">user → assistant</text>
-  <text x="130" y="148" text-anchor="middle" font-family="system-ui,sans-serif" font-size="11" fill="#64748B">对话轮次</text>
-
-  <rect x="280" y="50" width="560" height="300" rx="16" fill="#FFFFFF" stroke="#E8E2D4" stroke-width="1.5"/>
-  <text x="560" y="80" text-anchor="middle" font-family="system-ui,sans-serif" font-size="16" font-weight="700" fill="#0F172A">Thinkback 服务</text>
-
-  <rect x="310" y="110" width="160" height="90" rx="10" fill="#F8F6F0" stroke="#E8E2D4" stroke-width="1"/>
-  <text x="390" y="135" text-anchor="middle" font-family="system-ui,sans-serif" font-size="11" font-weight="600" fill="#475569">L1 · Round Journal</text>
-  <text x="390" y="155" text-anchor="middle" font-family="system-ui,sans-serif" font-size="10" fill="#64748B">PostgreSQL</text>
-  <text x="390" y="172" text-anchor="middle" font-family="system-ui,sans-serif" font-size="9" fill="#94A3B8">last-N rounds</text>
-  <text x="390" y="190" text-anchor="middle" font-family="system-ui,sans-serif" font-size="9" fill="#94A3B8">append-only</text>
-
-  <rect x="490" y="110" width="160" height="90" rx="10" fill="#F8F6F0" stroke="#E8E2D4" stroke-width="1"/>
-  <text x="570" y="135" text-anchor="middle" font-family="system-ui,sans-serif" font-size="11" font-weight="600" fill="#475569">L2 · Session Summary</text>
-  <text x="570" y="155" text-anchor="middle" font-family="system-ui,sans-serif" font-size="10" fill="#64748B">PostgreSQL + LLM</text>
-  <text x="570" y="172" text-anchor="middle" font-family="system-ui,sans-serif" font-size="9" fill="#94A3B8">防抖</text>
-  <text x="570" y="190" text-anchor="middle" font-family="system-ui,sans-serif" font-size="9" fill="#94A3B8">每 N 轮 1 次</text>
-
-  <rect x="670" y="110" width="160" height="90" rx="10" fill="#7C3AED" stroke="#7C3AED" stroke-width="1"/>
-  <text x="750" y="135" text-anchor="middle" font-family="system-ui,sans-serif" font-size="11" font-weight="600" fill="#FFFFFF">L3 · 长期记忆</text>
-  <text x="750" y="155" text-anchor="middle" font-family="system-ui,sans-serif" font-size="10" fill="#E9E4FA">Mem0 + Milvus</text>
-  <text x="750" y="172" text-anchor="middle" font-family="system-ui,sans-serif" font-size="9" fill="#C4B5FD">后台抽取</text>
-  <text x="750" y="190" text-anchor="middle" font-family="system-ui,sans-serif" font-size="9" fill="#C4B5FD">语义召回</text>
-
-  <rect x="310" y="220" width="520" height="40" rx="8" fill="#F8F6F0" stroke="#E8E2D4" stroke-width="1"/>
-  <text x="570" y="243" text-anchor="middle" font-family="system-ui,sans-serif" font-size="11" fill="#475569">幂等写入 · 任务治理 · Scoped 删除 · 降级信号</text>
-
-  <path d="M 220 125 L 310 125" stroke="#64748B" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
-  <text x="265" y="118" text-anchor="middle" font-family="system-ui,sans-serif" font-size="9" fill="#64748B">append</text>
-  <path d="M 220 155 L 310 155" stroke="#64748B" stroke-width="2" stroke-dasharray="4,3" fill="none" marker-end="url(#arrow)"/>
-  <text x="265" y="148" text-anchor="middle" font-family="system-ui,sans-serif" font-size="9" fill="#64748B">recall</text>
-
-  <defs>
-    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto">
-      <path d="M 0 0 L 10 5 L 0 10 z" fill="#64748B"/>
-    </marker>
-  </defs>
-
-  <rect x="900" y="70" width="280" height="70" rx="10" fill="#FFFFFF" stroke="#E8E2D4" stroke-width="1"/>
-  <text x="1040" y="95" text-anchor="middle" font-family="system-ui,sans-serif" font-size="11" font-weight="600" fill="#0F172A">HTTP + gRPC</text>
-  <text x="1040" y="115" text-anchor="middle" font-family="system-ui,sans-serif" font-size="10" fill="#64748B">同一 Pydantic schema,任选协议</text>
-
-  <rect x="900" y="160" width="280" height="70" rx="10" fill="#FFFFFF" stroke="#E8E2D4" stroke-width="1"/>
-  <text x="1040" y="185" text-anchor="middle" font-family="system-ui,sans-serif" font-size="11" font-weight="600" fill="#0F172A">治理台</text>
-  <text x="1040" y="205" text-anchor="middle" font-family="system-ui,sans-serif" font-size="10" fill="#64748B">React 19 + TanStack · 键盘导航</text>
-
-  <rect x="900" y="250" width="280" height="70" rx="10" fill="#FFFFFF" stroke="#E8E2D4" stroke-width="1"/>
-  <text x="1040" y="275" text-anchor="middle" font-family="system-ui,sans-serif" font-size="11" font-weight="600" fill="#0F172A">可观测</text>
-  <text x="1040" y="295" text-anchor="middle" font-family="system-ui,sans-serif" font-size="10" fill="#64748B">任务状态机 · Prometheus metrics</text>
-
-  <text x="600" y="380" text-anchor="middle" font-family="system-ui,sans-serif" font-size="11" fill="#94A3B8">Mem0 + Milvus + PostgreSQL — 全部开源</text>
-</svg>
-```
-
----
-
-## ✦ 性能
-
-单机开发环境(`make dev`,M3 MacBook Air,mock LLM)实测:
-
-| 工作负载 | 延迟 p50 | 延迟 p95 | 吞吐量 |
+| 负载 | p50 | p95 | 吞吐 |
 | --- | --- | --- | --- |
-| `POST /memory/append`(小轮次) | 8 ms | 22 ms | 850 req/s |
-| `POST /memory/recall`(5 命中) | 24 ms | 68 ms | 410 req/s |
+| `POST /memory/append`(小 round) | 8 ms | 22 ms | 850 req/s |
+| `POST /memory/recall`(5 条命中) | 24 ms | 68 ms | 410 req/s |
 | `GET /memory`(50 条结果) | 4 ms | 9 ms | 2 200 req/s |
-| `DELETE /memory/{id}`(scoped) | 6 ms | 14 ms | 1 100 req/s |
+| `DELETE /memory/{id}`(带作用域) | 6 ms | 14 ms | 1 100 req/s |
 
-```svg
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 320" width="100%" height="320">
-  <rect width="1200" height="320" fill="#FDFCF8"/>
-  <text x="60" y="35" font-family="system-ui,sans-serif" font-size="16" font-weight="700" fill="#0F172A">延迟对比 (ms) — p50 vs p95</text>
-  <line x1="200" y1="60" x2="200" y2="280" stroke="#E8E2D4" stroke-width="1"/>
-  <line x1="400" y1="60" x2="400" y2="280" stroke="#E8E2D4" stroke-width="1"/>
-  <line x1="600" y1="60" x2="600" y2="280" stroke="#E8E2D4" stroke-width="1"/>
-  <line x1="800" y1="60" x2="800" y2="280" stroke="#E8E2D4" stroke-width="1"/>
-  <text x="200" y="295" text-anchor="middle" font-family="system-ui,sans-serif" font-size="10" fill="#64748B">20ms</text>
-  <text x="400" y="295" text-anchor="middle" font-family="system-ui,sans-serif" font-size="10" fill="#64748B">40ms</text>
-  <text x="600" y="295" text-anchor="middle" font-family="system-ui,sans-serif" font-size="10" fill="#64748B">60ms</text>
-  <text x="800" y="295" text-anchor="middle" font-family="system-ui,sans-serif" font-size="10" fill="#64748B">80ms</text>
+<img src="assets/performance.svg" alt="延迟 p50 与 p95 对比" width="100%">
 
-  <text x="60" y="80" font-family="system-ui,sans-serif" font-size="11" fill="#475569">POST /memory/append</text>
-  <rect x="200" y="68" width="80" height="14" rx="3" fill="#7C3AED"/>
-  <text x="290" y="78" font-family="system-ui,sans-serif" font-size="10" fill="#7C3AED">p50 8ms</text>
-  <rect x="200" y="84" width="220" height="14" rx="3" fill="#A78BFA" opacity="0.5"/>
-  <text x="430" y="94" font-family="system-ui,sans-serif" font-size="10" fill="#A78BFA">p95 22ms</text>
+L3 抽取异步执行 —— 端到端延迟主要由你配置的 LLM 与 embedding 端点决定,而不是 Thinkback 本身。
 
-  <text x="60" y="125" font-family="system-ui,sans-serif" font-size="11" fill="#475569">POST /memory/recall</text>
-  <rect x="200" y="113" width="240" height="14" rx="3" fill="#7C3AED"/>
-  <text x="450" y="123" font-family="system-ui,sans-serif" font-size="10" fill="#7C3AED">p50 24ms</text>
-  <rect x="200" y="129" width="680" height="14" rx="3" fill="#A78BFA" opacity="0.5"/>
-  <text x="890" y="139" font-family="system-ui,sans-serif" font-size="10" fill="#A78BFA">p95 68ms</text>
+### 配置
 
-  <text x="60" y="170" font-family="system-ui,sans-serif" font-size="11" fill="#475569">GET /memory</text>
-  <rect x="200" y="158" width="40" height="14" rx="3" fill="#7C3AED"/>
-  <text x="250" y="168" font-family="system-ui,sans-serif" font-size="10" fill="#7C3AED">p50 4ms</text>
-  <rect x="200" y="174" width="90" height="14" rx="3" fill="#A78BFA" opacity="0.5"/>
-  <text x="300" y="184" font-family="system-ui,sans-serif" font-size="10" fill="#A78BFA">p95 9ms</text>
-
-  <text x="60" y="215" font-family="system-ui,sans-serif" font-size="11" fill="#475569">DELETE /memory</text>
-  <rect x="200" y="203" width="60" height="14" rx="3" fill="#7C3AED"/>
-  <text x="270" y="213" font-family="system-ui,sans-serif" font-size="10" fill="#7C3AED">p50 6ms</text>
-  <rect x="200" y="219" width="140" height="14" rx="3" fill="#A78BFA" opacity="0.5"/>
-  <text x="350" y="229" font-family="system-ui,sans-serif" font-size="10" fill="#A78BFA">p95 14ms</text>
-
-  <rect x="200" y="265" width="12" height="12" fill="#7C3AED" rx="2"/>
-  <text x="220" y="275" font-family="system-ui,sans-serif" font-size="10" fill="#475569">p50</text>
-  <rect x="270" y="265" width="12" height="12" fill="#A78BFA" opacity="0.5" rx="2"/>
-  <text x="290" y="275" font-family="system-ui,sans-serif" font-size="10" fill="#475569">p95</text>
-</svg>
-```
-
-L3 后台抽取是异步的,延迟瓶颈在所配的 LLM 与 embedding 端点,不在 Thinkback 自身。
-
----
-
-## ✦ 路线图
-
-```svg
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 220" width="100%" height="220">
-  <rect width="1200" height="220" fill="#FDFCF8"/>
-  <text x="60" y="35" font-family="system-ui,sans-serif" font-size="16" font-weight="700" fill="#0F172A">路线图</text>
-  <line x1="150" y1="110" x2="1150" y2="110" stroke="#E8E2D4" stroke-width="2"/>
-  <circle cx="250" cy="110" r="12" fill="#7C3AED" stroke="#FFFFFF" stroke-width="2"/>
-  <text x="250" y="85" text-anchor="middle" font-family="system-ui,sans-serif" font-size="11" font-weight="600" fill="#0F172A">✅ 2026 Q1</text>
-  <text x="250" y="145" text-anchor="middle" font-family="system-ui,sans-serif" font-size="10" fill="#475569">核心记忆层</text>
-  <text x="250" y="162" text-anchor="middle" font-family="system-ui,sans-serif" font-size="10" fill="#475569">治理台 v1</text>
-
-  <circle cx="500" cy="110" r="12" fill="#7C3AED" stroke="#FFFFFF" stroke-width="2"/>
-  <text x="500" y="85" text-anchor="middle" font-family="system-ui,sans-serif" font-size="11" font-weight="600" fill="#0F172A">✅ 2026 Q2</text>
-  <text x="500" y="145" text-anchor="middle" font-family="system-ui,sans-serif" font-size="10" fill="#475569">v1 集成 API</text>
-  <text x="500" y="162" text-anchor="middle" font-family="system-ui,sans-serif" font-size="10" fill="#475569">mem0 提示词管理</text>
-
-  <circle cx="750" cy="110" r="12" fill="#7C3AED" stroke="#FFFFFF" stroke-width="2"/>
-  <text x="750" y="85" text-anchor="middle" font-family="system-ui,sans-serif" font-size="11" font-weight="600" fill="#0F172A">🔄 2026 Q3</text>
-  <text x="750" y="145" text-anchor="middle" font-family="system-ui,sans-serif" font-size="10" fill="#475569">Webhook 事件</text>
-  <text x="750" y="162" text-anchor="middle" font-family="system-ui,sans-serif" font-size="10" fill="#475569">Python SDK</text>
-
-  <circle cx="1000" cy="110" r="12" fill="#FFFFFF" stroke="#A78BFA" stroke-width="2" stroke-dasharray="3,2"/>
-  <text x="1000" y="85" text-anchor="middle" font-family="system-ui,sans-serif" font-size="11" font-weight="600" fill="#64748B">🎯 2026 Q4</text>
-  <text x="1000" y="145" text-anchor="middle" font-family="system-ui,sans-serif" font-size="10" fill="#64748B">TypeScript SDK</text>
-  <text x="1000" y="162" text-anchor="middle" font-family="system-ui,sans-serif" font-size="10" fill="#64748B">多租户隔离</text>
-</svg>
-```
-
-> [!NOTE]
-> 路线图是动态文档,投票 Issue 我们会优先处理。
-
----
-
-## ✦ 配置
-
-单机开发环境(`make dev`,M3 MacBook Air,mock LLM)实测:
-
-| 工作负载 | 延迟 p50 | 延迟 p95 | 吞吐量 |
-| --- | --- | --- | --- |
-| `POST /memory/append`(小轮次) | 8 ms | 22 ms | 850 req/s |
-| `POST /memory/recall`(5 命中) | 24 ms | 68 ms | 410 req/s |
-| `GET /memory`(50 条结果) | 4 ms | 9 ms | 2 200 req/s |
-| `DELETE /memory/{id}`(scoped) | 6 ms | 14 ms | 1 100 req/s |
-
-L3 后台抽取是异步的,延迟瓶颈在所配的 LLM 与 embedding 端点,不在 Thinkback 自身。
-
----
-
-## ✦ 配置
-
-所有运行时配置从环境变量读取(参见 `.env.example`)。治理台在 `/admin/api/config` 暴露只读视图。
+全部运行时配置来自环境变量,参见 [`.env.example`](.env.example)。
 
 | 变量 | 用途 | 默认值 |
 | --- | --- | --- |
-| `MEMORY_LLM_KEY` | LLM API key(L2 / L3) | — |
+| `MEMORY_LLM_KEY` | L2 / L3 的 LLM API Key | — |
 | `MEMORY_LLM_BASE_URL` | OpenAI 兼容端点 | — |
 | `MEMORY_LLM_MODEL` | LLM 模型名 | `gpt-4o-mini` |
-| `MEMORY_EMBEDDING_KEY` | Embedding 模型 API key | — |
+| `MEMORY_EMBEDDING_KEY` | Embedding 模型 API Key | — |
 | `MEMORY_EMBEDDING_MODEL` | Embedding 模型 | `text-embedding-3-small` |
-| `MILVUS_URL` | Milvus 服务 URL | `http://localhost:19530` |
+| `MILVUS_URL` | Milvus 服务地址 | `http://localhost:19530` |
 | `MILVUS_DATABASE` | Milvus 数据库名 | `Thinkback` |
 | `MEMORY_L3_WRITE_MODE` | `async`(默认)或 `sync` | `async` |
-| `MEMORY_DECAY_ENABLED` | 启用衰减清理 | `false` |
-| `MEMORY_DECAY_DAYS` | 压制阈值 | `90` |
-| `GRPC_ENABLED` | 与 HTTP 并行启动 gRPC 服务 | `true` |
+| `MEMORY_DECAY_ENABLED` | 是否启用衰减清理 | `false` |
+| `MEMORY_DECAY_DAYS` | 抑制阈值(天) | `90` |
+| `GRPC_ENABLED` | 与 HTTP 一同启动 gRPC | `true` |
 
----
+> **衰减**默认关闭。启用后,长期未被召回的长尾记忆会被抑制 —— 只是不可达,绝不删除。召回一次即可恢复权重。
 
-## ✦ 项目结构
+### 目录结构
 
 ```text
 thinkback/
 ├── src/thinkback/
-│   ├── api/              FastAPI 路由
-│   │   ├── auth.py           API key 认证 + Scope 授权
-│   │   ├── ratelimit.py      Token Bucket 限流中间件
-│   │   ├── idempotency.py    Idempotency-Key 中间件
-│   │   ├── errors_standard.py 标准化错误码 (TB-1001~TB-2003)
-│   │   ├── v1_memory.py      /v1/memory/* 业务系统接入端点
-│   │   ├── integration_admin.py API Key 管理
-│   │   └── mem0_config_admin.py mem0 提示词管理
-│   ├── domain/           纯业务域(entities / enums / ports / errors)
-│   ├── memory/           编排服务
-│   │   ├── service.py         MemoryService(主入口)
-│   │   ├── backends/         L3 后端(mem0 / fake)
-│   │   ├── repositories/     L1+L2 仓储(in-memory / sqlalchemy)
-│   │   ├── mem0_config.py   mem0 自定义配置
-│   │   └── schemas.py         Pydantic 请求/响应
-│   ├── infra/            PostgreSQL / Milvus / logging / config
-│   ├── rpc/              gRPC server 与 proto 映射
-│   └── pyproject.toml
-├── web/                  治理台前端(React 19 + Vite + TanStack Router)
-│   ├── src/
-│   │   ├── pages/         7 个页面(overview / memories / tasks / govern / audit / config / integration)
-│   │   ├── components/    sparkline / heatmap / empty-state / stale-indicator / onboarding-dialog ...
-│   │   └── lib/           useListKeyboardNavigation 等 hooks
-│   └── package.json
-├── proto/memory.proto    gRPC 协议定义
-├── alembic/              数据库迁移
-├── tests/                pytest 测试套件(615+ 测试)
-└── docs/                 设计文档与运行手册
+│   ├── api/           FastAPI 路由 —— 鉴权、限流、幂等、
+│   │                  标准化错误码、v1 公开端点、管理端
+│   ├── domain/        纯业务逻辑 —— 实体、枚举、ports、错误
+│   ├── memory/        编排层 —— MemoryService、L3 后端、
+│   │                  L1+L2 仓储、Pydantic schema
+│   ├── infra/         PostgreSQL / Milvus / 日志 / 配置
+│   └── rpc/           gRPC 服务与 proto 映射
+├── web/               治理台(React 19 + Vite + TanStack Router)
+├── proto/memory.proto gRPC 契约
+├── alembic/           数据库迁移
+├── tests/             pytest 套件(663 个测试)
+└── docs/              设计文档与运行手册
 ```
 
----
+### 扩展
 
-## ✦ 扩展
+- **替换 L3 后端** —— 在 `thinkback.domain.ports` 实现 `MemoryBackend` port,并在
+  `thinkback.memory.backends` 注册。Mem0 是默认实现;Qdrant 原生或 pgvector 适配器都很直接。
+- **新增治理台页面** —— 在 `web/src/pages/` 放一个文件,在 `web/src/main.tsx` 注册路由,
+  在 `web/src/components/layout.tsx` 加一条侧边栏。
+- **改抽取规则** —— 在治理台(`/integration` → mem0 配置)编辑提示词,无需重启。
 
-- **替换 L3 后端** — 实现 `MemoryBackend` 端口(`thinkback.domain.ports`)并在 `thinkback.memory.backends` 注册。Mem0 作为默认提供,Qdrant-native 或 pgvector 后端都可轻松添加。
-- **新增治理台页面** — 在 `web/src/pages/` 新建文件,在 `web/src/main.tsx` 注册路由,在 `web/src/components/layout.tsx` 加侧边栏入口。
-- **自定义抽取规则** — 在治理台 `/integration` → mem0 配置 编辑提示词。下次写入时立即生效,无需重启。
-
----
-
-## ✦ 开发
+### 开发
 
 ```bash
-# 安装所有开发工具
-uv sync --frozen --group dev
-cd web && npm install
-
-# 跑测试
-uv run pytest tests/                 # 后端(615+ 测试)
-cd web && npx tsc --noEmit            # 前端类型检查
-cd web && npm run build               # 前端生产构建
-
-# 启动开发模式
-make dev                             # API + 治理台前端
-
-# 重新生成截图
-cd web && node take-screenshots.mjs
+make dev               # API + 治理台
+make test              # 后端测试套件
+make test-fast         # 只跑受本次改动影响的用例(testmon)
+make coverage          # 套件 + 92% 覆盖率门禁
+make check             # format-check + lint + typecheck + coverage(CI 跑的就是它)
+make test-ui           # 前端组件测试
+make test-e2e          # Playwright 端到端 + axe 可访问性扫描
 ```
 
-代码风格:
+代码风格:Python 用 `ruff`(lint + format)与 `mypy --strict`;TypeScript 严格模式,边界处不出现 `any`。
 
-- **Python** — `ruff`(lint + format)+ `mypy --strict`(类型检查)
-- **TypeScript** — strict 模式,边界处无 `any`
+<img src="assets/rule.svg" alt="" width="100%">
 
----
+## 07 · 参考手册
 
-## ✦ 文档
+### 接口一览
 
-- [架构深读](docs/ARCHITECTURE.md) — 六边形端口、依赖倒置
-- [API 参考](docs/API.md) — 完整 HTTP / gRPC 端面
-- [部署指南](docs/DEPLOYMENT.md) — Kubernetes manifest、Helm chart
-- [运维手册](docs/RUNBOOK.md) — 调试、恢复、扩容
-- [v1 集成协议规范](docs/specs/2026-10-08-thinkback-integration-protocol-v1.md) — 业务系统公开 API
-- [English documentation](README.md) — 英文版
+26+ 个端点,分三组。Swagger UI 在 `/docs`,ReDoc 在 `/redoc`。gRPC 服务
+[`proto/memory.proto`](proto/memory.proto) 覆盖同样的操作。
 
----
+**记忆核心 —— `/memory/*`**
 
-## ✦ 社区
+| 方法 | 路径 | 用途 |
+| --- | --- | --- |
+| `POST` | `/memory/append` | 写入一轮对话,触发 L1/L2/L3 |
+| `POST` | `/memory/recall` | 召回记忆,带降级信号 |
+| `GET` | `/memory` | 按条件过滤与分页列出 |
+| `GET` | `/memory/{memory_id}` | 单条记忆的完整元数据 |
+| `PUT` | `/memory/{memory_id}` | 更新文本,保留历史 |
+| `DELETE` | `/memory/{memory_id}` | 作用域删除(`MEMORY` / `SESSION` / `ALL`) |
+| `GET` | `/memory/tasks/{task_id}` | 任务状态:重试、最近错误、结果 |
+| `GET` | `/memory/l3/status` | L3 队列与 worker 状态 |
 
-- 💬 **[GitHub Discussions](.github/DISCUSSITIONS)** — 提问、想法、show-and-tell
-- 🐛 **[Issue 跟踪器](.github/ISSUE_TEMPLATE/bug_report.md)** — bug 报告
-- ✨ **[功能请求](.github/ISSUE_TEMPLATE/feature_request.md)** — Thinkback 接下来该做什么?
-- 🔔 **[Watch 此仓库](.github)** — 接收发布和安全修复通知
+**业务接入 —— `/v1/memory/*`**(需 API Key + scope)
 
-如果你在生产环境使用 Thinkback 并想分享你的故事,请开一个 Discussion —— 我们很乐意在 [wiki](.github/DISCUSSIONS)(即将推出)中推荐你。
+| 方法 | 路径 | Scope | 用途 |
+| --- | --- | --- | --- |
+| `POST` | `/v1/memory/append` | `memory:append` | 写入一轮对话 |
+| `POST` | `/v1/memory/recall` | `memory:recall` | 召回记忆 |
+| `GET` | `/v1/memory` | `memory:read` | 列出记忆 |
+| `GET/PUT/DELETE` | `/v1/memory/{id}` | `memory:read/update/delete` | 增删改查 |
 
----
+**管理端 —— `/admin/api/*`**
 
-## ✦ FAQ
+| 方法 | 路径 | 用途 |
+| --- | --- | --- |
+| `GET` | `/admin/api/overview` | KPI、系统脉搏、L3 状态、最近审计 |
+| `GET` | `/admin/api/tasks` | 任务列表,支持状态过滤 |
+| `GET` | `/admin/api/memories` | 记忆列表,含来源回链 |
+| `GET` | `/admin/api/audit` | 审计日志,可按动作过滤 |
+| `POST` | `/admin/api/{delete,update,rebuild}` | 治理动作,幂等 |
+| `GET/PUT` | `/admin/api/mem0/configs` | 列出并实时更新 mem0 提示词 |
+| `GET/POST` | `/admin/api/integration/keys` | 列出并生成 API Key |
+
+含请求/响应体的完整参考:**[docs/API.md](docs/API.md)**。
+
+### 常见问题
 
 <details>
-<summary><b>Thinkback 和直接调用 Mem0 SDK 有什么区别?</b></summary>
+<summary><b>和直接调 Mem0 SDK 有什么区别?</b></summary>
 
-Mem0 是出色的记忆引擎,给你事实抽取和语义召回。但不给你 _服务_。
-Thinkback 在 Mem0 之上加了:会话级上下文(L1/L2)、幂等写入、显式降级信号、后台任务治理、
-scoped 删除墓碑、治理台、HTTP + gRPC 访问。
-如果只是"一个进程、一个用户、不需要重试",直接调 Mem0 即可。
+Mem0 是很棒的记忆引擎 —— 它给你事实抽取与语义召回,但给不了你一个*服务*。Thinkback 在它外面补上了
+会话级上下文、幂等写入、显式降级信号、后台任务治理、带墓碑的作用域删除、治理台,以及 HTTP + gRPC 访问。
+如果你的需求就是「单进程、单用户、无重试」,直接调 Mem0。
 
 </details>
 
 <details>
-<summary><b>Thinkback 能否接入我现有的 Mem0 + Milvus 环境?</b></summary>
+<summary><b>能复用我现有的 Mem0 + Milvus 吗?</b></summary>
 
-可以。L3 后端是可插拔的。配置 `MEMORY_LLM_*`、`MEMORY_EMBEDDING_*`、`MILVUS_URL`、`MILVUS_DATABASE`
-指向你现有的基础设施即可。无需迁移 — Thinkback 会使用同一 collection。
+可以。把 `MEMORY_LLM_*`、`MEMORY_EMBEDDING_*`、`MILVUS_URL`、`MILVUS_DATABASE` 指向你现有的基础设施即可。
+无需 schema 迁移 —— Thinkback 用的是同一个 collection。
 
 </details>
 
 <details>
 <summary><b>LLM 或向量库宕机会怎样?</b></summary>
 
-Thinkback 绝不返回"半个答案"。任何一层不可用时,响应标记 `degraded=true` + `degradation_reasons`
-说明哪一层、为什么。调用方决定降级到其他源还是向用户报错。
+Thinkback 绝不返回半截答案。响应会标记 `degraded=true`,`degradation_reasons` 指明是哪一层、为什么。
+由调用方决定是降级回退还是直接报错。
 
 </details>
 
 <details>
-<summary><b>Thinkback 生产就绪了吗?</b></summary>
+<summary><b>能上生产吗?</b></summary>
 
-是。六边形端口 + Pydantic v2 + `mypy --strict` + Alembic 迁移 + Kubernetes 原生探针 +
-Prometheus metrics + 615+ 测试。治理台是 React 19 SPA,支持键盘导航、无障碍、响应式布局。
-
-</details>
-
-<details>
-<summary><b>规模性能怎样?</b></summary>
-
-单机开发环境 `POST /memory/append` p50 8ms,recall p50 24ms。
-L3 后台抽取是异步的。多租户规模化请启用 `MEMORY_L3_WRITE_MODE=async`,
-配 `MEMORY_L3_EXECUTOR_WORKERS` 与 `MEMORY_L3_MAX_PENDING_TASKS`。详见
-[运维手册](docs/RUNBOOK.md)。
+六边形 ports、Pydantic v2 + `mypy --strict`、Alembic 迁移、Kubernetes 存活/就绪探针、Prometheus 指标,
+以及 663 个测试。治理台是 React 19 单页应用,带键盘导航、可访问性与响应式布局。
 
 </details>
 
 <details>
-<summary><b>如何自定义记忆抽取提示词?</b></summary>
+<summary><b>怎么横向扩展?</b></summary>
 
-治理台 `/integration` → mem0 配置。实时编辑 `custom_instructions`、`update_memory_prompt`、
-`memory_answer_prompt`,下次写入时立即生效,无需重启。
-详见 [mem0 提示词管理](docs/specs/2026-10-08-thinkback-integration-protocol-v1.md) 规范。
+L3 抽取默认异步 —— 用 `MEMORY_L3_EXECUTOR_WORKERS` 与 `MEMORY_L3_MAX_PENDING_TASKS` 调整。
+多租户隔离通过 `X-Tenant-Id`。调优与故障恢复见[运维手册](docs/RUNBOOK.md)。
 
 </details>
 
----
+<details>
+<summary><b>能自定义记忆抽取提示词吗?</b></summary>
 
-## ✦ 贡献
+可以 —— 治理台 → `/integration` → mem0 配置。实时编辑 `custom_instructions`、
+`update_memory_prompt` 与 `memory_answer_prompt`,下一次写入即生效。
 
-我们欢迎 PR,涵盖 bug 修复、新后端、治理台改进、文档等。较大改动请先开 issue 讨论方向。
+</details>
 
-- [Good first issues](../../issues?q=is%3Aopen+is%3Aissue+label%3A%22good+first+issue%22)
-- [How to contribute](.github/CONTRIBUTING.md)
-- [Code of conduct](.github/CODE_OF_CONDUCT.md)
-- [Security policy](.github/SECURITY.md)
+### 文档
 
----
+<table>
+<tr>
+<td width="50%" valign="top">
 
-## ✦ Featured by
+<strong><a href="docs/ARCHITECTURE.md">架构深入说明</a></strong><br>
+六边形 ports、依赖反转、schema 与数据流
 
-<!--
-如果你的公司 / 出版物 / 社区正在使用 Thinkback,请开一个 PR 把你的 logo + 链接加到这里。
-我们会在下一个 release notes 中推荐你。
--->
-<a href="https://github.com/mem0ai/mem0"><img src="https://img.shields.io/badge/powered%20by-Mem0-7C3AED?style=for-the-badge" alt="Mem0"/></a>
+<strong><a href="docs/API.md">API 参考</a></strong><br>
+完整 HTTP 与 gRPC 接口面,含请求/响应体
 
-<sub>想在这里展示你的 logo?[开一个 PR](.github/PULL_REQUEST_TEMPLATE.md) 把你的公司加上 —— 在生产环境使用 Thinkback 是唯一要求。</sub>
+<strong><a href="docs/SDK.md">SDK 示例</a></strong><br>
+Python、TypeScript、cURL 客户端示例
 
----
+</td>
+<td width="50%" valign="top">
 
-## ✦ Sponsors
+<strong><a href="docs/DEPLOYMENT.md">部署指南</a></strong><br>
+Kubernetes 清单、Helm chart、生产配置
 
-Thinkback 由独立团队开发,以 Apache 2.0 协议开源。如果你的公司从这个项目获益,并希望它发展得更快,可以考虑赞助开发。
+<strong><a href="docs/RUNBOOK.md">运维手册</a></strong><br>
+排障、恢复、扩缩容、应急流程
 
-<!--
-赞助档位(详见 CONTRIBUTING.md):
-  - $100/月: 列在 README sponsors 区域
-  - $500/月: 放在 landing page + README + release notes
-  - $2k+/月:  优先 feature 请求 + 私密支持频道
+<strong><a href="docs/specs/2026-10-08-thinkback-integration-protocol-v1.md">接入协议 v1</a></strong><br>
+面向业务系统的公开 API 契约
 
-想成为赞助者,开一个标题为 [sponsor] 的 issue,我们会联系你。
--->
+</td>
+</tr>
+</table>
 
-**当前赞助者:** *(做第一个!)*
+### 路线图
 
----
+<img src="assets/roadmap.svg" alt="路线图" width="100%">
 
-## ✦ License
+持续更新中 —— [docs/ROADMAP.md](docs/ROADMAP.md)。给 issue 投票,我们会据此排优先级。
 
-[Apache License 2.0](LICENSE) — 完整文本见 `LICENSE`。
+### 社区
 
-Thinkback 以 Apache 2.0 协议开源,你可以自由使用、修改、分发,包括商业用途,只需保留版权声明和免责声明。
+[![Discussions](https://img.shields.io/badge/-%20Discussions-7C3AED?style=for-the-badge)](../../discussions)
+[![Issues](https://img.shields.io/badge/-%20Issues-brightgreen?style=for-the-badge)](../../issues)
+[![Contributing](https://img.shields.io/badge/-%20Contributing-blue?style=for-the-badge)](CONTRIBUTING.md)
+[![Code of Conduct](https://img.shields.io/badge/-%20Code%20of%20Conduct-blue?style=for-the-badge)](.github/CODE_OF_CONDUCT.md)
+[![Security](https://img.shields.io/badge/-%20Security%20Policy-blue?style=for-the-badge)](.github/SECURITY.md)
 
----
+适合上手的 issue:[
+`good first issue` 标签](../../issues?q=is%3Aopen+is%3Aissue+label%3A%22good+first+issue%22)。
+欢迎提交 PR —— 修 bug、加后端、改进治理台、补文档都算。
 
-## ✦ Star History
+### 许可证
 
-[![Star History Chart](https://api.star-history.com/svg?repos=mcgrapeng/Thinkback&type=Date)](https://star-history.com/#mcgrapeng/Thinkback&Date)
+[Apache 2.0](LICENSE)。可用、可改、可商用 —— 保留版权声明与免责声明即可。
 
----
+### 致谢
 
-## ✦ 贡献者
-
-感谢所有为 Thinkback 做出贡献的朋友们 🙏
-
-<a href="https://github.com/mcgrapeng/thinkback/graphs/contributors">
-  <img src="https://contrib.rocks/image?repo=mcgrapeng/thinkback&max=40&columns=8&anon=1" />
-</a>
-
-想参与贡献?见 [贡献指南](#-贡献)。
-
----
-
-## ✦ 致谢
-
-Thinkback 基于以下开源项目和人的工作:
-
-- **[Mem0](https://github.com/mem0ai/mem0)** — Thinkback 编排的长期记忆引擎
-- **[Milvus](https://milvus.io/)** — L3 召回的向量库
-- **[PostgreSQL](https://www.postgresql.org/)** — L1/L2 的持久化基底
-- **[FastAPI](https://fastapi.tiangolo.com)** — HTTP 框架
-- **[TanStack Query / Router](https://tanstack.com)** — 治理台前端
-- **[Pydantic](https://docs.pydantic.dev/)** — 类型安全的请求/响应模型
-- [开源 AI 记忆社区](https://github.com/topics/llm-memory) 的灵感
-
-正是报告问题、提 PR、分享使用场景的贡献者社区让这个项目成为可能。
+本项目建立在 **[Mem0](https://github.com/mem0ai/mem0)**(长期记忆引擎)、
+**[Milvus](https://milvus.io/)**(L3 向量库)、**[PostgreSQL](https://www.postgresql.org/)**
+(L1/L2 持久底座)、**[FastAPI](https://fastapi.tiangolo.com)**、**[TanStack](https://tanstack.com)**
+(治理台)、**[Pydantic](https://docs.pydantic.dev/)** 以及开源 AI 记忆社区的肩上。
 
 ---
 
 <div align="center">
 
-**如果 Thinkback 对你有帮助,考虑在 GitHub 上给它一个 ⭐ — 这能帮助更多人发现这个项目。**
+**如果 Thinkback 对你有帮助,考虑在 GitHub 上点个 ⭐ —— 让更多人找到它。**
 
-[**⭐ Star**](.github) · [**🍴 Fork**](.github/fork) · [**📖 文档**](docs/) · [**报告问题**](.github/ISSUE_TEMPLATE/bug_report.md)
+[![Star History](https://api.star-history.com/svg?repos=mcgrapeng/Thinkback&type=Date)](https://star-history.com/#mcgrapeng/Thinkback&Date)
 
-为需要把记忆做成**服务**而非副项目的团队用心构建。
+<a href="https://github.com/mcgrapeng/thinkback/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=mcgrapeng/thinkback&max=40&columns=8&anon=1" />
+</a>
+
+为那些需要记忆成为**服务**而非副业的团队而建。
 
 </div>
