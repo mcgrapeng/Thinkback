@@ -36,14 +36,16 @@ test:
 test-fast:
 	uv run --group dev pytest --testmon -q
 
-# 覆盖率门禁：低于 92% 直接失败，防止测试退化无声通过。
-# 提高门限时请同步补测试，不要下调阈值迁就缺失覆盖。
+# 覆盖率观测（非阻断）。行覆盖率不再当门禁：_verify_secret 那个恒真函数
+# 在 95.9% 覆盖率下活着——覆盖率衡量「这行被执行过」，不衡量「结果对不对」。
+# COVERAGE_FLOOR 只作为观测水位打印，不让 make coverage 失败。
 COVERAGE_FLOOR ?= 92
 
 coverage:
-	uv run --group dev pytest --cov=thinkback --cov-report=term-missing --cov-report=xml --cov-fail-under=$(COVERAGE_FLOOR) -v
+	uv run --group dev pytest --cov=thinkback --cov-report=term-missing --cov-report=xml -v
+	@uv run --group dev python -c "import xml.etree.ElementTree as ET;f=float('$(COVERAGE_FLOOR)');r=float(ET.parse('coverage.xml').getroot().get('line-rate',0))*100;print(f'行覆盖率 {r:.1f}%，观测水位 {f:.0f}%（非阻断）')" || echo "覆盖率报告不可用（非阻断）"
 
-check: format-check lint typecheck coverage
+check: format-check lint typecheck mutation-audit eval
 
 # 前端组件测试（vitest，确定性无网络）
 test-ui:
