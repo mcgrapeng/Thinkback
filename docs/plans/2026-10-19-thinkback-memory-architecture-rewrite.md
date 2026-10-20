@@ -61,10 +61,10 @@ pyproject [tool.mutmut]）和 make eval + check_baseline.py（一个写得相当
 连「删用例让通过率回升」都防了）。它们只是没进完成定义。行覆盖率已被证伪：
 _verify_secret 那个恒真函数在 95.9% 覆盖率下活着，因为那一行被执行了，只是结果错了。
 
-- [ ] make check 已含 mutation-audit 与 eval
-- [ ] COVERAGE_FLOOR 不再阻断
-- [ ] AGENTS.md 完成定义已更新
-- [ ] make check 全绿
+- [x] make check 已含 mutation-audit 与 eval
+- [x] COVERAGE_FLOOR 不再阻断
+- [x] AGENTS.md 完成定义已更新
+- [x] make check 全绿
 
 ### Task 0.2: 修 API Key 校验恒真
 
