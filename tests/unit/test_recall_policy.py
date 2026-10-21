@@ -8,7 +8,9 @@ G1 from comparison report: langmem 的 strength 排序是 2026 共识；本仓
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
+from thinkback.domain.content_quality import intrinsic_quality
 from thinkback.domain.recall_policy import _strength, dedupe_and_clip
 from thinkback.memory.schemas import MemoryItem
 
@@ -235,3 +237,88 @@ def test_touch_recalled_entries_handles_naive_last_recalled_at() -> None:
     )
     # 不应抛 TypeError
     service._touch_recalled_entries([naive])  # type: ignore[list-item]
+
+
+# ---------------------------------------------------------------------------
+# 内容质量接入排序键（六维评分落地后）
+# ---------------------------------------------------------------------------
+
+LOW_QUALITY = "他最近不太好"
+HIGH_QUALITY = "2024 年 3 月我入职了杭州阿里巴巴云智能团队，负责 ToB 业务方向"
+
+
+def _now() -> datetime:
+    return datetime(2026, 10, 5, 12, 0, 0, tzinfo=UTC)
+
+
+def _l3(content: str, memory_id: str, **kwargs: Any) -> MemoryItem:
+    return MemoryItem(layer="L3", content=content, memory_id=memory_id, **kwargs)
+
+
+def test_same_layer_prefers_higher_content_quality() -> None:
+    """同层同强度：内容能被模型接住的先排前面。"""
+    low = _l3(LOW_QUALITY, "m-low", recall_count=0)
+    high = _l3(HIGH_QUALITY, "m-high", recall_count=0)
+
+    result = dedupe_and_clip([low, high], token_budget=1200, now=_now())
+
+    assert [item.memory_id for item in result] == ["m-high", "m-low"]
+
+
+def test_layer_priority_still_wins_over_quality() -> None:
+    """层优先级不可破：质量差的 L3 仍然压过质量好的 L2。"""
+    l2 = MemoryItem(layer="L2", content=HIGH_QUALITY, source="summary-1")
+    l3 = _l3(LOW_QUALITY, "m-l3", recall_count=0)
+
+    result = dedupe_and_clip([l2, l3], token_budget=1200, now=_now())
+
+    assert [item.layer for item in result] == ["L3", "L2"]
+
+
+def test_quality_survives_token_budget_clipping() -> None:
+    """预算裁剪发生在排序之后：预算只够一条时，留下的是高质量那条。"""
+    low = _l3(LOW_QUALITY, "m-low", recall_count=0)
+    high = _l3(HIGH_QUALITY, "m-high", recall_count=0)
+
+    # token 成本 = len(content) // 2：高质量条目成本 18，低质量条目成本 3。
+    result = dedupe_and_clip([low, high], token_budget=18, now=_now())
+
+    assert [item.memory_id for item in result] == ["m-high"]
+
+
+def test_strength_breaks_tie_when_quality_is_equal() -> None:
+    """质量相同则强度高的先排（原有 strength 语义保留）。"""
+    now = _now()
+    fresh = _l3(
+        "2024 年 3 月入职杭州阿里巴巴",
+        "m-fresh",
+        recall_count=20,
+        last_recalled_at=now - timedelta(hours=1),
+    )
+    stale = _l3(
+        "2025 年 4 月入职上海字节跳动",
+        "m-stale",
+        recall_count=1,
+        last_recalled_at=now - timedelta(days=30),
+    )
+
+    # 两条内容质量必须严格相等，否则这条用例测的就不是"强度仲裁"。
+    assert intrinsic_quality(fresh.content) == intrinsic_quality(stale.content)
+
+    result = dedupe_and_clip([stale, fresh], token_budget=1200, now=now)
+
+    assert [item.memory_id for item in result] == ["m-fresh", "m-stale"]
+
+
+def test_quality_does_not_change_item_count_or_layers() -> None:
+    """排序变化不改变返回条数与层集合（预算充足时）。"""
+    items = [
+        _l3(LOW_QUALITY, "m-low", recall_count=0),
+        _l3(HIGH_QUALITY, "m-high", recall_count=0),
+        MemoryItem(layer="L1", content="用户：你今天怎么样？", source="round-1"),
+    ]
+
+    result = dedupe_and_clip(items, token_budget=1200, now=_now())
+
+    assert len(result) == 3
+    assert {item.layer for item in result} == {"L3", "L1"}
