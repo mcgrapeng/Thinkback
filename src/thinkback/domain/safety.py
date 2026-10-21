@@ -1,11 +1,21 @@
 """内容安全准入策略（write-gate）。
 
-写入链路最早期执行：命中即整轮跳过 L1/L2/L3，宁可让一轮对话在
-记忆侧"消失"，也不允许 prompt injection 或凭据泄漏进入长期数据。
+写入链路最早期执行：命中就**不写长期记忆**（L3 与 L2 摘要都不写），
+但**保留 L1 原文** —— 用户刚说的那轮对话不该被静默删掉，
+他自己还能在治理台看到、能编辑、能删除。
 
-当前实现是基于关键词与正则的硬编码词表，存在 false positive 风险
-（如包含 ``secret``、``password`` 字面词的正常消息）；按真实流量
-分布调整词表是后续任务，由产品与数据团队提供样本后进行。
+原先这里是「命中即整轮 ``mark_round_deleted``」：
+连 L1 原文一起销毁，调用方还收到 ``status="completed"`` ——
+误杀率极高（``set api_key:`` / ``the tool:`` / ``System:`` / ``token:`` 都会命中），
+而对抗性注入只需加两个空格（``ignore␣␣all␣␣previous␣␣instructions``）就全部放行。
+两件事一件没做到，只制造静默数据丢失。
+
+现在分成两件事：
+1. 「不写入长期记忆」→ 返回 skipped + 明确 reason，保留 L1；
+2. 「删除」→ 独立的、需显式授权的操作，不在写入路径上自动发生。
+
+``role in {system, tool}`` 不再触发拦截 —— 把工具遥测与 prompt injection
+混为一谈，正常的多模态/工具调用会被误杀。
 """
 
 from __future__ import annotations
@@ -38,10 +48,19 @@ def text_is_restricted_or_unsafe(content: str) -> bool:
 
 
 def messages_are_restricted_or_unsafe(messages: list[dict[str, str]]) -> bool:
-    """整轮消息是否被拒绝：system/tool 角色或任一条正文命中词表。"""
+    """整轮消息是否命中词表（只看正文，不看角色）。"""
 
     return any(
-        message.get("role") in {"system", "tool"}
-        or text_is_restricted_or_unsafe(message.get("content", ""))
-        for message in messages
+        text_is_restricted_or_unsafe(message.get("content", "")) for message in messages
     )
+
+
+def restricted_reason(messages: list[dict[str, str]]) -> str | None:
+    """命中时给出可读的原因（写进日志与响应），未命中返回 None。"""
+    for message in messages:
+        content = message.get("content", "")
+        normalized = content.lower()
+        for pattern, compiled in _COMPILED_PATTERNS:
+            if compiled.search(normalized):
+                return f"restricted_or_unsafe_memory_content:{pattern}"
+    return None

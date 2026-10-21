@@ -20,3 +20,21 @@ class TaskStaleWriteError(RuntimeError):
         self.task_id = task_id
         self.expected_version = expected_version
         super().__init__(f"task stale write: {task_id} row_version {expected_version} outdated")
+
+
+class TaskLockExhaustedError(RuntimeError):
+    """乐观锁重试耗尽：终态写没有落库。
+
+    与 :class:`TaskStaleWriteError` 区分开：后者是「快照过期，重读重放」
+    （可恢复）；本异常是「重读重放也一直冲突」，状态**没有**被写下去。
+    终态写（append 的 COMPLETED）遇到它必须让调用方看到失败 ——
+    否则调用方会照常返回 completed，而 task 行还停在 RUNNING、result 为空，
+    之后每次重试都命中 already_done，不一致被永久固化。
+    """
+
+    def __init__(self, task_id: str, attempts: int) -> None:
+        self.task_id = task_id
+        self.attempts = attempts
+        super().__init__(
+            f"task optimistic lock contention exhausted after {attempts} attempts: {task_id}"
+        )

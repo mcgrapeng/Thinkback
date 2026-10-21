@@ -18,11 +18,12 @@ from typing import Any, Literal
 
 from loguru import logger
 
-from thinkback.domain.errors import TaskStaleWriteError
+from thinkback.domain.errors import TaskLockExhaustedError, TaskStaleWriteError
 from thinkback.domain.ports import HistorySource, MemoryBackend, MemoryRepository
 from thinkback.domain.recall_policy import dedupe_and_clip
 from thinkback.domain.safety import (
     messages_are_restricted_or_unsafe,
+    restricted_reason,
     text_is_restricted_or_unsafe,
 )
 from thinkback.domain.slots import (
@@ -70,6 +71,7 @@ from thinkback.memory.repositories import (
     request_fingerprint,
     source_ref_key,
 )
+from thinkback.memory.task_state import is_dead_letter, is_finalized, is_retryable
 from thinkback.memory.schemas import (
     AdminMemoryItem,
     AppendMemoryRequest,
@@ -468,41 +470,72 @@ L2 更新 (缓存失效)
                 return AppendMemoryResponse(
                     status="already_done", task_id=task_id, round_id=request.round_id
                 )
+            if existing_task is not None and is_dead_letter(existing_task.status):
+                # DEAD_LETTER 是终态：重试预算已耗尽。原先这里没有短路，
+                # 任务被覆写成 RUNNING 复活 → retry_count 不自增、预算检查不执行
+                # → 实测连打 19 次 retry_count 涨到 11（MAX_RETRIES=5）。
+                append_log.bind(
+                    task_id=task_id,
+                    retry_count=existing_task.retry_count,
+                ).warning("memory append dead_letter short-circuit")
+                return AppendMemoryResponse(
+                    status="failed", task_id=task_id, round_id=request.round_id
+                )
 
         restricted_or_unsafe = self._is_restricted_or_unsafe(request.messages)
+        restrict_reason = self._restricted_reason(request.messages)
         l3_slot_reserved = False
-        if self.l3_write_mode == "async" and not restricted_or_unsafe:
-            self._l3.reserve_write_slot()
-            l3_slot_reserved = True
-
-        previous_task = self.repository.get_task(task_id)
-        was_retrying_failed_task = (
-            previous_task is not None and previous_task.status is TaskStatus.FAILED
-        )
-        task = previous_task or TaskEntry(
-            task_id=task_id,
-            request_id=request.request_id,
-            op_type=OperationType.WRITE_ROUND,
-            scope={
-                "user_id": request.user_id,
-                "session_id": request.session_id,
-                "session_scope_id": session_scope_id,
-                "long_term_scope_id": l3_scope_id,
-            },
-            status=TaskStatus.RUNNING,
-        )
-        task.request_id = request.request_id
-        task.status = TaskStatus.RUNNING
-        task.last_error = None
-        if was_retrying_failed_task:
-            task.retry_count += 1
-            self._check_retry_budget(task)
-        self.repository.save_task(task)
+        # 任务行可能还没建出来（get_task 就失败了），except 分支要能容忍 task 为 None。
+        task: TaskEntry | None = None
+        # 槽位预留与后续所有可能抛异常的调用必须在同一个 try 里：预留之后、
+        # try 之前的任何一次异常（get_task / _check_retry_budget / save_task）
+        # 都会让 release_write_slot 永远不执行 —— 槽位只进不出。
+        # 生产 memory_l3_max_pending_tasks=256：一次 30 秒 DB 抖动就能让该 Pod
+        # 的写入能力永久归零，直到重启。
         try:
+            if self.l3_write_mode == "async" and not restricted_or_unsafe:
+                self._l3.reserve_write_slot()
+                l3_slot_reserved = True
+
+            previous_task = self.repository.get_task(task_id)
+            was_retrying_failed_task = (
+                previous_task is not None and is_retryable(previous_task.status)
+            )
+            task = previous_task or TaskEntry(
+                task_id=task_id,
+                request_id=request.request_id,
+                op_type=OperationType.WRITE_ROUND,
+                scope={
+                    "user_id": request.user_id,
+                    "session_id": request.session_id,
+                    "session_scope_id": session_scope_id,
+                    "long_term_scope_id": l3_scope_id,
+                },
+                status=TaskStatus.RUNNING,
+            )
+            task.request_id = request.request_id
+            task.status = TaskStatus.RUNNING
+            task.last_error = None
+            if was_retrying_failed_task:
+                task.retry_count += 1
+                self._check_retry_budget(task)
+            self.repository.save_task(task)
             entry = existing or self.repository.save_round(request)
             entry.memory_scope_id = session_scope_id
             if restricted_or_unsafe:
-                l3_events = [{"event": "SKIP", "reason": "restricted_or_unsafe_memory_content"}]
+                # 命中 write-gate：这轮**不写长期记忆**（L2/L3 都不写），
+                # 并在响应里如实返回 skipped（原先返回 completed —— 谎报成功）。
+                #
+                # 轮次本身只做**软墓碑**（round_state=deleted_tombstone），原文
+                # 没有被物理销毁，用户在治理台仍能看到、能编辑、能删除。
+                # 但它必须留在召回之外：凭据与注入文本回到模型上下文里，
+                # 这个门禁就等于没装（现有 3 条用例钉的就是这条性质）。
+                append_log.bind(
+                    reason=restrict_reason or "restricted_or_unsafe_memory_content"
+                ).warning("memory append skipped by write gate")
+                l3_events = [
+                    {"event": "SKIP", "reason": "restricted_or_unsafe_memory_content"}
+                ]
                 self.repository.mark_round_deleted(request.round_id)
                 append_pending_backend_writes: list[Any] = []
             else:
@@ -576,11 +609,21 @@ L2 更新 (缓存失效)
                 self._l3.release_write_slot()
                 l3_slot_reserved = False
             captured_exc = exc
-            append_log.bind(task_id=task.task_id, error_type=type(exc).__name__).warning(
+            failed_task_id = task.task_id if task is not None else task_id
+            append_log.bind(task_id=failed_task_id, error_type=type(exc).__name__).warning(
                 "memory append failed"
             )
 
+            if task is None:
+                # 失败发生在任务落库之前（get_task / save_task）：没有任务行可标失败，
+                # 槽位已经归还，直接把异常抛出去。
+                raise
+
             def mark_failed(t: TaskEntry) -> None:
+                # 预算耗尽（_check_retry_budget）已经把状态标成 DEAD_LETTER ——
+                # 那是终态，不能被这里改回 FAILED（会抹掉「需人工介入」的信号）。
+                if is_dead_letter(t.status):
+                    return
                 t.status = TaskStatus.FAILED
                 t.last_error = str(captured_exc)
 
@@ -604,6 +647,9 @@ L2 更新 (缓存失效)
                 current_task, request.round_id, l3_events
             ),
             log_context={"stage": "append_final"},
+            # 终态写必须严格：CAS 耗尽时抛错，让 append 返回 5xx，
+            # 而不是谎报 completed（task 行会永远停在 RUNNING）。
+            strict=True,
         )
         # 锁外执行 append 后台 publish 阶段（_backfill_p0_slots → supersede）收集
         # 的 backend.delete 回调；避免 mem0 网络 I/O 串行化其他同 user L3 写。
@@ -624,7 +670,9 @@ L2 更新 (缓存失效)
             mode="sync",
         ).info("memory append completed")
         return AppendMemoryResponse(
-            status="completed",
+            # write-gate 命中时是 skipped，不是 completed ——
+            # 调用方需要知道这轮**没有**进长期记忆。
+            status="skipped" if restricted_or_unsafe else "completed",
             task_id=task.task_id,
             round_id=request.round_id,
             l3_events=[self._redact_event(event) for event in l3_events],
@@ -817,6 +865,7 @@ L2 更新 (缓存失效)
         *,
         attempts: int = 3,
         log_context: dict[str, Any] | None = None,
+        strict: bool = False,
     ) -> TaskEntry | None:
         """乐观锁下的任务读-改-写：冲突时重读快照重放变更（P1a）。
 
@@ -824,7 +873,11 @@ L2 更新 (缓存失效)
         row_version CAS 拦截（TaskStaleWriteError），这里以**重读重放**
         收敛——后台计数类 best-effort 变更（pending_cleanup_tasks 增减）
         在冲突时重放是安全的：mutate 必须表达为"基于最新快照的相对变更"。
-        重试耗尽放弃并打 warning（不影响主链路）。
+        重试耗尽放弃并打 warning（不影响主链路）—— 除非 ``strict``：
+        终态写（append 的 COMPLETED）必须 strict。原先耗尽时只 warning +
+        ``return None``，而调用方**丢弃返回值**照常返回 completed →
+        task 行留在 RUNNING、result 为空，之后每次重试都命中 already_done，
+        不一致被永久固化。
         """
         with self._task_status_lock:
             for _attempt in range(attempts):
@@ -841,6 +894,8 @@ L2 更新 (缓存失效)
             attempts=attempts,
             **(log_context or {}),
         ).warning("task optimistic lock contention gave up")
+        if strict:
+            raise TaskLockExhaustedError(str(task_id), attempts)
         return None
 
     @staticmethod
@@ -1437,7 +1492,7 @@ L2 更新 (缓存失效)
                 )
                 if existing_response is not None:
                     return existing_response
-        was_retrying_failed_task = task.status is TaskStatus.FAILED
+        was_retrying_failed_task = is_retryable(task.status)
         task.request_id = request.request_id
         task.op_type = {
             DeleteScope.MEMORY: OperationType.DELETE_MEMORY,
@@ -1536,10 +1591,7 @@ L2 更新 (缓存失效)
             # 状态决定 status（保留另一副本已 FAILED 的终态，避免把已失败
             # 的任务改回 COMPLETED）。
             current_task = self.repository.get_task(task.task_id)
-            if current_task is not None and (
-                current_task.status is TaskStatus.FAILED
-                or current_task.status is TaskStatus.COMPLETED
-            ):
+            if current_task is not None and is_finalized(current_task.status):
                 registered_pending_cleanup_tasks = 0
             else:
                 current_task = current_task or task
@@ -1549,10 +1601,7 @@ L2 更新 (缓存失效)
 
             def finalize_delete(task_to_update: TaskEntry) -> None:
                 # 保留终态：另一副本已 FAILED/COMPLETED 时跳过 status 改写
-                if (
-                    task_to_update.status is TaskStatus.FAILED
-                    or task_to_update.status is TaskStatus.COMPLETED
-                ):
+                if is_finalized(task_to_update.status):
                     pending_cleanup_tasks = 0
                 elif registered_pending_cleanup_tasks:
                     task_to_update.status = TaskStatus.RUNNING
@@ -1745,7 +1794,7 @@ L2 更新 (缓存失效)
                 )
                 if existing_response is not None:
                     return existing_response, []  # H-3: 已完成/重复路径无 pending 写
-        was_retrying_failed_task = task.status is TaskStatus.FAILED
+        was_retrying_failed_task = is_retryable(task.status)
         task.request_id = request.request_id
         task.op_type = OperationType.UPDATE_MEMORY
         task.scope = task_scope
@@ -1958,7 +2007,7 @@ L2 更新 (缓存失效)
                 )
                 if existing_response is not None:
                     return existing_response
-        was_retrying_failed_task = task.status is TaskStatus.FAILED
+        was_retrying_failed_task = is_retryable(task.status)
         task.request_id = request.request_id
         task.op_type = rebuild_op_type
         task.scope = task_scope
@@ -2094,7 +2143,7 @@ L2 更新 (缓存失效)
         # 保留另一副本已 FAILED 的终态；按 pending_cleanup_tasks 决定
         # RUNNING vs COMPLETED。
         def finalize_rebuild(t: TaskEntry) -> None:
-            if t.status is TaskStatus.FAILED or t.status is TaskStatus.COMPLETED:
+            if is_finalized(t.status):
                 pending_cleanup_local = 0
             else:
                 registered_local = int(t.result.get("pending_cleanup_tasks", 0))
@@ -4135,6 +4184,19 @@ L2 更新 (缓存失效)
 
     def _is_restricted_or_unsafe(self, messages: list[Any]) -> bool:
         return messages_are_restricted_or_unsafe(
+            [
+                {
+                    "role": getattr(message.role, "value", str(message.role)),
+                    "content": message.content,
+                }
+                for message in messages
+            ]
+        )
+
+    def _restricted_reason(self, messages: list[Any]) -> str | None:
+        """write-gate 命中原因（写进响应与日志，便于上游解释为什么是 skipped）。"""
+
+        return restricted_reason(
             [
                 {
                     "role": getattr(message.role, "value", str(message.role)),
