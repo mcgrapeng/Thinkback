@@ -113,5 +113,5 @@ class TestSummarizeRounds:
             return
 
         expected_sources = rounds[-10:]
-        assert text.split("；") == [entry.messages[0]["content"] for entry in expected_sources]
+        assert text == "；".join(entry.messages[0]["content"] for entry in expected_sources)
         assert latest is expected_sources[-1]
