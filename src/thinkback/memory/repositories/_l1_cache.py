@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import time
 from threading import Lock
 
 from thinkback.domain.entities import JournalEntry
@@ -16,6 +17,13 @@ from thinkback.domain.keys import scope_key
 
 # L1 短期记忆窗口：保留最近 N 个完整轮次。
 L1_CACHE_LIMIT = 10
+
+# 缓存条目的最长存活时间（秒）。
+# 原实现只在缓存**为空**时回源 PG：一旦热了就永远不再读库，而 clear_l1 只在
+# delete/rebuild 路径调用 → 多副本下（k8s replicas=2）另一个 Pod 追加的轮次
+# 本 Pod 永远看不到，同一用户换个 Pod 就换一份记忆（已实测复现）。
+# 加 TTL 后，缓存最多陈旧这么久就会被判为 miss 并回源 PG。
+L1_CACHE_TTL_SECONDS = 30.0
 
 
 class L1CacheMixin:
@@ -31,6 +39,14 @@ class L1CacheMixin:
 
     l1_cache: dict[str, list[JournalEntry]]
     _l1_lock: Lock
+
+    def _l1_timestamps(self) -> dict[str, float]:
+        """每个缓存键的写入时刻（monotonic）。惰性建表，免改两个 adapter 的构造。"""
+        stamps = getattr(self, "_l1_cache_at", None)
+        if stamps is None:
+            stamps = {}
+            self._l1_cache_at = stamps
+        return stamps
 
     def init_l1_lock(self) -> None:
         """N-5: 给子类一个统一的入口确保 _l1_lock 已初始化。
@@ -60,6 +76,7 @@ class L1CacheMixin:
             ]
             existing.append(entry)
             self.l1_cache[key] = existing[-limit:]
+            self._l1_timestamps()[key] = time.monotonic()
 
     def clear_l1(self, user_id: str, memory_scope_id: str, session_id: str | None = None) -> None:
         """清空 L1 缓存。删除时调用，确保不返回已删除的旧数据
@@ -70,22 +87,33 @@ class L1CacheMixin:
         """
         prefix = scope_key(user_id, memory_scope_id)
         with self._l1_lock:
+            stamps = self._l1_timestamps()
             if session_id:
                 self.l1_cache.pop(f"{prefix}:{session_id}", None)
+                stamps.pop(f"{prefix}:{session_id}", None)
                 return
             for key in list(self.l1_cache):
                 if key.startswith(f"{prefix}:"):
                     self.l1_cache.pop(key, None)
+                    stamps.pop(key, None)
 
     def get_l1(self, user_id: str, memory_scope_id: str, session_id: str) -> list[JournalEntry]:
         """读取 L1 缓存。从缓存中查询最近 N 轮回合
 
         返回格式：[JournalEntry, ...]（按时间序列，可为空）
         """
+        key = f"{scope_key(user_id, memory_scope_id)}:{session_id}"
         with self._l1_lock:
-            return list(
-                self.l1_cache.get(f"{scope_key(user_id, memory_scope_id)}:{session_id}", [])
-            )
+            entries = self.l1_cache.get(key)
+            if not entries:
+                return []
+            stamped_at = self._l1_timestamps().get(key)
+            if stamped_at is None or (time.monotonic() - stamped_at) > L1_CACHE_TTL_SECONDS:
+                # 超过 TTL：判为 miss，交给调用方回源 PG（并重新填充缓存）。
+                self.l1_cache.pop(key, None)
+                self._l1_timestamps().pop(key, None)
+                return []
+            return list(entries)
 
     def close(self, timeout: float = 5.0) -> None:
         """释放底层资源（事件循环、worker 线程、连接池等）。

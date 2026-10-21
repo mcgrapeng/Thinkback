@@ -156,7 +156,13 @@ class InMemoryMemoryRepository(L1CacheMixin):
             summary.summary_state = state
 
     def list_rounds(
-        self, user_id: str, memory_scope_id: str, session_id: str | None = None
+        self,
+        user_id: str,
+        memory_scope_id: str,
+        session_id: str | None = None,
+        *,
+        limit: int | None = None,
+        descending: bool = False,
     ) -> list[JournalEntry]:
         rounds = [
             entry
@@ -166,7 +172,10 @@ class InMemoryMemoryRepository(L1CacheMixin):
             and entry.round_state == "active"
             and (session_id is None or entry.session_id == session_id)
         ]
-        return sorted(rounds, key=round_sort_key)
+        ordered = sorted(rounds, key=round_sort_key, reverse=descending)
+        if limit is not None:
+            ordered = ordered[:limit]
+        return ordered
 
     def list_user_rounds(self, user_id: str) -> list[JournalEntry]:
         rounds = [
