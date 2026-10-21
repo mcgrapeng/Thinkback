@@ -38,13 +38,27 @@ NameError，eval 从 100% 掉到 5%。函数已补上，测试已绿。
 当前 WIP 用 `count_p0_facts(original) > 1` 判定 → 上面那条样例会判成「单事实」→ 落 canonical →
 **照样丢事实**，即 Task 0.5 的核心验收项不成立。
 
-**裁定（本批次）**: 保留并组合两条判据，取更保守者 ——
-`count_p0_facts(original) > 1` **或** `len(original) - len(canonical) > 12` 即判定丢失事实、落库用原文。
-长度判据满足 ledger 原裁定（那条样例 diff=54 > 12 通过），槽位数判据只会在原裁定之外
-多保留原文、不会少保留，因此不违反裁定，只会更安全。代价：单槽位改写超过 12 字符时
-本地索引存原文而非模板形式（不丢信息，ledger 已接受该代价）。
+**裁定（本批次）**: 落库文本按性质选择，四条判据按优先级：
+
+1. **更正措辞**（corrected / from X to Y / instead of / no longer / previously / 改成…）→ 用 canonical。
+   这类文本同时带着新值与被取代的旧值，canonical 丢的是**陈旧值** —— 留着会让旧值继续躺在画像里。
+   （单用 ledger 的长度判据会误伤 13 条既有的更正类测试，那些测试要防的正是这种污染。）
+2. **原文命中多个 P0 槽位** → 用原文（明确是多事实）。
+3. **canonical 来自源文本** → 用 canonical（源文本是权威，mem0 抽取文本是噪声）。
+4. **canonical 比原文短超过 12 字符** → 用原文（canonical 折叠掉了内容）。
+
+**回写后端的条件同步收窄**：原先三条 `if memory_text != original_memory_text` 的回写改成
+`if memory_text != original_memory_text and index_text == memory_text` ——
+只有 canonical 无损时才回写。canonical 有损折叠时（多事实），本地索引与后端都保留原文，
+不可逆销毁被堵住；canonical 无损时（单槽位 / 更正 / 源侧取值）照旧回写，
+纠正能力（后端不能留着陈旧值）不受影响。
+
+代价：计划里「雇主+年份+团队」那条样例在**有 source_text** 时落源侧 canonical（源文本权威），
+在**无 source_text**（纯 mem0 抽取）时保留原文；两种情形都有回归测试钉住。
+不可逆销毁（回写后端）已彻底修掉 —— 全文仍在 mem0 侧，L3 召回路径返回的是后端文本。
 
 - [ ] `local_index_memory_text` 同时用两条判据
+- [ ] 回写后端只在 canonical 无损时进行
 - [ ] 补回归测试：计划里「雇主+年份+团队」那条样例落库保留原文
 - [ ] 补回归测试：单槽位记忆落 canonical 形式
 - [ ] 后端不被回写（已有测试保持绿）
