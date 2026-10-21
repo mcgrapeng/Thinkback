@@ -13,6 +13,8 @@ from thinkback.domain.entities import JournalEntry
 from thinkback.domain.keys import fingerprint, request_fingerprint, round_sort_key
 from thinkback.domain.slots.canonical import (
     canonical_memory_text,
+    count_p0_facts,
+    is_correction_text,
     local_index_memory_text,
 )
 from thinkback.domain.summarization import (
@@ -66,6 +68,23 @@ def test_local_index_memory_text_prefers_source_derived_canonical() -> None:
     canonical = "User communication preference: 简洁直接的建议"
 
     assert local_index_memory_text(original, canonical, canonical_from_source=True) == canonical
+
+
+def test_local_index_memory_text_keeps_multi_fact_even_when_it_sounds_like_a_correction() -> None:
+    """既多事实又带更正措辞时，必须保留原文 —— 更正判据不能压过多事实判据。
+
+    回归缺陷：更正判据排在前面时，这条会落成 canonical，
+    生日、雇主、年份一起丢（不可逆）。
+    """
+    original = (
+        "User birthday is March 3rd, and she moved from Hangzhou to Shanghai "
+        "for a new job at Alibaba in 2024"
+    )
+    canonical = canonical_memory_text(original)
+
+    assert count_p0_facts(original) > 1
+    assert is_correction_text(original)
+    assert local_index_memory_text(original, canonical) == original
 
 
 def test_local_index_memory_text_uses_canonical_when_nothing_is_lost() -> None:
