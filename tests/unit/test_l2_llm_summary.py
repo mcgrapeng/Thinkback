@@ -344,3 +344,52 @@ def test_build_default_composer_passes_system_prompt() -> None:
     system_first = seen[0][0]
     assert ("综合摘要" in system_first) or ("画像" in system_first and "摘要" in system_first)
     assert "内容" in seen[0][1]  # 轮次进入 user prompt
+
+
+class RecordingRoundComposer:
+    """记录每次刷新收到的轮次 id（验证排除集跨 scope 生效）。"""
+
+    def __init__(self) -> None:
+        self.round_ids: list[list[str]] = []
+
+    def __call__(
+        self, rounds: list[Any], previous_summary: str | None
+    ) -> tuple[str, dict[str, str]]:
+        self.round_ids.append([getattr(round, "round_id", "") for round in rounds])
+        return "【主题】刷新后的摘要", {
+            "主题": "刷新后的摘要",
+            "进行中事项": "无",
+            "行为偏好": "无",
+            "近期状态": "无",
+        }
+
+
+def test_l2_refresh_excludes_rounds_of_deleted_long_term_memories() -> None:
+    """回归：L3 记忆在长期 scope，被删除后其轮次不得进 L2 摘要。
+
+    L3 记忆的 memory_scope_id 是长期常量（thinkback），journal 轮次的
+    memory_scope_id 是 session_id —— 两侧 scope key 不同。排除集若按会话
+    scope 查询就永远查不到长期 scope 里已删除的记忆，被删除的原文会从
+    L2 摘要里复活。
+    """
+    composer = RecordingRoundComposer()
+    service, _ = make_service(composer, interval=1)  # type: ignore[arg-type]
+    service.append(make_append("r1", "我养了一只猫叫麻薯"))
+    service.drain_l3_background_tasks(timeout=5)
+
+    memories = service.repository.list_memories("user-1", "thinkback")
+    assert memories, "append 应在长期 scope 留下一条 L3 记忆"
+    for memory in memories:
+        service.repository.mark_memory_deleted(memory.memory_id)
+
+    service.append(make_append("r2", "我住在沈阳", index=2))
+    service.drain_l3_background_tasks(timeout=5)
+
+    assert composer.round_ids, "刷新器应至少跑过一次"
+    refreshed = composer.round_ids[-1]
+    assert "r1" not in refreshed
+    assert "r2" in refreshed
+
+    summary = service.repository.get_summary("user-1", "session-1")
+    assert summary is not None
+    assert "麻薯" not in summary.summary_text
