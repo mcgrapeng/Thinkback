@@ -249,22 +249,28 @@ def local_index_memory_text(
     "User lives in 波士顿" 时，生日和 Lily 会在 PG 与 mem0 两边同时消失。
 
     判据按优先级：
-    - 更正事件 → 用 canonical（丢的是陈旧值，留着会污染画像）
     - 原文命中多个 P0 槽位 → 用原文（明确是多事实）
+    - 更正事件 → 用 canonical（丢的是陈旧值，留着会污染画像）
     - canonical 来自源文本 → 用 canonical（源文本是权威，mem0 抽取文本是噪声）
     - canonical 比原文短超过阈值 → 用原文（canonical 折叠掉了内容）
 
     长度判据不能省："搬到杭州 + 2024 年去阿里巴巴上班 + 离开老团队" 只命中
     location 一个槽位，但 canonical 会丢掉 52 个字符的雇主/年份/团队。
+
+    多槽位判据必须排在更正判据**前面**：一条文本可能同时是多事实与更正措辞
+    （"生日是 3 月 3 日，她从杭州搬到上海，2024 年去了阿里巴巴"）。
+    更正判据在前会把生日、雇主、年份一起丢掉 —— 不可逆。
+    陈旧值不会因此复活：冲突仲裁走的是 canonical 的槽位
+    （``_supersede_conflicting_memories`` 用 canonical 算 slot），与落库文本无关。
     """
     if not canonical:
         return original
     if not original:
         return canonical
-    if is_correction_text(original):
-        return canonical
     if count_p0_facts(original) > 1:
         return original
+    if is_correction_text(original):
+        return canonical
     if canonical_from_source:
         return canonical
     if len(original) - len(canonical) > _CANONICAL_LOSS_THRESHOLD:
