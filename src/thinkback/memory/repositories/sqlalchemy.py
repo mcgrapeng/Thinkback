@@ -15,7 +15,7 @@ from typing import Any, TypeVar
 from uuid import uuid4
 
 from loguru import logger
-from sqlalchemy import and_, func, select, update
+from sqlalchemy import and_, func, literal, not_, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -340,24 +340,54 @@ class SqlAlchemyMemoryRepository(L1CacheMixin):
         preserve_llm: bool = False,
     ) -> SummaryEntry:
         async with self.session_factory() as session:
-            record = await session.scalar(
-                select(CurrentSummaryRecord).where(
+            # 单条条件 UPDATE —— 判据与写在一起，不给并发留窗口。
+            # 原先是「SELECT 判 summary_kind → 再写」两步：后台 LLM 刷新
+            # （l2_refresh.py:148）与每次 append 的同步拼接写天然重叠，
+            # 拼接写读到 kind='concat' 时保护通过、随后提交，把刚写好的
+            # LLM 摘要覆盖成拼接兜底 —— 而行上仍标着 kind='llm'，
+            # _previous_llm_summary 会把这段拼接文本当「上一版 LLM 摘要」
+            # 喂进下一轮刷新，污染自我强化。
+            guard = not (preserve_llm and summary_kind == "concat")  # True = 允许覆盖
+            result = await session.execute(
+                update(CurrentSummaryRecord)
+                .where(
                     and_(
                         CurrentSummaryRecord.user_id == user_id,
                         CurrentSummaryRecord.memory_scope_id == memory_scope_id,
                     )
                 )
+                .where(
+                    or_(
+                        not_(CurrentSummaryRecord.summary_kind == "llm"),
+                        literal(summary_kind) != "concat",
+                        literal(guard),
+                    )
+                )
+                .values(
+                    summary_text=summary_text,
+                    summary_cursor_round=latest.round_id if latest else None,
+                    latest_source_round_id=latest.round_id if latest else None,
+                    latest_source_timestamp=latest.source_timestamp if latest else None,
+                    summary_state=SummaryState.ACTIVE.value,
+                    summary_kind=summary_kind,
+                    structured_sections=(
+                        dict(structured_sections) if structured_sections is not None else {}
+                    ),
+                )
             )
-            if (
-                preserve_llm
-                and summary_kind == "concat"
-                and record is not None
-                and record.summary_kind == "llm"
-            ):
-                # append 的拼接占位不覆盖已有 LLM 综合摘要（P0 语义；
-                # 该 select 本就存在，无额外查询）。
-                return self._summary_from_record(record)
-            if record is None:
+            if int(getattr(result, "rowcount", 0) or 0) == 0:
+                # 两种可能：行不存在（要 INSERT），或保护生效（不覆盖 LLM 摘要）。
+                record = await session.scalar(
+                    select(CurrentSummaryRecord).where(
+                        and_(
+                            CurrentSummaryRecord.user_id == user_id,
+                            CurrentSummaryRecord.memory_scope_id == memory_scope_id,
+                        )
+                    )
+                )
+                if record is not None:
+                    # 保护生效：返回现有摘要，不覆盖。
+                    return self._summary_from_record(record)
                 record = CurrentSummaryRecord(
                     summary_id=f"summary-{uuid4()}",
                     user_id=user_id,
@@ -370,15 +400,44 @@ class SqlAlchemyMemoryRepository(L1CacheMixin):
                     structured_sections=dict(structured_sections) if structured_sections else {},
                 )
                 session.add(record)
-            record.summary_text = summary_text
-            record.summary_cursor_round = latest.round_id if latest else None
-            record.latest_source_round_id = latest.round_id if latest else None
-            record.latest_source_timestamp = latest.source_timestamp if latest else None
-            record.summary_state = SummaryState.ACTIVE.value
-            record.summary_kind = summary_kind
-            if structured_sections is not None:
-                record.structured_sections = dict(structured_sections)
+                record.summary_text = summary_text
+                record.summary_cursor_round = latest.round_id if latest else None
+                record.latest_source_round_id = latest.round_id if latest else None
+                record.latest_source_timestamp = latest.source_timestamp if latest else None
+                record.summary_state = SummaryState.ACTIVE.value
+                record.summary_kind = summary_kind
+                try:
+                    await session.commit()
+                except IntegrityError:
+                    # 并发首次写入：新 scope 上两个写入者都看到「行不存在」并各自
+                    # INSERT，输的一方拿到裸 IntegrityError → 500。
+                    # 回读并发行，让调用方拿到对方的摘要（本方的写入放弃，
+                    # 下一次去抖会再补）。
+                    await session.rollback()
+                    existing = await session.scalar(
+                        select(CurrentSummaryRecord).where(
+                            and_(
+                                CurrentSummaryRecord.user_id == user_id,
+                                CurrentSummaryRecord.memory_scope_id == memory_scope_id,
+                            )
+                        )
+                    )
+                    if existing is None:
+                        raise
+                    return self._summary_from_record(existing)
+                await session.refresh(record)
+                return self._summary_from_record(record)
             await session.commit()
+            record = await session.scalar(
+                select(CurrentSummaryRecord).where(
+                    and_(
+                        CurrentSummaryRecord.user_id == user_id,
+                        CurrentSummaryRecord.memory_scope_id == memory_scope_id,
+                    )
+                )
+            )
+            if record is None:
+                raise RuntimeError(f"summary vanished after upsert: {user_id}/{memory_scope_id}")
             await session.refresh(record)
             return self._summary_from_record(record)
 
@@ -1051,6 +1110,11 @@ class SqlAlchemyMemoryRepository(L1CacheMixin):
         由调用方重读重放或放弃——杜绝多副本盲写整行导致的丢失更新
         （retry_count 少计 / pending 计数失真 / 状态回跳）。
         成功后行版本 +1，并把 entry 的版本同步抬升，支持同锁内链式变更。
+
+        插入路径同样要考虑并发：两个写入者都可能看到「行不存在」并各自 INSERT，
+        输的一方拿到裸 IntegrityError → 500（api/errors.py 不映射它）。
+        同文件的 _claim_task 与 _save_round 都 catch 了 IntegrityError 并回落并发行，
+        这里补上同样的口径：回读并发行，再走 CAS 更新分支。
         """
         async with self.session_factory() as session:
             record = await session.get(MemoryTaskRecord, task.task_id)
@@ -1069,31 +1133,46 @@ class SqlAlchemyMemoryRepository(L1CacheMixin):
                     row_version=0,
                 )
                 session.add(record)
-                task.row_version = 0
-            else:
-                result = await session.execute(
-                    update(MemoryTaskRecord)
-                    .where(
-                        MemoryTaskRecord.task_id == task.task_id,
-                        MemoryTaskRecord.row_version == task.row_version,
-                    )
-                    .values(
-                        request_id=task.request_id,
-                        op_type=task.op_type.value,
-                        scope=task.scope,
-                        operation_id=task.operation_id,
-                        history_version=task.history_version,
-                        status=task.status.value,
-                        retry_count=task.retry_count,
-                        last_error=task.last_error,
-                        result=task.result,
-                        row_version=task.row_version + 1,
-                    )
-                )
-                if int(getattr(result, "rowcount", 0) or 0) == 0:
+                try:
+                    await session.commit()
+                except IntegrityError:
+                    # 另一副本先插进去了：回读后走 CAS 更新分支（下面统一处理）。
                     await session.rollback()
-                    raise TaskStaleWriteError(task.task_id, task.row_version)
-                task.row_version += 1
+                    record = await session.get(MemoryTaskRecord, task.task_id)
+                    if record is None:
+                        raise RuntimeError(f"task vanished after insert conflict: {task.task_id}")
+                else:
+                    task.row_version = 0
+                    logger.bind(
+                        task_id=task.task_id,
+                        status=task.status.value,
+                        op_type=task.op_type.value,
+                        row_version=task.row_version,
+                    ).debug("task saved")
+                    return task
+            result = await session.execute(
+                update(MemoryTaskRecord)
+                .where(
+                    MemoryTaskRecord.task_id == task.task_id,
+                    MemoryTaskRecord.row_version == task.row_version,
+                )
+                .values(
+                    request_id=task.request_id,
+                    op_type=task.op_type.value,
+                    scope=task.scope,
+                    operation_id=task.operation_id,
+                    history_version=task.history_version,
+                    status=task.status.value,
+                    retry_count=task.retry_count,
+                    last_error=task.last_error,
+                    result=task.result,
+                    row_version=task.row_version + 1,
+                )
+            )
+            if int(getattr(result, "rowcount", 0) or 0) == 0:
+                await session.rollback()
+                raise TaskStaleWriteError(task.task_id, task.row_version)
+            task.row_version += 1
             await session.commit()
         logger.bind(
             task_id=task.task_id,

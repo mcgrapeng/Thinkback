@@ -71,7 +71,6 @@ from thinkback.memory.repositories import (
     request_fingerprint,
     source_ref_key,
 )
-from thinkback.memory.task_state import is_dead_letter, is_finalized, is_retryable
 from thinkback.memory.schemas import (
     AdminMemoryItem,
     AppendMemoryRequest,
@@ -100,6 +99,11 @@ from thinkback.memory.schemas import (
     UpdateMemoryRequest,
     UpdateMemoryResponse,
 )
+from thinkback.memory.task_state import is_dead_letter, is_finalized, is_retryable
+
+# 拼接摘要用的轮次窗口：summarize_rounds 只取最后 10 轮，
+# 这里多留 40 轮余量以容忍被排除（已删除/被取代）的轮次占位。
+SUMMARY_ROUNDS_WINDOW = 50
 
 
 class _BackendDeleteSync:
@@ -498,8 +502,8 @@ L2 更新 (缓存失效)
                 l3_slot_reserved = True
 
             previous_task = self.repository.get_task(task_id)
-            was_retrying_failed_task = (
-                previous_task is not None and is_retryable(previous_task.status)
+            was_retrying_failed_task = previous_task is not None and is_retryable(
+                previous_task.status
             )
             task = previous_task or TaskEntry(
                 task_id=task_id,
@@ -533,9 +537,7 @@ L2 更新 (缓存失效)
                 append_log.bind(
                     reason=restrict_reason or "restricted_or_unsafe_memory_content"
                 ).warning("memory append skipped by write gate")
-                l3_events = [
-                    {"event": "SKIP", "reason": "restricted_or_unsafe_memory_content"}
-                ]
+                l3_events = [{"event": "SKIP", "reason": "restricted_or_unsafe_memory_content"}]
                 self.repository.mark_round_deleted(request.round_id)
                 append_pending_backend_writes: list[Any] = []
             else:
@@ -4221,10 +4223,19 @@ L2 更新 (缓存失效)
         # 排除集按用户聚合：L3 记忆在长期 scope，轮次/摘要在会话 scope，
         # 按 scope 过滤会漏掉已删除事实 → 摘要把原文复活。
         deleted_refs = self.repository.excluded_source_refs_for_user(user_id)
+        # 只取最近的一窗口，而不是整个会话历史：
+        # summarize_rounds 内部只取最后 10 轮，而 list_rounds 会把该 scope 的
+        # 全部轮次连同 messages JSON 拉进内存 —— 每次 append 的成本随历史线性增长。
+        # 窗口取 50 轮（10 轮摘要 + 40 轮余量，容忍被排除的轮次占位）。
+        recent = self.repository.list_rounds(
+            user_id,
+            memory_scope_id,
+            limit=SUMMARY_ROUNDS_WINDOW,
+            descending=True,
+        )
+        recent.reverse()
         rounds = [
-            entry
-            for entry in self.repository.list_rounds(user_id, memory_scope_id)
-            if (entry.session_id, entry.round_id) not in deleted_refs
+            entry for entry in recent if (entry.session_id, entry.round_id) not in deleted_refs
         ]
         self.repository.upsert_summary_from_rounds(
             user_id, memory_scope_id, rounds, preserve_llm=True

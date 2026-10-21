@@ -65,7 +65,13 @@ class MemoryRepository(Protocol):
     def mark_summary(self, user_id: str, memory_scope_id: str, state: SummaryState) -> None: ...
 
     def list_rounds(
-        self, user_id: str, memory_scope_id: str, session_id: str | None = None
+        self,
+        user_id: str,
+        memory_scope_id: str,
+        session_id: str | None = None,
+        *,
+        limit: int | None = None,
+        descending: bool = False,
     ) -> list[JournalEntry]: ...
 
     def list_user_rounds(self, user_id: str) -> list[JournalEntry]: ...

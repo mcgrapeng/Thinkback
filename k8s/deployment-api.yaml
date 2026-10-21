@@ -6,7 +6,11 @@ metadata:
     app: thinkback
     component: api
 spec:
-  replicas: 2
+  # 单副本：进程内状态（API Key 表、幂等缓存、限流桶、L1 缓存）没有跨副本共享。
+  # 多副本下同一用户换个 Pod 就换一份记忆（L1 缓存无跨副本失效，已加 TTL 兜底），
+  # pod A 签发的 key 在 pod B 上查不到、限流额度实际翻倍。
+  # 要扩副本先把进程内状态挪到共享存储（Redis/PG），再改这里。
+  replicas: 1
   strategy:
     type: RollingUpdate
     rollingUpdate:
