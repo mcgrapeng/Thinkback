@@ -42,6 +42,7 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 from thinkback.domain.content_quality import intrinsic_quality
+from thinkback.domain.dedup import content_dedup_key, slot_dedup_key
 
 if TYPE_CHECKING:
     from thinkback.memory.schemas import MemoryItem
@@ -93,21 +94,34 @@ def _quality(item: MemoryItem) -> float:
 def dedupe_and_clip(
     items: list[MemoryItem], token_budget: int, *, now: datetime | None = None
 ) -> list[MemoryItem]:
-    """按内容去重（层优先 → 强度 → 同层分高者胜）再按预算裁剪。"""
+    """按内容去重（层优先 → 强度 → 同层分高者胜）再按预算裁剪。
+
+    两级去重：
+
+    1. **正文去重**（跨通道）：键是归一化后的正文（``domain.dedup``），
+       L1/L2/L3 三条通道里语义等价的措辞只保留一条 —— 层优先级高的胜出，
+       同层比强度、再比 score。旧口径按「字符串完全相等」去重，
+       只差一个标点或大小写的同一条事实会被注入两三次。
+    2. **槽位冲突消解**（仅 L3）：同一个 P0 槽位（生日 / 现居城市 / 宠物名……）
+       在一个上下文包里只能有一条事实。写入期已经用 supersede 保证过，
+       但异步竞争 / 非本副本写入会留下同槽位的多条 ACTIVE 记忆；
+       召回期再兜一次底：保留 ``valid_at`` 最新的一条（事实生效时间），
+       时间相同再比 score、强度。
+    """
 
     deduped: dict[str, MemoryItem] = {}
     for item in items:
-        normalized = item.content.strip()
-        if not normalized:
+        key = content_dedup_key(item.content)
+        if not key:
             continue
-        existing = deduped.get(normalized)
+        existing = deduped.get(key)
         if existing is None:
-            deduped[normalized] = item
+            deduped[key] = item
         else:
             item_pri = LAYER_PRIORITY.get(item.layer, 0)
             existing_pri = LAYER_PRIORITY.get(existing.layer, 0)
             if item_pri > existing_pri:
-                deduped[normalized] = item
+                deduped[key] = item
             elif item_pri == existing_pri:
                 existing_strength = _strength(existing, now)
                 item_strength = _strength(item, now)
@@ -115,7 +129,9 @@ def dedupe_and_clip(
                     item_strength == existing_strength
                     and (item.score or 0.0) > (existing.score or 0.0)
                 ):
-                    deduped[normalized] = item
+                    deduped[key] = item
+
+    deduped = _resolve_slot_conflicts(deduped, now)
 
     clipped: list[MemoryItem] = []
     used = 0
@@ -135,3 +151,68 @@ def dedupe_and_clip(
         used += cost
         clipped.append(item)
     return clipped
+
+
+def _resolve_slot_conflicts(
+    deduped: dict[str, MemoryItem], now: datetime | None = None
+) -> dict[str, MemoryItem]:
+    """同槽位的 L3 记忆只保留一条（事实生效时间最新的胜出）。
+
+    写入期用 supersede 保证「同一 P0 槽位只有一条 ACTIVE 记忆」，但并发写入、
+    非本副本写入、以及重建路径都可能留下同槽位的多条 ACTIVE 记忆。
+    两条同槽位记忆同时进上下文包，模型会同时看到旧值与新值 —— 这是比
+    「重复」更严重的错误（旧值会污染回答）。
+
+    仲裁顺序：``valid_at``（事实生效时间）→ ``score``（语义相关度）→ 强度。
+    ``valid_at`` 缺失（None）视为最旧。
+    """
+
+    winner_by_slot: dict[str, str] = {}
+    losers: set[str] = set()
+    for key, item in deduped.items():
+        if item.layer != "L3":
+            continue
+        slot = slot_dedup_key(item.content)
+        if slot is None:
+            continue
+        winner_key = winner_by_slot.get(slot)
+        if winner_key is None:
+            winner_by_slot[slot] = key
+            continue
+        winner = deduped[winner_key]
+        if _prefer_item(item, winner, now):
+            losers.add(winner_key)
+            winner_by_slot[slot] = key
+        else:
+            losers.add(key)
+    if not losers:
+        return deduped
+    return {key: item for key, item in deduped.items() if key not in losers}
+
+
+def _prefer_item(candidate: MemoryItem, current: MemoryItem, now: datetime | None = None) -> bool:
+    """候选是否应当取代当前保留项（valid_at → score → 强度）。"""
+
+    candidate_valid_at = _aware(candidate.valid_at)
+    current_valid_at = _aware(current.valid_at)
+    if candidate_valid_at != current_valid_at:
+        if candidate_valid_at is None:
+            return False
+        if current_valid_at is None:
+            return True
+        return candidate_valid_at > current_valid_at
+    candidate_score = candidate.score or 0.0
+    current_score = current.score or 0.0
+    if candidate_score != current_score:
+        return candidate_score > current_score
+    return _strength(candidate, now) > _strength(current, now)
+
+
+def _aware(value: datetime | None) -> datetime | None:
+    """把 naive datetime 归一成 UTC aware；None 透传。"""
+
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value

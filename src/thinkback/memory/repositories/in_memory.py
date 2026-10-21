@@ -102,7 +102,9 @@ class InMemoryMemoryRepository(L1CacheMixin):
         return entry
 
     def upsert_summary_from_journal(self, user_id: str, memory_scope_id: str) -> SummaryEntry:
-        deleted_refs = self.excluded_source_refs(user_id, memory_scope_id)
+        # 排除集按**用户**聚合（不按 scope）：L3 记忆在长期 scope，
+        # 轮次在会话 scope；按 scope 过滤会漏掉已删除事实 → 摘要把原文复活。
+        deleted_refs = self.excluded_source_refs_for_user(user_id)
         rounds = [
             entry
             for entry in self.list_rounds(user_id, memory_scope_id)
@@ -393,6 +395,25 @@ class InMemoryMemoryRepository(L1CacheMixin):
                 in {MemoryStatus.DELETED, MemoryStatus.SUPERSEDED, MemoryStatus.SUPPRESSED}
             ):
                 refs.update(source_ref_key(source_ref) for source_ref in memory.source_refs)
+        return refs
+
+    def excluded_source_refs_for_user(self, user_id: str) -> set[tuple[str | None, str | None]]:
+        """该用户全部 scope 下已删除/被取代/被遗忘记忆的来源轮次。
+
+        与 SQL 版同语义：L3 记忆在长期 scope，L1/L2 在会话 scope，
+        跨表聚合排除集时不能按单一 scope 过滤。
+        """
+        refs: set[tuple[str | None, str | None]] = set()
+        for memory in self.memories.values():
+            if memory.user_id != user_id:
+                continue
+            if memory.memory_status not in {
+                MemoryStatus.DELETED,
+                MemoryStatus.SUPERSEDED,
+                MemoryStatus.SUPPRESSED,
+            }:
+                continue
+            refs.update(source_ref_key(source_ref) for source_ref in memory.source_refs)
         return refs
 
     def save_task(self, task: TaskEntry) -> TaskEntry:

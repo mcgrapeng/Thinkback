@@ -500,6 +500,70 @@ def test_source_ref_sets_split_deleted_and_excluded(repository) -> None:  # type
     }
 
 
+def test_excluded_source_refs_for_user_spans_memory_scopes(
+    repository: InMemoryMemoryRepository | SqlAlchemyMemoryRepository,
+) -> None:
+    """排除集按用户聚合：跨 scope 的已删除记忆都要算进来。
+
+    L3 记忆存在长期 scope（thinkback），轮次/摘要在会话 scope；
+    按单一 scope 过滤会漏掉「记忆已删除」的那一侧。
+    """
+    long_term = repository.add_memory_index(
+        backend_memory_id="b-long-term",
+        user_id="user-1",
+        memory_scope_id="thinkback",
+        source_refs=[{"session_id": "session-1", "round_id": "r1"}],
+        memory_text="长期 scope 的记忆",
+    )
+    session_scoped = repository.add_memory_index(
+        backend_memory_id="b-session",
+        user_id="user-1",
+        memory_scope_id="session-1",
+        source_refs=[{"session_id": "session-2", "round_id": "r9"}],
+        memory_text="会话 scope 的记忆",
+    )
+    other_user = repository.add_memory_index(
+        backend_memory_id="b-other-user",
+        user_id="user-2",
+        memory_scope_id="thinkback",
+        source_refs=[{"session_id": "session-3", "round_id": "r7"}],
+        memory_text="别的用户的记忆",
+    )
+    repository.mark_memory_deleted(long_term.memory_id)
+    repository.mark_memory_suppressed(session_scoped.memory_id)
+    repository.mark_memory_deleted(other_user.memory_id)
+
+    assert repository.excluded_source_refs_for_user("user-1") == {
+        source_ref_key({"session_id": "session-1", "round_id": "r1"}),
+        source_ref_key({"session_id": "session-2", "round_id": "r9"}),
+    }
+
+
+def test_upsert_summary_from_journal_excludes_memory_deleted_in_long_term_scope(
+    repository: InMemoryMemoryRepository | SqlAlchemyMemoryRepository,
+) -> None:
+    """回归：记忆在长期 scope、轮次在会话 scope 时，已删除事实不得留在 L2 摘要。
+
+    生产常量：L3 记忆 memory_scope_id="thinkback"，journal 轮次
+    memory_scope_id=session_id。旧实现用会话 scope 去查排除集 → 永远查不到
+    长期 scope 里的已删除记忆 → 被删除的原文从 L2 摘要里复活。
+    """
+    repository.save_round(make_append(round_id="r1", content="请记住我叫阿鹏"))
+    repository.save_round(make_append(round_id="r2", content="我住在沈阳"))
+    memory = repository.add_memory_index(
+        backend_memory_id="backend-long-term",
+        user_id="user-1",
+        memory_scope_id="thinkback",
+        source_refs=[{"session_id": "session-1", "round_id": "r1"}],
+        memory_text="用户叫阿鹏",
+    )
+    repository.mark_memory_deleted(memory.memory_id)
+
+    summary = repository.upsert_summary_from_journal("user-1", "session-1")
+    assert "我住在沈阳" in summary.summary_text
+    assert "请记住我叫阿鹏" not in summary.summary_text
+
+
 # ---------------------------------------------------------------------------
 # 后台任务（claim / CAS / stale 回收）
 # ---------------------------------------------------------------------------

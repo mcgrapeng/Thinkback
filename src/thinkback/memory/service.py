@@ -1243,7 +1243,9 @@ L2 更新 (缓存失效)
         # 与重建/摘要同口径：已删/被取代/被遗忘事实的来源轮次不进召回。
         # delete 只 clear_l1 不墓碑 journal（多事实共享轮次时保留原文），
         # 但 get_l1 冷缓存会回源 journal —— 不过滤就等于把已删除事实原文复活。
-        excluded_refs = self.repository.excluded_source_refs(request.user_id, l3_scope_id)
+        # 排除集按用户聚合（不按 scope）：L3 记忆在长期 scope，轮次在会话 scope，
+        # 按 scope 过滤会漏掉「记忆已删除/已遗忘」的轮次 → 原文从 L1 复活。
+        excluded_refs = self.repository.excluded_source_refs_for_user(request.user_id)
         for entry in self.repository.get_l1(request.user_id, session_scope_id, request.session_id):
             if (entry.session_id, entry.round_id) in excluded_refs:
                 continue
@@ -1275,13 +1277,13 @@ L2 更新 (缓存失效)
             degradation_reasons.append("l2_rebuilding")
 
         must_query_l3 = request.intent is RecallIntent.CHAT
+        recalled_entries: list[Any] = []
         if must_query_l3:
             active_memories = self._active_memories(request.user_id, l3_scope_id)
             active_memory_by_backend_id = {
                 memory.backend_memory_id: memory for memory in active_memories
             }
             query_slot = self._query_conflict_slot(request.query)
-            recalled_entries: list[Any] = []
             if query_slot:
                 backfilled = self._backfill_matching_slot_memories(
                     items,
@@ -1335,13 +1337,22 @@ L2 更新 (缓存失效)
                             metadata=self._recall_l3_metadata(item.get("metadata")),
                             recall_count=getattr(indexed_memory, "recall_count", 0) or 0,
                             last_recalled_at=getattr(indexed_memory, "last_recalled_at", None),
+                            valid_at=getattr(indexed_memory, "valid_at", None),
                         )
                     )
                     recalled_entries.append(indexed_memory)
-                # P2#7：被召回即强化（艾宾浩斯信号，debounce 限流写放大）。
-                self._touch_recalled_entries(recalled_entries)
 
         clipped_items = self._dedupe_and_clip(items, request.token_budget)
+        # P2#7：被召回即强化（艾宾浩斯信号，debounce 限流写放大）。
+        # 只对**真正进入上下文**的记忆计数：被去重（同内容/同槽位）或被预算
+        # 裁掉的条目并没有暴露给模型，计进去会形成「召回 → 计数涨 → 强度涨 →
+        # 排名提前 → 更容易召回」的曝光偏差闭环。
+        delivered_memory_ids = {
+            item.memory_id for item in clipped_items if item.layer == "L3" and item.memory_id
+        }
+        self._touch_recalled_entries(
+            [entry for entry in recalled_entries if entry.memory_id in delivered_memory_ids]
+        )
         LOGGER_MEMORY.completed(
             "recall",
             "ok",
@@ -3150,6 +3161,7 @@ L2 更新 (缓存失效)
                 metadata={"memory_as_data": True, "slot_backfill": query_slot},
                 recall_count=getattr(newest, "recall_count", 0) or 0,
                 last_recalled_at=getattr(newest, "last_recalled_at", None),
+                valid_at=getattr(newest, "valid_at", None),
             )
         )
         return [newest]
@@ -4144,7 +4156,9 @@ L2 更新 (缓存失效)
         拼接覆盖——最新轮次由 L1 承载，L2 综合版允许滞后到下一次去抖
         刷新。保留判断在仓储层完成（SQL upsert 本就先 select，零额外查询）。
         """
-        deleted_refs = self.repository.excluded_source_refs(user_id, memory_scope_id)
+        # 排除集按用户聚合：L3 记忆在长期 scope，轮次/摘要在会话 scope，
+        # 按 scope 过滤会漏掉已删除事实 → 摘要把原文复活。
+        deleted_refs = self.repository.excluded_source_refs_for_user(user_id)
         rounds = [
             entry
             for entry in self.repository.list_rounds(user_id, memory_scope_id)

@@ -364,6 +364,10 @@ class MemoryItem(BaseModel):
         default=None,
         description="最近一次召回时间；非 L3 为 None。S1 强度排序 (recency × frequency) 输入。",
     )
+    valid_at: datetime | None = Field(
+        default=None,
+        description="事实生效时间；仅 L3 有值。同槽位冲突消解的仲裁依据（最新事实胜出）。",
+    )
 
 
 class ManagedMemoryItem(BaseModel):

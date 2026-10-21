@@ -294,7 +294,9 @@ class SqlAlchemyMemoryRepository(L1CacheMixin):
         return entry
 
     def upsert_summary_from_journal(self, user_id: str, memory_scope_id: str) -> SummaryEntry:
-        excluded_refs = self.excluded_source_refs(user_id, memory_scope_id)
+        # 排除集按**用户**聚合（不按 scope）：L3 记忆在长期 scope，
+        # 轮次在会话 scope；按 scope 过滤会漏掉已删除事实 → 摘要把原文复活。
+        excluded_refs = self.excluded_source_refs_for_user(user_id)
         rounds = [
             entry
             for entry in self.list_rounds(user_id, memory_scope_id)
@@ -946,6 +948,44 @@ class SqlAlchemyMemoryRepository(L1CacheMixin):
             refs: set[tuple[str | None, str | None]] = set()
             for record in records:
                 refs.update(source_ref_key(source_ref) for source_ref in record.source_refs)
+            return refs
+
+    def excluded_source_refs_for_user(self, user_id: str) -> set[tuple[str | None, str | None]]:
+        """该用户全部 scope 下已删除/被取代/被遗忘记忆的来源轮次。
+
+        跨表聚合口径：L3 记忆存在长期 scope（``thinkback``），L1 回合与 L2 摘要
+        存在会话 scope，两侧 scope key 不同 —— 按单一 scope 过滤排除集，
+        被删除/被遗忘的事实会从 L2 摘要里复活。来源引用自带
+        ``(session_id, round_id)``，因此跨 scope 聚合是安全的。
+
+        只取 ``source_refs`` 一列：这是召回热路径，不需要其余 18 列。
+        """
+        return self._run(self._excluded_source_refs_for_user(user_id))
+
+    async def _excluded_source_refs_for_user(
+        self, user_id: str
+    ) -> set[tuple[str | None, str | None]]:
+        async with self.session_factory() as session:
+            rows = (
+                await session.execute(
+                    select(MemoryRecord.source_refs).where(
+                        and_(
+                            MemoryRecord.user_id == user_id,
+                            MemoryRecord.memory_status.in_(
+                                [
+                                    MemoryStatus.DELETED.value,
+                                    MemoryStatus.SUPERSEDED.value,
+                                    MemoryStatus.SUPPRESSED.value,
+                                ]
+                            ),
+                        )
+                    )
+                )
+            ).all()
+            refs: set[tuple[str | None, str | None]] = set()
+            for (raw_refs,) in rows:
+                for source_ref in raw_refs or []:
+                    refs.add(source_ref_key(source_ref))
             return refs
 
     def touch_memory_recalled(self, memory_ids: list[str]) -> int:

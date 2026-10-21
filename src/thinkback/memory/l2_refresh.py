@@ -132,7 +132,9 @@ class L2BackgroundRefresher:
         refresh_log = logger.bind(user_id=user_id, session_scope_id=session_scope_id)
         refresh_log.debug("memory l2 llm refresh started")
         try:
-            excluded_refs = self._repository.excluded_source_refs(user_id, session_scope_id)
+            # 排除集按用户聚合：L3 记忆在长期 scope，轮次在会话 scope；
+            # 按 scope 过滤会漏掉已删除/已遗忘的事实 → LLM 摘要把原文复活。
+            excluded_refs = self._repository.excluded_source_refs_for_user(user_id)
             rounds = [
                 entry
                 for entry in self._repository.list_rounds(user_id, session_scope_id)
