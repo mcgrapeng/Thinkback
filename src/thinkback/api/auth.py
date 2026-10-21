@@ -4,8 +4,8 @@
 
 API Key 格式: tbk_{env}_{key_id}_{secret}
 - env: live | test
-- key_id: 8 位 hex(可读标识)
-- secret: 32 位 hex(验证用)
+- key_id: 32 位 hex(128 bit,不可枚举)
+- secret: 64 位 hex(256 bit,验证用)
 
 每个 API Key 绑定一个 tenant_id 和一组 scope。
 """
@@ -13,7 +13,6 @@ API Key 格式: tbk_{env}_{key_id}_{secret}
 from __future__ import annotations
 
 import hashlib
-import hmac
 import secrets
 import time
 from collections.abc import Awaitable, Callable
@@ -23,6 +22,16 @@ from typing import Annotated
 
 from fastapi import Depends, Header, HTTPException, Request
 from loguru import logger
+
+
+def _hash_secret(key_id: str, secret: str) -> str:
+    """secret 的存储形态：sha256(key_id:secret)。只存哈希,从不存明文。"""
+    return hashlib.sha256(f"{key_id}:{secret}".encode()).hexdigest()
+
+
+def _key_fingerprint(key_id: str) -> str:
+    """日志里的 key 指纹 —— 够审计追查,不能拿去枚举或验证。"""
+    return hashlib.sha256(key_id.encode()).hexdigest()[:8]
 
 
 class Scope(StrEnum):
@@ -39,6 +48,9 @@ class ApiKey:
     key_id: str
     tenant_id: str
     scopes: frozenset[Scope]
+    # sha256(f"{key_id}:{secret}") —— 只存哈希,明文只在签发时返回一次。
+    # 没有这一列,校验在结构上就无从实现(只能拿同一个表达式比自己)。
+    secret_hash: str
     plan: str = "free"
     rate_limit_per_minute: int = 60
     rate_limit_burst: int = 10
@@ -81,8 +93,8 @@ def generate_api_key(
     env: str = "live",
 ) -> tuple[str, ApiKey]:
     """生成 API key,返回 (明文 key, 存储记录)。明文只在生成时显示一次。"""
-    key_id = secrets.token_hex(4)
-    secret = secrets.token_hex(16)
+    key_id = secrets.token_hex(16)
+    secret = secrets.token_hex(32)
     plaintext = f"tbk_{env}_{key_id}_{secret}"
 
     limits = {"free": (60, 10), "pro": (600, 50), "enterprise": (6000, 500)}
@@ -92,12 +104,13 @@ def generate_api_key(
         key_id=key_id,
         tenant_id=tenant_id,
         scopes=frozenset(scopes),
+        secret_hash=_hash_secret(key_id, secret),
         plan=plan,
         rate_limit_per_minute=rpm,
         rate_limit_burst=burst,
     )
     _API_KEYS[key_id] = record
-    logger.info(f"api_key.created key_id={key_id} tenant={tenant_id} plan={plan}")
+    logger.info(f"api_key.created key_fp={_key_fingerprint(key_id)} tenant={tenant_id} plan={plan}")
     return plaintext, record
 
 
@@ -117,13 +130,14 @@ def revoke_api_key(key_id: str) -> bool:
         key_id=record.key_id,
         tenant_id=record.tenant_id,
         scopes=record.scopes,
+        secret_hash=record.secret_hash,
         plan=record.plan,
         rate_limit_per_minute=record.rate_limit_per_minute,
         rate_limit_burst=record.rate_limit_burst,
         created_at=record.created_at,
         is_active=False,  # 软删
     )
-    logger.info(f"api_key.revoked key_id={key_id}")
+    logger.info(f"api_key.revoked key_fp={_key_fingerprint(key_id)}")
     return True
 
 
@@ -147,11 +161,12 @@ def _parse_api_key(authorization: str) -> tuple[str, str] | None:
 
 
 def _verify_secret(record: ApiKey, secret: str) -> bool:
-    """验证 secret(用 record.key_id + secret 做 HMAC)。"""
-    expected = hashlib.sha256(f"{record.key_id}:{secret}".encode()).hexdigest()
-    return hmac.compare_digest(
-        expected, hashlib.sha256(f"{record.key_id}:{secret}".encode()).hexdigest()
-    )
+    """验证 secret —— 与**存储的哈希**比,不是拿同一个表达式比自己。
+
+    原实现两侧是同一个表达式,恒为 True:任意 secret 都能通过校验。
+    """
+    expected = _hash_secret(record.key_id, secret)
+    return secrets.compare_digest(record.secret_hash, expected)
 
 
 async def require_auth(
@@ -202,8 +217,21 @@ async def require_auth(
             },
         )
 
-    # tenant 一致性检查
-    if x_tenant_id and x_tenant_id != record.tenant_id:
+    # tenant 一致性检查 —— 头是**强制**的。
+    # 原实现是 `if x_tenant_id and ...`：客户端不传就不校验,而 v1_memory.py 的
+    # 模块说明写着「强制 Tenant ID 头」—— 文档承诺与实现不符。
+    if not x_tenant_id:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": {
+                    "code": "TB-1003",
+                    "message": "X-Tenant-Id header is required",
+                    "request_id": request_id,
+                }
+            },
+        )
+    if x_tenant_id != record.tenant_id:
         raise HTTPException(
             status_code=403,
             detail={
@@ -230,6 +258,13 @@ def require_scope(scope: Scope) -> Callable[..., Awaitable[AuthContext]]:
         return auth
 
     return _check
+
+
+async def require_tenant(
+    auth: Annotated[AuthContext, Depends(require_auth)],
+) -> str:
+    """返回已校验的租户 ID —— 供 v1 路由做 user_id 命名空间。"""
+    return auth.tenant_id
 
 
 # ─── 预置测试 key(开发用,生产替换为 DB 注册) ──────────────────────────

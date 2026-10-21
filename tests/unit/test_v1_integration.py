@@ -98,7 +98,7 @@ def test_v1_succeeds_with_valid_key() -> None:
                     },
                 ],
             },
-            headers={"Authorization": f"Bearer {plaintext}"},
+            headers={"Authorization": f"Bearer {plaintext}", "X-Tenant-Id": "tenant_test"},
         )
         assert response.status_code in (200, 202), response.text
 
@@ -125,7 +125,7 @@ def test_v1_rejects_request_without_required_scope() -> None:
                 "round_id": "r_001",
                 "messages": [{"role": "user", "content": "test"}],
             },
-            headers={"Authorization": f"Bearer {plaintext}"},
+            headers={"Authorization": f"Bearer {plaintext}", "X-Tenant-Id": "tenant_test"},
         )
         assert response.status_code == 403
         body = response.json()
@@ -170,6 +170,7 @@ def test_idempotency_same_key_same_body_returns_cached() -> None:
         }
         headers = {
             "Authorization": f"Bearer {plaintext}",
+            "X-Tenant-Id": "tenant_test",
             "Idempotency-Key": "idem_test_001",
         }
         r1 = client.post("/v1/memory/append", json=body, headers=headers)
@@ -194,6 +195,7 @@ def test_idempotency_same_key_different_body_returns_409() -> None:
     with TestClient(create_app()) as client:
         h = {
             "Authorization": f"Bearer {plaintext}",
+            "X-Tenant-Id": "tenant_test",
             "Idempotency-Key": "idem_conflict_001",
         }
         body1 = {
@@ -259,7 +261,7 @@ def test_rate_limit_returns_429_after_burst() -> None:
         plan="free",
     )
     with TestClient(create_app()) as client:
-        h = {"Authorization": f"Bearer {plaintext}"}
+        h = {"Authorization": f"Bearer {plaintext}", "X-Tenant-Id": "tenant_rl"}
         # 消费 10 个 token(burst)
         for _ in range(10):
             r = client.get("/v1/memory?user_id=u1", headers=h)

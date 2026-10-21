@@ -167,7 +167,9 @@ async def test_l3_dependencies_skipped_when_memory_llm_key_missing(monkeypatch) 
 async def test_production_readiness_fails_when_memory_llm_key_missing(monkeypatch) -> None:
     """生产环境缺 L3 LLM 凭据时不能把 Mem0/Milvus 依赖标成 ready。"""
     monkeypatch.setattr(
-        readiness, "settings", Settings(environment="production", memory_llm_key="")
+        readiness,
+        "settings",
+        Settings(environment="production", memory_llm_key="", admin_token="test-admin-token"),
     )
 
     class FailMilvusClient:

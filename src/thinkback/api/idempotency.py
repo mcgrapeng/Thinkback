@@ -21,6 +21,8 @@ from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoin
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp
 
+from thinkback.api.auth import _parse_api_key, get_api_key
+
 CACHE_TTL = 24 * 3600  # 24h
 MAX_CACHE_SIZE = 10000
 
@@ -30,20 +32,32 @@ class CachedResponse:
     body: bytes
     status_code: int
     content_type: str
+    headers: dict[str, str]
     timestamp: float
 
 
 class IdempotencyCache:
-    """LRU 缓存,按 (key, body_hash) 存储响应。"""
+    """LRU 缓存,按 (租户, key, body_hash) 存储响应。
+
+    租户这一维是**必需**的：原来键只有 (key, body_hash)，缓存是进程内全局的，
+    于是租户 B 用和租户 A 相同的 Idempotency-Key + 相同 body，就能拿到 A 的缓存响应
+    （同一个 backend_memory_id、同一个 task_id）—— 明确的跨租户数据泄漏。
+
+    冲突检测也从「扫全表 startswith」改成二级索引
+    （(租户, key) -> 已见过的 body_hash 集合）：
+    - 不再是 O(缓存大小)
+    - 不会再把 key `a` 和 key `a:b` 误判成冲突（startswith 前缀匹配的经典坑）
+    """
 
     def __init__(self) -> None:
-        self._store: OrderedDict[str, CachedResponse] = OrderedDict()
+        self._store: OrderedDict[tuple[str, str, str], CachedResponse] = OrderedDict()
+        self._index: dict[tuple[str, str], set[str]] = {}
 
-    def _make_key(self, idem_key: str, body_hash: str) -> str:
-        return f"{idem_key}:{body_hash}"
+    def _make_key(self, scope: str, idem_key: str, body_hash: str) -> tuple[str, str, str]:
+        return (scope, idem_key, body_hash)
 
-    def get(self, idem_key: str, body_hash: str) -> CachedResponse | None:
-        key = self._make_key(idem_key, body_hash)
+    def get(self, scope: str, idem_key: str, body_hash: str) -> CachedResponse | None:
+        key = self._make_key(scope, idem_key, body_hash)
         entry = self._store.get(key)
         if entry is None:
             return None
@@ -53,25 +67,38 @@ class IdempotencyCache:
         self._store.move_to_end(key)
         return entry
 
-    def get_conflict(self, idem_key: str, body_hash: str) -> bool:
+    def get_conflict(self, scope: str, idem_key: str, body_hash: str) -> bool:
         """检查同 key 但不同 body 是否存在(冲突)。"""
-        for existing_key in self._store:
-            if existing_key.startswith(f"{idem_key}:") and not existing_key.endswith(body_hash):
-                return True
-        return False
+        hashes = self._index.get((scope, idem_key))
+        if not hashes:
+            return False
+        return body_hash not in hashes
 
-    def put(self, idem_key: str, body_hash: str, response: CachedResponse) -> None:
-        key = self._make_key(idem_key, body_hash)
+    def put(self, scope: str, idem_key: str, body_hash: str, response: CachedResponse) -> None:
+        key = self._make_key(scope, idem_key, body_hash)
         self._store[key] = response
         self._store.move_to_end(key)
+        self._index.setdefault((scope, idem_key), set()).add(body_hash)
         while len(self._store) > MAX_CACHE_SIZE:
-            self._store.popitem(last=False)
+            evicted_key, _ = self._store.popitem(last=False)
+            evicted_scope, evicted_idem, evicted_hash = evicted_key
+            hashes = self._index.get((evicted_scope, evicted_idem))
+            if hashes is not None:
+                hashes.discard(evicted_hash)
+                if not hashes:
+                    self._index.pop((evicted_scope, evicted_idem), None)
 
     def clear_expired(self) -> int:
         now = time.time()
         expired = [k for k, v in self._store.items() if now - v.timestamp > CACHE_TTL]
         for k in expired:
             del self._store[k]
+            scope, idem_key, body_hash = k
+            hashes = self._index.get((scope, idem_key))
+            if hashes is not None:
+                hashes.discard(body_hash)
+                if not hashes:
+                    self._index.pop((scope, idem_key), None)
         return len(expired)
 
 
@@ -103,12 +130,15 @@ class IdempotencyMiddleware(BaseHTTPMiddleware):
         if not idem_key:
             return await call_next(request)
 
+        # 缓存按租户分域：不同租户用同一个 Idempotency-Key 是两件事。
+        scope = self._resolve_scope(request)
+
         # 读 body(用于 hash)
         body = await request.body()
         body_hash = hashlib.sha256(body).hexdigest()[:16]
 
         # 检查冲突
-        if self.cache.get_conflict(idem_key, body_hash):
+        if self.cache.get_conflict(scope, idem_key, body_hash):
             logger.warning(f"idempotency.conflict key={idem_key}")
             return JSONResponse(
                 status_code=409,
@@ -124,14 +154,16 @@ class IdempotencyMiddleware(BaseHTTPMiddleware):
             )
 
         # 检查缓存
-        cached = self.cache.get(idem_key, body_hash)
+        cached = self.cache.get(scope, idem_key, body_hash)
         if cached:
             logger.info(f"idempotency.cache_hit key={idem_key}")
             return Response(
                 content=cached.body,
                 status_code=cached.status_code,
                 media_type=cached.content_type,
-                headers={"X-Idempotent-Replay": "true"},
+                # 透传原响应头：丢头会把 trace 中间件设的 X-Trace-Id 抹掉
+                # —— 恰好在需要排查的写链路上失去关联。
+                headers={**cached.headers, "X-Idempotent-Replay": "true"},
             )
 
         # 执行请求
@@ -151,19 +183,37 @@ class IdempotencyMiddleware(BaseHTTPMiddleware):
                 resp_body = bytes(getattr(response, "body", b"") or b"")
 
             self.cache.put(
+                scope,
                 idem_key,
                 body_hash,
                 CachedResponse(
                     body=resp_body,
                     status_code=response.status_code,
                     content_type=response.headers.get("content-type", "application/json"),
+                    headers=dict(response.headers),
                     timestamp=time.time(),
                 ),
             )
-            return Response(
+            rebuilt = Response(
                 content=resp_body,
                 status_code=response.status_code,
                 media_type=response.headers.get("content-type", "application/json"),
+                headers=dict(response.headers),
             )
+            return rebuilt
 
         return response
+
+    @staticmethod
+    def _resolve_scope(request: Request) -> str:
+        """幂等缓存的租户域 —— 从 Authorization 头解析 API key 拿 tenant。
+
+        解析不到（无 key / key 不存在）时用空串域：认证本身由 require_auth 负责，
+        这里只需要保证「不同租户不共享缓存条目」。
+        """
+        parsed = _parse_api_key(request.headers.get("authorization", ""))
+        if not parsed:
+            return ""
+        key_id, _ = parsed
+        record = get_api_key(key_id)
+        return record.tenant_id if record else ""

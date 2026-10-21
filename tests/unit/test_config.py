@@ -1,3 +1,6 @@
+import pytest
+from pydantic import ValidationError
+
 from thinkback.infra.config import Settings
 
 EMPTY_ENV_FILE = "/tmp/thinkback-missing-tests.env"
@@ -135,6 +138,8 @@ def test_production_environment_does_not_read_local_dotenv(tmp_path, monkeypatch
     )
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("ENVIRONMENT", "production")
+    # 生产环境必须配置 ADMIN_TOKEN（否则 /admin/api/* 无鉴权），见 Settings 校验器。
+    monkeypatch.setenv("ADMIN_TOKEN", "test-admin-token")
     monkeypatch.delenv("APP_NAME", raising=False)
     monkeypatch.delenv("POSTGRES_DATABASE", raising=False)
     monkeypatch.delenv("MEMORY_LLM_KEY", raising=False)
@@ -145,6 +150,18 @@ def test_production_environment_does_not_read_local_dotenv(tmp_path, monkeypatch
     assert settings.app_name == "thinkback"
     assert settings.postgres_database == "thinkback"
     assert settings.memory_llm_key == ""
+
+
+def test_production_without_admin_token_fails_fast() -> None:
+    """生产环境缺 ADMIN_TOKEN 必须在启动时就失败 —— 管理面能删任意用户全部记忆。"""
+    with pytest.raises(ValidationError, match="ADMIN_TOKEN must be set"):
+        Settings(_env_file=EMPTY_ENV_FILE, environment="production", admin_token="")
+
+
+def test_non_production_allows_empty_admin_token() -> None:
+    """非生产环境可以留空 —— 管理面这时返回 503（拒绝），不是放行。"""
+    settings = Settings(_env_file=EMPTY_ENV_FILE, environment="development", admin_token="")
+    assert settings.admin_token == ""
 
 
 def test_settings_does_not_expose_legacy_memory_api_keys_field() -> None:

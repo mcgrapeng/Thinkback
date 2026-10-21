@@ -62,11 +62,19 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
     def _get_bucket(self, key_id: str, rate_per_minute: int, burst: int) -> TokenBucket:
         bucket = self.buckets[key_id]
-        if bucket.burst != burst:
+        if bucket.burst == 0:
+            # 新桶：按 burst 额度初始化
             bucket.burst = burst
             bucket.rate_per_second = rate_per_minute / 60.0
             bucket.tokens = float(burst)
             bucket.last_refill = time.time()
+        elif bucket.burst != burst:
+            # 限额变了：只改速率与上限，**不重置余额**。
+            # 原实现在这里把 tokens 重置成 burst —— 每桶被「重置」一次，
+            # 改一次配置就等于发一次免费额度。
+            bucket.burst = burst
+            bucket.rate_per_second = rate_per_minute / 60.0
+            bucket.tokens = min(bucket.tokens, float(burst))
         return bucket
 
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
@@ -85,7 +93,9 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
         key_id, _ = parsed
         record = get_api_key(key_id)
-        if not record:
+        if not record or not record.is_active:
+            # 已吊销的 key 不该占桶（否则吊销反而把额度留着给别人用）。
+            # 认证本身由 require_auth 负责，这里只是不替别人消耗额度。
             return await call_next(request)
 
         bucket = self._get_bucket(key_id, record.rate_limit_per_minute, record.rate_limit_burst)

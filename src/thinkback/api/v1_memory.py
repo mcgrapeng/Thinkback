@@ -15,9 +15,11 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Path
+from typing import Any, Protocol, Self, TypeVar
 
-from thinkback.api.auth import Scope, require_auth, require_scope
+from fastapi import APIRouter, Depends, HTTPException, Path, Query
+
+from thinkback.api.auth import Scope, require_auth, require_scope, require_tenant
 from thinkback.api.dependencies import get_memory_service
 from thinkback.api.errors_standard import COMMON_ERROR_RESPONSES
 from thinkback.api.memory import (
@@ -30,9 +32,16 @@ from thinkback.api.memory import (
     recall_memory,
     update_memory_item,
 )
+from thinkback.domain.tenant import scoped_user_id
 from thinkback.memory.schemas import (
+    AppendMemoryRequest,
+    AppendMemoryResponse,
     DeleteMemoryRequest,
     DeleteMemoryResponse,
+    GetMemoryResponse,
+    ListMemoriesResponse,
+    RecallMemoryRequest,
+    RecallMemoryResponse,
     UpdateMemoryRequest,
     UpdateMemoryResponse,
 )
@@ -56,35 +65,105 @@ router = APIRouter(
 # 抓到的 InvalidSchema 根因）。URL 路径是定位语义的真值。
 
 
+# ─── 租户命名空间包装 ──────────────────────────────────────────────
+# /v1/* 是多租户接入面：请求里的 user_id 必须先加上租户命名空间才能进 service 层。
+# 否则 tenant 只是鉴权层的一个装饰品 —— 所有查询都只按请求体的 user_id 走，
+# 跨租户读写已经实测复现。
+#
+# 这里给每个带 user_id 的端点都套一层显式包装（而不是在 service 里隐式处理）：
+# 「哪些端点做了命名空间」必须一眼看得见 —— 漏掉一个就是一个跨租户漏洞。
+
+
+class _HasUserId(Protocol):
+    """带 user_id 的请求体（Append / Recall / Update / Delete）。"""
+
+    user_id: str
+
+    def model_copy(self, *, update: dict[str, Any]) -> Self: ...
+
+
+TRequest = TypeVar("TRequest", bound=_HasUserId)
+
+
+def _scoped[TRequest: _HasUserId](request: TRequest, tenant_id: str) -> TRequest:
+    """把请求里的 user_id 加上租户命名空间。"""
+    return request.model_copy(update={"user_id": scoped_user_id(tenant_id, request.user_id)})
+
+
+async def v1_append_memory(
+    request: AppendMemoryRequest,
+    service: MemoryService = Depends(get_memory_service),
+    tenant_id: str = Depends(require_tenant),
+) -> AppendMemoryResponse:
+    return await append_memory(request=_scoped(request, tenant_id), service=service)
+
+
+async def v1_recall_memory(
+    request: RecallMemoryRequest,
+    service: MemoryService = Depends(get_memory_service),
+    tenant_id: str = Depends(require_tenant),
+) -> RecallMemoryResponse:
+    return await recall_memory(request=_scoped(request, tenant_id), service=service)
+
+
+async def v1_list_memory_items(
+    user_id: str = Query(description="用户 ID；只返回该用户范围内的长期记忆。"),
+    include_deleted: bool = Query(
+        default=False,
+        description="是否包含已删除或已取代的业务记忆；系统墓碑不会返回。",
+    ),
+    service: MemoryService = Depends(get_memory_service),
+    tenant_id: str = Depends(require_tenant),
+) -> ListMemoriesResponse:
+    return await list_memory_items(
+        user_id=scoped_user_id(tenant_id, user_id),
+        include_deleted=include_deleted,
+        service=service,
+    )
+
+
+async def v1_get_memory_item(
+    memory_id: str = Path(description="要查询的业务记忆 ID。"),
+    user_id: str = Query(description="用户 ID；只查询该用户范围内的长期记忆。"),
+    service: MemoryService = Depends(get_memory_service),
+    tenant_id: str = Depends(require_tenant),
+) -> GetMemoryResponse:
+    return await get_memory_item(
+        memory_id=memory_id,
+        user_id=scoped_user_id(tenant_id, user_id),
+        service=service,
+    )
+
+
 async def v1_update_memory_item(
     request: UpdateMemoryRequest,
     memory_id: str = Path(min_length=1, max_length=128, description="要编辑的业务记忆 ID。"),
     service: MemoryService = Depends(get_memory_service),
+    tenant_id: str = Depends(require_tenant),
 ) -> UpdateMemoryResponse:
     if request.memory_id != memory_id:
         raise HTTPException(status_code=400, detail="path/body memory_id mismatch")
-    return await update_memory_item(request=request, service=service)
+    return await update_memory_item(request=_scoped(request, tenant_id), service=service)
 
 
 async def v1_delete_memory(
     request: DeleteMemoryRequest,
     memory_id: str = Path(min_length=1, max_length=128, description="要删除的业务记忆 ID。"),
     service: MemoryService = Depends(get_memory_service),
+    tenant_id: str = Depends(require_tenant),
 ) -> DeleteMemoryResponse:
     if request.memory_id is not None and request.memory_id != memory_id:
         raise HTTPException(status_code=400, detail="path/body memory_id mismatch")
     if request.memory_id is None:
-        # 单条删除路由：body 未带 memory_id 时以 URL 为准（scope=ALL/SESSION
-        # 随后会被领域校验拒绝，不会误删更大范围）。
         request = request.model_copy(update={"memory_id": memory_id})
-    return await delete_memory(request=request, service=service)
+    return await delete_memory(request=_scoped(request, tenant_id), service=service)
 
 
 # ─── 写入/召回/读:需要对应 scope ──────────────────────────────────────
 
 router.add_api_route(
     "/append",
-    endpoint=append_memory,
+    endpoint=v1_append_memory,
     methods=["POST"],
     summary="写入对话轮次(抽取记忆)",
     operation_id="v1_memory_append",
@@ -93,7 +172,7 @@ router.add_api_route(
 
 router.add_api_route(
     "/recall",
-    endpoint=recall_memory,
+    endpoint=v1_recall_memory,
     methods=["POST"],
     summary="召回相关记忆",
     operation_id="v1_memory_recall",
@@ -102,7 +181,7 @@ router.add_api_route(
 
 router.add_api_route(
     "",
-    endpoint=list_memory_items,
+    endpoint=v1_list_memory_items,
     methods=["GET"],
     summary="列出记忆(分页)",
     operation_id="v1_memory_list",
@@ -111,7 +190,7 @@ router.add_api_route(
 
 router.add_api_route(
     "/{memory_id}",
-    endpoint=get_memory_item,
+    endpoint=v1_get_memory_item,
     methods=["GET"],
     summary="获取单条记忆详情",
     operation_id="v1_memory_get",
