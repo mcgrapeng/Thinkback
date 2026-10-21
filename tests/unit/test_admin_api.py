@@ -22,6 +22,14 @@ from thinkback.memory.repositories import InMemoryMemoryRepository
 from thinkback.memory.schemas import AppendMemoryRequest
 from thinkback.memory.service import MemoryService
 
+ADMIN_TOKEN = "test-admin-token"
+
+
+@pytest.fixture(autouse=True)
+def _admin_token(monkeypatch: Any) -> None:
+    """管理面默认带 token；token 为空时是 503 拒绝，不是放行。"""
+    monkeypatch.setattr(config.settings, "admin_token", ADMIN_TOKEN)
+
 
 def make_task(task_id: str, *, status: TaskStatus) -> TaskEntry:
     return TaskEntry(
@@ -35,7 +43,9 @@ def make_task(task_id: str, *, status: TaskStatus) -> TaskEntry:
     )
 
 
-def build_client(**service_kwargs: Any) -> tuple[TestClient, MemoryService]:
+def build_client(
+    *, with_auth: bool = True, **service_kwargs: Any
+) -> tuple[TestClient, MemoryService]:
     service = MemoryService(
         repository=InMemoryMemoryRepository(),
         backend=FakeMemoryBackend(),
@@ -44,7 +54,8 @@ def build_client(**service_kwargs: Any) -> tuple[TestClient, MemoryService]:
     app = FastAPI()
     app.include_router(admin_router)
     app.dependency_overrides[get_memory_service] = lambda: service
-    return TestClient(app), service
+    headers = {"Authorization": f"Bearer {ADMIN_TOKEN}"} if with_auth else {}
+    return TestClient(app, headers=headers), service
 
 
 def seed(service: MemoryService) -> None:
@@ -240,7 +251,7 @@ def test_admin_tasks_list_filters_and_paginates() -> None:
 
 def test_admin_token_enforced_when_configured(monkeypatch: Any) -> None:
     monkeypatch.setattr(config.settings, "admin_token", "secret-token")
-    client, _service = build_client()
+    client, _service = build_client(with_auth=False)
 
     assert client.get("/admin/api/overview").status_code == 401
     assert (
@@ -255,11 +266,17 @@ def test_admin_token_enforced_when_configured(monkeypatch: Any) -> None:
     )
 
 
-def test_admin_token_empty_allows_anonymous(monkeypatch: Any) -> None:
+def test_admin_token_empty_rejects_anonymous(monkeypatch: Any) -> None:
+    """token 未配置时必须拒绝（503），不能放行 ——
+
+    原来这里是 fail-open：/admin/api/* 能删任意用户全部记忆、
+    按 user_id 不传即列出全库记忆。fail-open 的另一端是启动时 fail fast
+    （见 infra/config.py 的生产环境校验）。
+    """
     monkeypatch.setattr(config.settings, "admin_token", "")
     client, _service = build_client()
 
-    assert client.get("/admin/api/overview").status_code == 200
+    assert client.get("/admin/api/overview").status_code == 503
 
 
 # ── M2：记忆检索 + 来源反链 ──────────────────────────────────────────

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import secrets
 from collections.abc import Callable
 from typing import Annotated, Any
 from uuid import uuid4
@@ -41,14 +42,25 @@ router = APIRouter(prefix="/admin/api", tags=["admin"], responses=COMMON_ERROR_R
 
 
 def require_admin_token(authorization: Annotated[str, Header()] = "") -> None:
-    """共享 Bearer token 校验（token 未配置时放行）。"""
+    """共享 Bearer token 校验。
+
+    原来「token 未配置时放行」= fail-open：admin_token 默认空串、.env.example 与
+    k8s ConfigMap 都没这一项，于是默认部署下 /admin/api/* 全部裸奔 ——
+    其中包括删任意用户全部记忆、按 user_id 不传即返回全库所有用户记忆。
+
+    现在：**未配置 = 拒绝**（503，可运维的信号）；比较用常量时间函数。
+    生产环境缺 ADMIN_TOKEN 另在启动时 fail fast（见 infra/config.py）。
+    """
 
     from thinkback.infra.config import settings
 
     token = settings.admin_token
     if not token:
-        return
-    if authorization != f"Bearer {token}":
+        raise HTTPException(
+            status_code=503,
+            detail="admin API is not configured: ADMIN_TOKEN is missing",
+        )
+    if not secrets.compare_digest(authorization, f"Bearer {token}"):
         raise HTTPException(status_code=401, detail="invalid admin token")
 
 
@@ -387,7 +399,9 @@ async def admin_reclaim_orphan_tasks(
 
 
 @router.get("/health/detail", operation_id="admin_get_health_detail")
-async def admin_health_detail() -> dict[str, Any]:
+async def admin_health_detail(
+    _admin_auth: None = Depends(require_admin_token),
+) -> dict[str, Any]:
     """运行时身份 / 健康详情：服务卡直接消费。
 
     返回：进程启动时间、当前 uptime、alembic head、DB 连接池占用、gRPC 端口、
