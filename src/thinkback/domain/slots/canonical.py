@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from thinkback.domain.slots.extractors import (
@@ -142,16 +143,29 @@ def canonical_memory_text(memory_text: str) -> str:
 
 def canonical_memory_text_from_source(memory_text: str, l3_metadata: dict[str, Any]) -> str:
     """优先采用源文本侧的规范化文本，避免 mem0 抽取噪声进入比较。"""
-    source_text = str(l3_metadata.get("source_text") or "")
-    source_canonical = p0_canonical_memory_for_source_slot(memory_text, source_text)
+    source_canonical = source_canonical_memory_text(memory_text, l3_metadata)
     if source_canonical is not None:
         return source_canonical
+    source_text = str(l3_metadata.get("source_text") or "")
     source_pet_name = extract_pet_name(source_text)
     memory_pet_name = extract_pet_name(memory_text)
     if source_pet_name and memory_pet_name and source_pet_name[0] == memory_pet_name[0]:
         pet_kind, name = source_pet_name
         return f"User has a {pet_kind} named {name}"
     return canonical_memory_text(memory_text)
+
+
+def source_canonical_memory_text(memory_text: str, l3_metadata: dict[str, Any]) -> str | None:
+    """源文本侧能给出同槽位规范化文本时返回它，否则返回 None。
+
+    与 :func:`canonical_memory_text_from_source` 的区别是「是否来自源文本」这件事
+    本身要能被调用方看到 —— 落库文本的选择依赖它（源文本是权威，mem0 抽取文本是噪声）。
+    """
+    source_text = str(l3_metadata.get("source_text") or "")
+    source_canonical = p0_canonical_memory_for_source_slot(memory_text, source_text)
+    if source_canonical is not None:
+        return source_canonical
+    return None
 
 
 def p0_canonical_memory_for_source_slot(memory_text: str, source_text: str) -> str | None:
@@ -165,3 +179,94 @@ def p0_canonical_memory_for_source_slot(memory_text: str, source_text: str) -> s
         if memory_conflict_slot(source_memory_text) == memory_slot:
             return source_memory_text
     return None
+
+
+def count_p0_facts(text: str) -> int:
+    """统计文本命中的 P0 槽位事实数量。"""
+    facts = 0
+    if extract_current_nickname(text):
+        facts += 1
+    if extract_pet_name(text):
+        facts += 1
+    if extract_current_location(text):
+        facts += 1
+    if extract_current_work_status(text):
+        facts += 1
+    if extract_communication_preference(text):
+        facts += 1
+    if extract_birthday(text):
+        facts += 1
+    if extract_favorite_consumable(text):
+        facts += 1
+    if extract_sleep_reminder_preference(text):
+        facts += 1
+    return facts
+
+
+# canonical 折叠掉多少字符算「丢了事实」——经验阈值。
+# 单槽位改写（canonical 模板化）通常只差几个字；多事实截断会差几十个字符。
+# 阈值来自 2026-10-19 计划的裁定：canonical 比原文短超过 12 个字符即判定丢失事实。
+_CANONICAL_LOSS_THRESHOLD = 12
+
+
+# 「更正/替换」措辞：mem0 抽出的这类文本同时带着**新值和被取代的旧值**，
+# canonical 化丢掉的那部分不是「额外事实」而是「陈旧值」，必须丢掉 ——
+# 否则召回会把旧值带回来（User moved from Hangzhou to Shanghai → 存原文会让
+# 「Hangzhou」继续躺在画像里）。
+_CORRECTION_MARKERS = (
+    r"\bcorrected\b",
+    r"\bcorrects?\b",
+    r"\bchanged\b",
+    r"\bswitched\b",
+    r"\bpreviously\b",
+    r"\bformerly\b",
+    r"\bno longer\b",
+    r"\binstead of\b",
+    r"\bused to\b",
+    r"\bfrom\b[^.]{1,40}?\bto\b",
+    r"改成|改为|更正为|纠正为|不再是|而不是",
+)
+
+
+def is_correction_text(text: str) -> bool:
+    """文本是否表达「更正/替换」（同时带着新值与被取代的旧值）。
+
+    与槽位抽取器已有的措辞口径一致：抽取器用 ``matches[-1]`` 取最后一个匹配、
+    并专门处理 ``from X to Y`` / ``corrected`` / ``previously`` 这些写法，
+    说明这些措辞在 mem0 抽取结果里表示「新值替换旧值」。
+    """
+    if not text:
+        return False
+    return any(re.search(marker, text, flags=re.IGNORECASE) for marker in _CORRECTION_MARKERS)
+
+
+def local_index_memory_text(
+    original: str, canonical: str, *, canonical_from_source: bool = False
+) -> str:
+    """L3 落库文本：canonical 只服务槽位比较，多事实原文必须保留。
+
+    canonical 是单槽位模板，"生日 + 姐姐 Lily 住波士顿" 被折叠成
+    "User lives in 波士顿" 时，生日和 Lily 会在 PG 与 mem0 两边同时消失。
+
+    判据按优先级：
+    - 更正事件 → 用 canonical（丢的是陈旧值，留着会污染画像）
+    - 原文命中多个 P0 槽位 → 用原文（明确是多事实）
+    - canonical 来自源文本 → 用 canonical（源文本是权威，mem0 抽取文本是噪声）
+    - canonical 比原文短超过阈值 → 用原文（canonical 折叠掉了内容）
+
+    长度判据不能省："搬到杭州 + 2024 年去阿里巴巴上班 + 离开老团队" 只命中
+    location 一个槽位，但 canonical 会丢掉 52 个字符的雇主/年份/团队。
+    """
+    if not canonical:
+        return original
+    if not original:
+        return canonical
+    if is_correction_text(original):
+        return canonical
+    if count_p0_facts(original) > 1:
+        return original
+    if canonical_from_source:
+        return canonical
+    if len(original) - len(canonical) > _CANONICAL_LOSS_THRESHOLD:
+        return original
+    return canonical

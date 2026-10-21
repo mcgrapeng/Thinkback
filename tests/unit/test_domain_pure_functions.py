@@ -11,6 +11,10 @@ from datetime import UTC, datetime
 from tests.unit.test_memory_service import make_append
 from thinkback.domain.entities import JournalEntry
 from thinkback.domain.keys import fingerprint, request_fingerprint, round_sort_key
+from thinkback.domain.slots.canonical import (
+    canonical_memory_text,
+    local_index_memory_text,
+)
 from thinkback.domain.summarization import (
     StructuredSummary,
     build_structured_summary_user_prompt,
@@ -31,6 +35,54 @@ def _entry(round_id: str, *, round_index: int | None = None) -> JournalEntry:
         source_timestamp=datetime(2026, 5, 4, 10, 0, 0, tzinfo=UTC),
         round_fingerprint="fp",
     )
+
+
+def test_local_index_memory_text_keeps_original_when_canonical_collapses_content() -> None:
+    """canonical 只命中一个槽位、却折叠掉大量内容时，落库文本必须保留原文。
+
+    回归缺陷（Task 0.5）：只用「命中多个 P0 槽位」判定多事实会漏掉这条 ——
+    「搬到杭州 + 2024 年去阿里巴巴上班 + 离开老团队」只命中 location 一个槽位，
+    但 canonical 把它截成「User lives in Hangzhou」，雇主、年份、团队全丢。
+    """
+    original = "User moved to Hangzhou for a new job at Alibaba in 2024, leaving her old team."
+    canonical = canonical_memory_text(original)
+
+    assert canonical == "User lives in Hangzhou"
+    assert local_index_memory_text(original, canonical) == original
+
+
+def test_local_index_memory_text_prefers_correction_canonical_over_original() -> None:
+    """更正事件必须用 canonical —— 丢的是陈旧值，留着会让旧值继续躺在画像里。"""
+    original = "User moved from Hangzhou to Shanghai"
+    canonical = canonical_memory_text(original)
+
+    assert canonical == "User lives in Shanghai"
+    assert local_index_memory_text(original, canonical) == canonical
+
+
+def test_local_index_memory_text_prefers_source_derived_canonical() -> None:
+    """源文本侧给出的 canonical 更权威 —— mem0 抽取文本里的同槽位噪声应丢掉。"""
+    original = "User communication preference: to have anxiety situations handled slowly"
+    canonical = "User communication preference: 简洁直接的建议"
+
+    assert local_index_memory_text(original, canonical, canonical_from_source=True) == canonical
+
+
+def test_local_index_memory_text_uses_canonical_when_nothing_is_lost() -> None:
+    """单槽位记忆且 canonical 没吃掉内容时，落库用 canonical（模板形式更准）。"""
+    original = "User favorite drink is tea"
+    canonical = canonical_memory_text(original)
+
+    assert canonical != original
+    assert local_index_memory_text(original, canonical) == canonical
+
+
+def test_local_index_memory_text_keeps_multi_fact_original() -> None:
+    """命中多个 P0 槽位的原文必须原样保留。"""
+    original = "User's birthday is March 3rd, and her sister Lily lives in Boston."
+    canonical = canonical_memory_text(original)
+
+    assert local_index_memory_text(original, canonical) == original
 
 
 class TestFingerprint:

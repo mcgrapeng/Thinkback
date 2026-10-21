@@ -42,6 +42,7 @@ from thinkback.domain.slots import (
     is_backend_managed_memory_id,
     is_local_index_memory_id,
     is_same_source_local_p0_memory,
+    local_index_memory_text,
     memory_conflict_slot,
     memory_context_allowed,
     memory_supported_by_source,
@@ -51,6 +52,7 @@ from thinkback.domain.slots import (
     query_is_broad_memory_request,
     round_order,
     should_extract_to_l3,
+    source_canonical_memory_text,
     source_cursor,
     source_cursor_from_refs,
     source_has_any,
@@ -3510,7 +3512,9 @@ L2 更新 (缓存失效)
 
         backend_id = str(event.get("id", ""))
         original_memory_text = str(event.get("memory", ""))
-        memory_text = self._canonical_memory_text_from_source(original_memory_text, l3_metadata)
+        memory_text, canonical_from_source = self._canonical_memory_text_with_source(
+            original_memory_text, l3_metadata
+        )
         index_log = logger.bind(
             user_id=user_id,
             memory_scope_id=memory_scope_id,
@@ -3531,6 +3535,7 @@ L2 更新 (缓存失效)
                 backend_id=backend_id,
                 original_memory_text=original_memory_text,
                 memory_text=memory_text,
+                canonical_from_source=canonical_from_source,
                 user_id=user_id,
                 memory_scope_id=memory_scope_id,
                 source_refs=source_refs,
@@ -3546,6 +3551,7 @@ L2 更新 (缓存失效)
         backend_id: str,
         original_memory_text: str,
         memory_text: str,
+        canonical_from_source: bool = False,
         user_id: str,
         memory_scope_id: str,
         source_refs: list[dict[str, str]],
@@ -3564,6 +3570,7 @@ L2 更新 (缓存失效)
                 │
                 ▼
             pending_backend_writes = []
+            index_text = local_index_memory_text(original, memory_text)
                 │
                 ▼
             ┌── 二次遮罩 ──────────────────────────────┐
@@ -3589,8 +3596,7 @@ L2 更新 (缓存失效)
                 ▼
             ┌── 已存在 (existing != None) ─────────────┐
             │  update_memory_index(existing.memory_id) │
-            │  if memory_text ≠ original_memory_text: │
-            │      append(_BackendUpdate(...))         │
+            │  (落库用 index_text，不回写后端)         │
             │  INFO "index_action=updated"             │
             │  return pending                          │
             └──────────────────────────────────────────┘
@@ -3603,8 +3609,7 @@ L2 更新 (缓存失效)
             │  │         backend_memory_id=backend_id,│
             │  │         p0_source_backfill=True,     │
             │  │         backend_materialized=True)   │
-            │  │     if canonical ≠ original:         │
-            │  │         append(_BackendUpdate)       │
+            │  │     (落库用 index_text)               │
             │  │     INFO "index_action=               │
             │  │          materialized_local_p0"       │
             │  │     return pending                   │
@@ -3623,8 +3628,6 @@ L2 更新 (缓存失效)
             _, supersede_pending = _supersede_conflicting_memories(...)
             extend(supersede_pending)
             add_memory_index(backend_id, …, index_metadata)
-            if memory_text ≠ original_memory_text:
-                append(_BackendUpdate(...))
             INFO "index_action=created"
                 │
                 ▼
@@ -3633,10 +3636,20 @@ L2 更新 (缓存失效)
         关键约束：
         - **禁止**在本函数内调用 ``self.backend.*`` 直接做 mem0 写。
           所有 mem0 副作用通过 ``pending_backend_writes`` 收集到锁外执行。
+        - **禁止**用 canonical 文本回写后端。canonical 只用于槽位比较；
+          回写会把多事实记忆（生日、雇主、年份）永久截断，PG 和后端两边都丢。
+          用户手动编辑记忆的同步走 ``_BackendUpdate``，那条路径不在此列。
         - P0 白名单 gate 失败时 mem0 已经成功 add，本地不索引但 mem0 记录保留
           ——避免误删导致 L3 召回丢事实（之前线上 bug）。
         """
         pending_backend_writes: list[Any] = []
+        # 落库文本与比较文本分开：canonical 只用于槽位比较，落库要在它折叠掉
+        # 事实时保留原文（见 local_index_memory_text）。
+        index_text = local_index_memory_text(
+            original_memory_text,
+            memory_text,
+            canonical_from_source=canonical_from_source,
+        )
         if self._source_refs_excluded(user_id, memory_scope_id, source_refs):
             pending_backend_writes.append(
                 _BackendDeleteSync(memory_id=backend_id, backend=self.backend)
@@ -3672,14 +3685,16 @@ L2 更新 (缓存失效)
             self.repository.update_memory_index(
                 existing.memory_id,
                 source_refs=source_refs,
-                memory_text=memory_text,
+                memory_text=index_text,
                 source_type=str(l3_metadata["source_type"]),
                 data_classification=str(l3_metadata["data_classification"]),
                 memory_type=str(l3_metadata["memory_type"]),
                 backend_categories=backend_categories,
                 metadata=index_metadata,
             )
-            if memory_text != original_memory_text:
+            # 回写后端只在 canonical 无损时进行：原文命中多个 P0 槽位时
+            # canonical 是有损折叠（生日/宠物被丢掉），回写会永久截断事实。
+            if memory_text != original_memory_text and index_text == memory_text:
                 pending_backend_writes.append(
                     _BackendUpdate(memory_id=backend_id, data=memory_text, backend=self.backend)
                 )
@@ -3698,7 +3713,7 @@ L2 更新 (缓存失效)
                     same_source_local.memory_id,
                     backend_memory_id=backend_id,
                     source_refs=source_refs,
-                    memory_text=memory_text,
+                    memory_text=index_text,
                     source_type=str(l3_metadata["source_type"]),
                     data_classification=str(l3_metadata["data_classification"]),
                     memory_type=str(l3_metadata["memory_type"]),
@@ -3709,7 +3724,9 @@ L2 更新 (缓存失效)
                         "backend_materialized": True,
                     },
                 )
-                if memory_text != original_memory_text:
+                # 回写后端只在 canonical 无损时进行：原文命中多个 P0 槽位时
+                # canonical 是有损折叠（生日/宠物被丢掉），回写会永久截断事实。
+                if memory_text != original_memory_text and index_text == memory_text:
                     pending_backend_writes.append(
                         _BackendUpdate(memory_id=backend_id, data=memory_text, backend=self.backend)
                     )
@@ -3743,14 +3760,16 @@ L2 更新 (缓存失效)
             user_id=user_id,
             memory_scope_id=memory_scope_id,
             source_refs=source_refs,
-            memory_text=memory_text,
+            memory_text=index_text,
             source_type=str(l3_metadata["source_type"]),
             data_classification=str(l3_metadata["data_classification"]),
             memory_type=str(l3_metadata["memory_type"]),
             backend_categories=backend_categories,
             metadata=index_metadata,
         )
-        if memory_text != original_memory_text:
+        # 回写后端只在 canonical 无损时进行：原文命中多个 P0 槽位时
+        # canonical 是有损折叠（生日/宠物被丢掉），回写会永久截断事实。
+        if memory_text != original_memory_text and index_text == memory_text:
             pending_backend_writes.append(
                 _BackendUpdate(memory_id=backend_id, data=memory_text, backend=self.backend)
             )
@@ -4001,6 +4020,20 @@ L2 更新 (缓存失效)
         cls, memory_text: str, l3_metadata: dict[str, Any]
     ) -> str:
         return canonical_memory_text_from_source(memory_text, l3_metadata)
+
+    @classmethod
+    def _canonical_memory_text_with_source(
+        cls, memory_text: str, l3_metadata: dict[str, Any]
+    ) -> tuple[str, bool]:
+        """规范化文本 + 「它是否来自源文本」标志。
+
+        落库文本的选择依赖这个标志：源文本是权威（mem0 抽取文本里可能有噪声），
+        所以源侧 canonical 优先于 mem0 原文。
+        """
+        source_canonical = source_canonical_memory_text(memory_text, l3_metadata)
+        if source_canonical is not None:
+            return source_canonical, True
+        return canonical_memory_text_from_source(memory_text, l3_metadata), False
 
     @classmethod
     def _p0_canonical_memory_for_source_slot(cls, memory_text: str, source_text: str) -> str | None:

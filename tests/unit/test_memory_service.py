@@ -8014,3 +8014,111 @@ def test_delete_retry_converges_after_midflight_failure_with_stale_pending_count
         f"{task.result.get('pending_cleanup_tasks')}）"
     )
     assert task.result.get("pending_cleanup_tasks") == 0
+
+
+def test_l3_indexing_keeps_multi_fact_original_text_and_never_writes_back_to_backend() -> None:
+    """canonical 折叠掉事实时，本地索引保留原文，且后端不被回写。
+
+    回归缺陷：_index_l3_event 用 canonical_memory_text_from_source 把 mem0 抽出的
+    多事实文本截断成一个槽位，再把截断后的文本覆写回后端。生日、Lily、雇主这些
+    事实 PG 和后端两边都没了，rebuild 也救不回来。
+    """
+    repository = InMemoryMemoryRepository()
+    backend = FakeMemoryBackend()
+    service = MemoryService(repository=repository, backend=backend)
+    original = "User's birthday is March 3rd, and her sister Lily lives in Boston."
+    backend.memories["multi-fact-1"] = {
+        "id": "multi-fact-1",
+        "memory": original,
+        "event": "ADD",
+        "user_id": "user-1",
+        "agent_id": "thinkback",
+        "metadata": {},
+        "score": 1.0,
+    }
+
+    service._index_l3_event(
+        {"id": "multi-fact-1", "memory": original, "event": "ADD"},
+        user_id="user-1",
+        source_refs=[{"session_id": "session-1", "round_id": "round-1"}],
+        l3_metadata={
+            "source_text": "我3月3日过生日，姐姐Lily住在波士顿。",
+            **service._l3_metadata([], {}),
+        },
+    )
+
+    assert backend.memories["multi-fact-1"]["memory"] == original, "截断后的文本不能回写后端"
+    stored = "\n".join(
+        memory.memory_text for memory in repository.active_memories("user-1", "thinkback")
+    )
+    assert "March 3rd" in stored, "多事实记忆在本地索引必须保留原文"
+    assert "Lily" in stored, "多事实记忆在本地索引必须保留原文"
+
+
+def test_l3_indexing_keeps_canonical_form_for_single_slot_memory() -> None:
+    """单槽位记忆仍落 canonical 形式（源侧取值更准），但同样不回写后端。"""
+    repository = InMemoryMemoryRepository()
+    backend = FakeMemoryBackend()
+    service = MemoryService(repository=repository, backend=backend)
+    original = "User favorite drink is tea"
+    backend.memories["drink-1"] = {
+        "id": "drink-1",
+        "memory": original,
+        "event": "ADD",
+        "user_id": "user-1",
+        "agent_id": "thinkback",
+        "metadata": {},
+        "score": 1.0,
+    }
+
+    service._index_l3_event(
+        {"id": "drink-1", "memory": original, "event": "ADD"},
+        user_id="user-1",
+        source_refs=[{"session_id": "session-1", "round_id": "round-1"}],
+        l3_metadata={"source_text": "我喜欢喝茶。", **service._l3_metadata([], {})},
+    )
+
+    assert backend.memories["drink-1"]["memory"] == "User favorite drink: 茶"
+    stored = "\n".join(
+        memory.memory_text for memory in repository.active_memories("user-1", "thinkback")
+    )
+    assert "User favorite drink: 茶" in stored
+
+
+def test_l3_indexing_keeps_original_when_canonical_collapses_single_slot_facts() -> None:
+    """canonical 只命中一个槽位、但折叠掉大量内容时，本地索引必须保留原文。
+
+    回归缺陷（Task 0.5 裁定）：只用「命中多个 P0 槽位」判定多事实会漏掉这条 ——
+    「搬到杭州 + 2024 年去阿里巴巴上班 + 离开老团队」只命中 location 一个槽位，
+    canonical 照样把雇主、年份、团队全丢了（PG 和后端两边都没了，rebuild 也救不回来）。
+    """
+    repository = InMemoryMemoryRepository()
+    backend = FakeMemoryBackend()
+    service = MemoryService(repository=repository, backend=backend)
+    original = "User moved to Hangzhou for a new job at Alibaba in 2024, leaving her old team."
+    backend.memories["multi-fact-2"] = {
+        "id": "multi-fact-2",
+        "memory": original,
+        "event": "ADD",
+        "user_id": "user-1",
+        "agent_id": "thinkback",
+        "metadata": {},
+        "score": 1.0,
+    }
+
+    # 没有 source_text：canonical 只能从 mem0 抽取文本本身推导 —— 这正是
+    # 「canonical 把 mem0 抽出的多事实文本截断」的场景。
+    service._index_l3_event(
+        {"id": "multi-fact-2", "memory": original, "event": "ADD"},
+        user_id="user-1",
+        source_refs=[{"session_id": "session-1", "round_id": "round-1"}],
+        l3_metadata=service._l3_metadata([], {}),
+    )
+
+    assert backend.memories["multi-fact-2"]["memory"] == original, "截断后的文本不能回写后端"
+    stored = "\n".join(
+        memory.memory_text for memory in repository.active_memories("user-1", "thinkback")
+    )
+    assert "Alibaba" in stored, "雇主信息不能因为只命中一个槽位就丢"
+    assert "2024" in stored, "年份不能丢"
+    assert "old team" in stored, "团队信息不能丢"
