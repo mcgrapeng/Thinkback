@@ -65,7 +65,7 @@ router = APIRouter(
     prefix="/admin/api/integration/keys",
     tags=["integration"],
     responses=COMMON_ERROR_RESPONSES,
-    # 这三个端点原先**没有任何**鉴权（同目录的 mem0_config_admin 三个路由都有）：
+    # 这三个端点原先**没有任何**鉴权：
     # 无凭证就能列出全部 key、为任意 tenant 铸造任意 scope 的 key、吊销他人 key。
     dependencies=[Depends(require_admin_token)],
 )

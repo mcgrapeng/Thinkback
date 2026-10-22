@@ -382,7 +382,6 @@ async def recall_memory(
     logger.bind(
         user_id=request.user_id,
         session_id=request.session_id,
-        intent=request.intent.value,
         query_length=len(request.query),
     ).debug("memory recall request received")
     try:

@@ -44,7 +44,6 @@ from thinkback.memory.schemas import (
     MemoryStatus,
     MessageRole,
     OperationType,
-    RecallIntent,
     RecallMemoryRequest,
     SummaryState,
     TaskStatus,
@@ -101,7 +100,6 @@ def _recall(
     user_id: str = "user-1",
     session_id: str = "session-1",
     query: str = "test",
-    intent: RecallIntent = RecallIntent.CHAT,
     l3_limit: int = 5,
     token_budget: int = 1200,
 ) -> Any:
@@ -110,7 +108,6 @@ def _recall(
             user_id=user_id,
             session_id=session_id,
             query=query,
-            intent=intent,
             l3_limit=l3_limit,
             token_budget=token_budget,
         )
@@ -227,25 +224,6 @@ def case_recall_empty_history_returns_no_l3() -> Result:
         "功能覆盖",
         passed,
         f"status={response.status} items={len(response.items)}",
-        (time.perf_counter() - t0) * 1000,
-    )
-
-
-def case_recall_sensitive_intent_is_fail_closed() -> Result:
-    """合约：SENSITIVE 意图必须 fail-closed，不能返回任何记忆。"""
-    service, _, _ = _new_service()
-    _append(service, round_id="r-sens", user_text="我养了一只猫，名字叫麻薯")
-    t0 = time.perf_counter()
-    raised = False
-    try:
-        _recall(service, query="猫叫什么", intent=RecallIntent.SENSITIVE)
-    except ValueError as exc:
-        raised = "sensitive" in str(exc).lower() or "fail" in str(exc).lower() or "403" in str(exc)
-    return Result(
-        "case_recall_sensitive_intent_is_fail_closed",
-        "功能覆盖",
-        raised,
-        f"raises on SENSITIVE: {raised}",
         (time.perf_counter() - t0) * 1000,
     )
 
@@ -1170,11 +1148,6 @@ def _build_registry() -> list[Case]:
             "case_recall_empty_history_returns_no_l3",
             "功能覆盖",
             case_recall_empty_history_returns_no_l3,
-        ),
-        Case(
-            "case_recall_sensitive_intent_is_fail_closed",
-            "功能覆盖",
-            case_recall_sensitive_intent_is_fail_closed,
         ),
         Case(
             "case_delete_scope_all_requires_no_extra_ids",

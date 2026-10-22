@@ -26,7 +26,6 @@ from thinkback.memory.schemas import (
     OperationType,
     RebuildMemoryRequest,
     RebuildMemoryResponse,
-    RecallIntent,
     RecallMemoryRequest,
     SourceType,
     SummaryState,
@@ -92,10 +91,6 @@ _ROLE = {
     pb.MESSAGE_ROLE_USER: "user",
     pb.MESSAGE_ROLE_ASSISTANT: "assistant",
     pb.MESSAGE_ROLE_SYSTEM: "system",
-}
-_RECALL_INTENT = {
-    pb.RECALL_INTENT_CHAT: RecallIntent.CHAT,
-    pb.RECALL_INTENT_SENSITIVE: RecallIntent.SENSITIVE,
 }
 _DELETE_SCOPE = {
     pb.DELETE_SCOPE_MEMORY: DeleteScope.MEMORY,
@@ -190,11 +185,15 @@ def to_append_request(req: pb.AppendRequest, *, tenant_id: str = "") -> AppendMe
 
 
 def to_recall_request(req: pb.RecallRequest, *, tenant_id: str = "") -> RecallMemoryRequest:
+    if req.intent == pb.RECALL_INTENT_SENSITIVE:
+        # 域模型的 intent 轴已删除（枚举只有两个值，SENSITIVE 无条件 raise，
+        # 是 fail-useless 不是 fail-closed）。proto 里的枚举值还在（生成代码
+        # 不重新生成），这里显式拒绝，保持对外行为不变：PERMISSION_DENIED。
+        raise ValueError("fail-closed recall intent: sensitive is not supported")
     return RecallMemoryRequest(
         user_id=scoped_user_id(tenant_id, req.user_id),
         session_id=req.session_id,
         query=req.query,
-        intent=_RECALL_INTENT.get(req.intent, RecallIntent.CHAT),
         l3_limit=resolve_l3_limit(req.l3_limit),
         l3_score_threshold=resolve_l3_score_threshold(req.l3_score_threshold),
         token_budget=resolve_token_budget(req.token_budget),

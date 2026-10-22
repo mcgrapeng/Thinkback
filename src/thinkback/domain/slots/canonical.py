@@ -2,7 +2,6 @@
 
 - ``memory_conflict_slot``: 记忆文本 → P0 槽位（冲突检测的共用口径）
 - ``canonical_memory_text*``: 记忆文本 → 规范化模板文本（冲突比较前的归一）
-- ``conflict_partition*``: 冲突分区的扩展点，当前返回空分区（保留扩展位）
 """
 
 from __future__ import annotations
@@ -20,14 +19,6 @@ from thinkback.domain.slots.extractors import (
     extract_pet_name,
     extract_sleep_reminder_preference,
 )
-
-
-def conflict_partition_from_metadata(_metadata: dict[str, Any]) -> tuple[()]:
-    return ()
-
-
-def conflict_partition(_memory: Any) -> tuple[()]:
-    return ()
 
 
 def memory_conflict_slot(memory_text: str) -> str | None:

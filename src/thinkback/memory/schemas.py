@@ -32,7 +32,6 @@ from thinkback.domain.enums import (
     MemoryType,
     MessageRole,
     OperationType,
-    RecallIntent,
     SourceType,
     SummaryState,
     TaskStatus,
@@ -45,7 +44,6 @@ __all__ = [
     "MemoryStatus",
     "MemoryType",
     "OperationType",
-    "RecallIntent",
     "SourceType",
     "SummaryState",
     "TaskStatus",
@@ -168,11 +166,12 @@ class AppendMemoryRequest(BaseModel):
 
 
 class RecallMemoryRequest(BaseModel):
-    """召回请求
+    """召回请求。
 
-    支持两种召回意图：
-    - ``CHAT``（默认）：常规对话召回，L3 失败可降级为只返回 L1/L2。
-    - ``SENSITIVE``：隐私相关场景，采用 fail-closed 策略，错误直接向上抛。
+    原来有 intent 轴（CHAT / SENSITIVE），已删除：枚举只有两个值，
+    SENSITIVE 在 service 里无条件 raise —— 连本地安全的 L1/L2 都不返回。
+    那是 fail-useless 不是 fail-closed（把「更安全」和「什么都不给」混为一谈）。
+    隐私诉求由调用方自己决定要不要带上敏感内容，Phase 2 用「负面记忆标记」实现。
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -180,10 +179,6 @@ class RecallMemoryRequest(BaseModel):
     user_id: IdStr = Field(description="用户 ID；召回结果只返回该用户范围内的记忆。")
     session_id: IdStr = Field(description="当前会话 ID；用于召回 L1 和 L2 会话上下文。")
     query: str = Field(description="本次召回查询文本；会传给 L3 后端做语义检索。")
-    intent: RecallIntent = Field(
-        default=RecallIntent.CHAT,
-        description="召回意图；隐私、敏感和删除确认类意图会 fail-closed。",
-    )
     l3_limit: int = Field(default=5, ge=0, le=50, description="L3 语义检索最多返回条数。")
     l3_score_threshold: float = Field(
         default=0.5,

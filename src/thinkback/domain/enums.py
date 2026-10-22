@@ -84,13 +84,6 @@ class OperationType(StrEnum):
     REBUILD_L3 = "rebuild_l3"  # 重建 L3 索引
 
 
-class RecallIntent(StrEnum):
-    """召回意图。决定召回安全性级别和失败处理"""
-
-    CHAT = "chat"  # 常规对话，接受降级召回
-    SENSITIVE = "sensitive"  # 隐私相关，fail-closed 策略，任何错误都拒绝
-
-
 class DeleteScope(StrEnum):
     """删除范围。决定删除操作的作用域"""
 

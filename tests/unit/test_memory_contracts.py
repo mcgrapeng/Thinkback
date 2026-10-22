@@ -9,7 +9,6 @@ from thinkback.memory.schemas import (
     MemoryType,
     MessageRole,
     RebuildMemoryRequest,
-    RecallIntent,
     RecallMemoryRequest,
     SummaryState,
     UpdateMemoryRequest,
@@ -117,7 +116,6 @@ def test_documented_enums_are_available() -> None:
     assert MemoryType.PREFERENCE.value == "preference"
     assert SummaryState.DIRTY.value == "dirty"
     assert SummaryState.STALE.value == "stale"
-    assert RecallIntent.SENSITIVE.value == "sensitive"
     assert DeleteScope.SESSION.value == "session"
 
 

@@ -148,7 +148,6 @@ async def test_recall_uses_dedicated_worker_pool_when_write_pool_is_full(
                 "user_id": "user-1",
                 "session_id": "session-1",
                 "query": "睡觉偏好",
-                "intent": "chat",
             },
         )
     finally:
@@ -238,7 +237,6 @@ def test_append_recall_delete_task_api(client, monkeypatch) -> None:
             "user_id": "user-1",
             "session_id": "session-1",
             "query": "睡觉偏好",
-            "intent": "chat",
         },
     )
 
@@ -341,7 +339,6 @@ def test_memory_routes_return_200_without_any_authentication_header(monkeypatch)
                 "user_id": "user-1",
                 "session_id": "session-1",
                 "query": "睡觉偏好",
-                "intent": "chat",
             },
         )
 
@@ -414,7 +411,13 @@ def test_delete_scope_irrelevant_identifier_returns_422(client, monkeypatch) -> 
     assert "memory deletion must not include session_id" in str(response.json()["detail"])
 
 
-def test_privacy_recall_fail_closed_returns_403(client, monkeypatch) -> None:
+def test_removed_intent_field_is_rejected(client, monkeypatch) -> None:
+    """intent 轴已删除：请求里再带 intent 必须 422，不是静默忽略。
+
+    原来的 SENSITIVE 意图在 service 里无条件 raise —— 连本地安全的 L1/L2 都不
+    返回，是 fail-useless 不是 fail-closed。整条轴删掉后，隐私诉求由调用方自己
+    决定要不要带上敏感内容（Phase 2 用「负面记忆标记」表达）。
+    """
     service = MemoryService(repository=InMemoryMemoryRepository(), backend=FakeMemoryBackend())
     monkeypatch.setattr("thinkback.api.dependencies._memory_service", service)
 
@@ -428,8 +431,7 @@ def test_privacy_recall_fail_closed_returns_403(client, monkeypatch) -> None:
         },
     )
 
-    assert response.status_code == 403
-    assert "fail-closed" in response.json()["detail"]
+    assert response.status_code == 422
 
 
 def test_mem0_provider_failure_returns_502_not_unhandled_500(client, monkeypatch) -> None:

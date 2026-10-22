@@ -31,7 +31,6 @@ Milvus collection / `LONG_TERM_SCOPE_ID`）沿用 `thinkback`，
 │  应用层 memory/                                                  │
 │  service.py     MemoryService 编排器（append/recall/delete/…）   │
 │  schemas.py     API DTO（Pydantic，含校验器）                     │
-│  caches.py      BoundedTTLCache（进程内读加速，非持久化）          │
 │  repositories/  MemoryRepository 端口实现（in_memory/sqlalchemy） │
 │  backends/      MemoryBackend 端口实现（fake/mem0_library）       │
 ├─────────────────────────────────────────────────────────────────┤
@@ -94,7 +93,6 @@ src/thinkback/
 ├── memory/                    # 应用层
 │   ├── service.py             # MemoryService（用例编排器：append/recall/delete/rebuild 状态机、锁与缓存边界）
 │   ├── schemas.py             # API DTO + 校验器（re-export domain.enums）
-│   ├── caches.py              # BoundedTTLCache（cachetools.TTLCache 适配层：TTL + 容量淘汰）
 │   ├── l3.py                  # L3WriteExecutor（后台写基础设施：线程池生命周期/容量背压/future 记账）
 │   ├── l2_refresh.py          # L2BackgroundRefresher（LLM 综合摘要后台去抖刷新）
 │   ├── decay.py               # MemoryDecaySweeper（遗忘 decay 清扫，默认关）
@@ -126,7 +124,6 @@ src/thinkback/
 | `SqlAlchemyMemoryRepository` | L1/L2/索引/任务的 PG 持久化；同步外观 + 内部事件循环线程 | 业务判断（指纹冲突语义由 service 决定） |
 | `Mem0LibraryMemoryBackend` | mem0 唯一入口：懒构造、并发信号量、异常统一包装、内联线程池补丁 | 本地索引与治理（service 负责） |
 | `domain/slots` | 槽位识别/抽取/归一/源校验（纯函数） | 任何 I/O |
-| `BoundedTTLCache` | 读路径 TTL 缓存（丢失不影响正确性） | 持久化 |
 | `api/memory.py` | 线程池 + 信号量桥接同步服务；异常→HTTP 状态码映射 | 业务逻辑 |
 
 ### 2.2 并发模型（单进程内三套预算）
@@ -289,8 +286,9 @@ L3 向量数据在 Milvus（collection=thinkback，COSINE，1024 维），
 
 1. **多副本水平扩展**：`ins_memory_task` 加 `version` 列做乐观锁；
    L3 后台任务改为 DB 队列抢占（claim 语义已有雏形）替代进程内 executor。
-2. **读扩展**：recall 的 L1/L2 读可走 PG 只读副本；`BoundedTTLCache`
-   已隔离缓存语义，切换数据源不动业务层。
+2. **读扩展**：recall 的 L1/L2 读可走 PG 只读副本；L1 进程内缓存是
+   `repositories/_l1_cache.py` 里的 mixin，缓存语义与仓储实现解耦，
+   切换数据源不动业务层。
 3. **L2 语义化**：`domain/summarization.summarize_rounds` 换 LLM 实现，
    召回门禁（DIRTY 跳过）不变。
 4. **槽位引擎演进**：`domain/slots` 为纯函数，可整体替换为模型抽取，
