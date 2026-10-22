@@ -51,7 +51,6 @@ Requires `Authorization: Bearer <admin_token>`.
 | `GET` | `/admin/api/audit` | Audit log |
 | `POST` | `/admin/api/{delete,update,rebuild}` | Governance actions |
 | `GET` | `/admin/api/config` | Runtime config |
-| `GET/PUT` | `/admin/api/mem0/configs[/{key}]` | List/update mem0 prompts |
 | `GET` | `/admin/api/integration/keys` | List API keys |
 | `POST` | `/admin/api/integration/keys` | Generate API key |
 | `DELETE` | `/admin/api/integration/keys/{id}` | Revoke API key |

@@ -14,8 +14,6 @@ L3 长期记忆的关键事实补偿索引：mem0 抽出的记忆按「槽位」
 from thinkback.domain.slots.canonical import (
     canonical_memory_text,
     canonical_memory_text_from_source,
-    conflict_partition,
-    conflict_partition_from_metadata,
     count_p0_facts,
     is_correction_text,
     local_index_memory_text,
@@ -55,8 +53,6 @@ from thinkback.domain.slots.support import (
 __all__ = [
     "canonical_memory_text",
     "canonical_memory_text_from_source",
-    "conflict_partition",
-    "conflict_partition_from_metadata",
     "context_terms",
     "count_p0_facts",
     "extract_birthday",

@@ -6,7 +6,9 @@ from typing import Any
 
 import pytest
 from loguru import logger
+from pydantic import ValidationError
 
+from thinkback.domain.slots import extract_favorite_consumable
 from thinkback.infra import logging as logging_infra
 from thinkback.memory.backends import FakeMemoryBackend
 from thinkback.memory.repositories import InMemoryMemoryRepository, TaskEntry
@@ -20,7 +22,6 @@ from thinkback.memory.schemas import (
     MessageRole,
     OperationType,
     RebuildMemoryRequest,
-    RecallIntent,
     RecallMemoryRequest,
     SummaryState,
     TaskStatus,
@@ -533,7 +534,6 @@ def test_memory_service_logs_english_parameter_summaries_without_message_content
                 user_id="user-1",
                 session_id="session-1",
                 query="狗叫什么？敏感查询不应日志",
-                intent=RecallIntent.CHAT,
             )
         )
         memory_id = next(iter(service.repository.memories))
@@ -587,7 +587,6 @@ def test_l3_memory_is_available_across_new_sessions_for_same_user() -> None:
             user_id="user-1",
             session_id="session-new",
             query="我的狗叫什么？",
-            intent=RecallIntent.CHAT,
         )
     )
 
@@ -610,7 +609,6 @@ def test_recall_l3_item_exposes_business_memory_id_for_management_delete() -> No
             user_id="user-1",
             session_id="session-new",
             query="我的狗叫什么？",
-            intent=RecallIntent.CHAT,
         )
     )
     l3_item = next(item for item in recall.items if item.layer == "L3" and "豆包" in item.content)
@@ -633,7 +631,6 @@ def test_recall_l3_item_exposes_business_memory_id_for_management_delete() -> No
             user_id="user-1",
             session_id="session-new",
             query="我的狗叫什么？",
-            intent=RecallIntent.CHAT,
         )
     )
 
@@ -682,7 +679,6 @@ def test_backfill_picks_most_recent_valid_at_within_same_slot() -> None:
             user_id="user-1",
             session_id="session-1",
             query="用户的猫叫什么？",
-            intent=RecallIntent.CHAT,
         )
     )
 
@@ -749,7 +745,6 @@ def test_active_memories_filters_by_memory_scope_id() -> None:
             user_id="user-1",
             session_id="session-1",
             query="用户的猫叫什么？",
-            intent=RecallIntent.CHAT,
         )
     )
     l3_texts = [item.content for item in response.items if item.layer == "L3"]
@@ -1267,7 +1262,6 @@ def test_l2_summary_is_scoped_to_current_session() -> None:
             user_id="user-1",
             session_id="session-new",
             query="当前会话摘要",
-            intent=RecallIntent.CHAT,
         )
     )
 
@@ -1385,7 +1379,6 @@ def test_sync_append_backend_failure_does_not_pollute_recallable_memory() -> Non
             user_id="user-1",
             session_id="session-1",
             query="用户的狗叫什么？",
-            intent=RecallIntent.CHAT,
         )
     )
 
@@ -1409,7 +1402,6 @@ def test_sync_append_backend_failure_does_not_pollute_recallable_memory() -> Non
             user_id="user-1",
             session_id="session-1",
             query="用户的狗叫什么？",
-            intent=RecallIntent.CHAT,
         )
     )
 
@@ -1504,7 +1496,6 @@ def test_async_append_returns_after_local_p0_backfill_before_mem0_add_finishes()
             user_id="user-1",
             session_id="session-1",
             query="用户的狗叫什么？",
-            intent=RecallIntent.CHAT,
         )
     )
     assert [item.content for item in recall.items if item.layer == "L3"] == [
@@ -2113,7 +2104,6 @@ def test_recall_skips_dirty_summary_but_keeps_l3() -> None:
             user_id="user-1",
             session_id="session-1",
             query="睡觉偏好",
-            intent=RecallIntent.CHAT,
         )
     )
 
@@ -2146,7 +2136,6 @@ def test_recall_applies_l3_score_threshold_to_reduce_false_positives() -> None:
             user_id="user-1",
             session_id="session-1",
             query="用户的狗叫什么？",
-            intent=RecallIntent.CHAT,
             l3_score_threshold=0.5,
         )
     )
@@ -2187,7 +2176,6 @@ def test_pet_slots_are_partitioned_by_animal_kind() -> None:
             user_id="user-1",
             session_id="session-1",
             query="用户的狗叫什么？",
-            intent=RecallIntent.CHAT,
             l3_score_threshold=0.5,
         )
     )
@@ -2230,7 +2218,6 @@ def test_unknown_pet_query_does_not_recall_other_pet_kinds() -> None:
             user_id="user-1",
             session_id="session-1",
             query="用户的鸟叫什么？",
-            intent=RecallIntent.CHAT,
             l3_score_threshold=0.5,
         )
     )
@@ -2302,7 +2289,6 @@ def test_recall_passes_l3_score_threshold_to_backend() -> None:
             user_id="user-1",
             session_id="session-1",
             query="用户最近提过什么重要信息？",
-            intent=RecallIntent.CHAT,
             l3_score_threshold=0.62,
         )
     )
@@ -2335,7 +2321,6 @@ def test_recall_uses_business_index_directly_for_clear_slot_queries() -> None:
             user_id="user-1",
             session_id="session-1",
             query="用户的狗叫什么？",
-            intent=RecallIntent.CHAT,
         )
     )
 
@@ -2376,7 +2361,6 @@ def test_recall_does_not_expose_backend_internal_metadata() -> None:
             user_id="user-1",
             session_id="session-1",
             query="猫叫团子吗？",
-            intent=RecallIntent.CHAT,
         )
     )
 
@@ -2394,7 +2378,6 @@ def test_recall_includes_stale_summary_with_degraded_status() -> None:
             user_id="user-1",
             session_id="session-1",
             query="换工作",
-            intent=RecallIntent.CHAT,
         )
     )
 
@@ -2414,7 +2397,6 @@ def test_recall_skips_rebuilding_summary_with_degradation_reason() -> None:
             user_id="user-1",
             session_id="session-1",
             query="换工作",
-            intent=RecallIntent.CHAT,
         )
     )
 
@@ -2423,24 +2405,20 @@ def test_recall_skips_rebuilding_summary_with_degradation_reason() -> None:
     assert not any(item.layer == "L2" for item in response.items)
 
 
-def test_privacy_and_sensitive_recall_fail_closed() -> None:
-    service = MemoryService(repository=InMemoryMemoryRepository(), backend=FakeMemoryBackend())
-    service.append(make_append(content="我住在杭州"))
+def test_recall_request_rejects_removed_intent_field() -> None:
+    """intent 轴已删除：请求里再带 intent 必须被拒，不是静默忽略。
 
-    for intent in (RecallIntent.SENSITIVE, RecallIntent.SENSITIVE):
-        try:
-            service.recall(
-                RecallMemoryRequest(
-                    user_id="user-1",
-                    session_id="session-1",
-                    query="告诉我你记住了哪些隐私",
-                    intent=intent,
-                )
-            )
-        except ValueError as exc:
-            assert "fail-closed" in str(exc)
-        else:
-            raise AssertionError("privacy and sensitive recall must fail closed")
+    原来的 SENSITIVE 在 service 里无条件 raise —— 连本地安全的 L1/L2 都不返回，
+    是 fail-useless 不是 fail-closed。整条轴删掉后，隐私诉求由调用方自己决定
+    要不要带上敏感内容（Phase 2 用「负面记忆标记」表达）。
+    """
+    with pytest.raises(ValidationError):
+        RecallMemoryRequest(
+            user_id="user-1",
+            session_id="session-1",
+            query="告诉我你记住了哪些隐私",
+            intent="sensitive",
+        )
 
 
 def test_append_hard_skips_prompt_injection_and_credentials_from_l2_l3() -> None:
@@ -2465,7 +2443,6 @@ def test_append_hard_skips_prompt_injection_and_credentials_from_l2_l3() -> None
             user_id="user-1",
             session_id="session-1",
             query="API_KEY",
-            intent=RecallIntent.CHAT,
         )
     )
 
@@ -2507,7 +2484,6 @@ def test_unsafe_round_does_not_enter_l2_after_later_safe_append() -> None:
             user_id="user-1",
             session_id="session-1",
             query="最近聊了什么",
-            intent=RecallIntent.CHAT,
         )
     )
 
@@ -2546,7 +2522,6 @@ def test_unsafe_append_does_not_tombstone_previous_safe_rounds() -> None:
             user_id="user-1",
             session_id="session-1",
             query="最近聊了什么",
-            intent=RecallIntent.CHAT,
         )
     )
 
@@ -2677,7 +2652,6 @@ def test_append_backfills_p0_slot_when_mem0_returns_no_event() -> None:
             user_id="user-1",
             session_id="session-1",
             query="用户的狗叫什么？",
-            intent=RecallIntent.CHAT,
         )
     )
 
@@ -3136,7 +3110,6 @@ def test_recall_uses_business_index_text_after_l3_canonicalization() -> None:
             user_id="user-1",
             session_id="session-1",
             query="小鹏",
-            intent=RecallIntent.CHAT,
         )
     )
 
@@ -3160,7 +3133,6 @@ def test_recall_backfills_matching_business_slot_when_backend_misses() -> None:
             user_id="user-1",
             session_id="session-1",
             query="用户现在的工作状态是什么？",
-            intent=RecallIntent.CHAT,
         )
     )
 
@@ -3193,7 +3165,6 @@ def test_recall_filters_backend_l3_items_by_explicit_query_slot() -> None:
             user_id="user-1",
             session_id="session-1",
             query="用户的狗叫什么？",
-            intent=RecallIntent.CHAT,
         )
     )
 
@@ -3225,7 +3196,6 @@ def test_recall_searches_backend_for_non_slot_pet_topic_queries() -> None:
             user_id="user-1",
             session_id="session-2",
             query="用户喜欢猫吗？",
-            intent=RecallIntent.CHAT,
         )
     )
 
@@ -3257,7 +3227,6 @@ def test_recall_searches_backend_for_non_slot_city_topic_queries() -> None:
             user_id="user-1",
             session_id="session-2",
             query="用户对上海这座城市感兴趣吗？",
-            intent=RecallIntent.CHAT,
         )
     )
 
@@ -3291,7 +3260,6 @@ def test_recall_filters_noisy_backend_items_for_unrelated_non_slot_query() -> No
             user_id="user-1",
             session_id="session-2",
             query="用户最近提到咖啡馆了吗？",
-            intent=RecallIntent.CHAT,
         )
     )
 
@@ -3367,7 +3335,6 @@ def test_recall_searches_backend_for_non_slot_topic_keywords(
             user_id="user-1",
             session_id="session-2",
             query=query,
-            intent=RecallIntent.CHAT,
         )
     )
 
@@ -3958,7 +3925,6 @@ def test_recall_filters_noisy_backend_items_by_birthday_query_slot() -> None:
             user_id="user-1",
             session_id="session-1",
             query="用户生日是哪天？",
-            intent=RecallIntent.CHAT,
         )
     )
 
@@ -3982,7 +3948,6 @@ def test_recall_backfills_sleep_reminder_slot_when_backend_misses() -> None:
             user_id="user-1",
             session_id="session-1",
             query="用户现在还讨厌被提醒睡觉吗？",
-            intent=RecallIntent.CHAT,
         )
     )
 
@@ -4009,7 +3974,6 @@ def test_recall_does_not_search_backend_when_known_slot_has_no_active_business_i
             user_id="user-1",
             session_id="session-1",
             query="用户的猫叫什么？",
-            intent=RecallIntent.CHAT,
         )
     )
 
@@ -4038,7 +4002,6 @@ def test_recall_token_budget_prefers_l3_over_l1_when_clipping() -> None:
             user_id="user-1",
             session_id="session-1",
             query="现在应该怎么称呼用户？",
-            intent=RecallIntent.CHAT,
             token_budget=100,
         )
     )
@@ -4787,7 +4750,6 @@ def test_deleting_current_slot_prevents_rebuild_from_restoring_superseded_old_sl
             user_id="user-1",
             session_id="session-1",
             query="用户的猫叫什么？",
-            intent=RecallIntent.CHAT,
         )
     )
 
@@ -4863,7 +4825,6 @@ def test_delete_memory_marks_l2_dirty_and_removes_l3() -> None:
                 user_id="user-1",
                 session_id="session-1",
                 query="睡觉",
-                intent=RecallIntent.CHAT,
             )
         ).items
         == []
@@ -5130,7 +5091,6 @@ def test_rebuild_uses_journal_not_l1_cache() -> None:
             user_id="user-1",
             session_id="session-1",
             query="换工作",
-            intent=RecallIntent.CHAT,
         )
     )
     assert any("换工作" in item.content for item in recall.items)
@@ -5164,7 +5124,6 @@ def test_rebuild_does_not_restore_memory_from_deleted_source_round() -> None:
             user_id="user-1",
             session_id="session-1",
             query="睡觉",
-            intent=RecallIntent.CHAT,
         )
     )
     recall_remaining = service.recall(
@@ -5172,7 +5131,6 @@ def test_rebuild_does_not_restore_memory_from_deleted_source_round() -> None:
             user_id="user-1",
             session_id="session-1",
             query="猫",
-            intent=RecallIntent.CHAT,
         )
     )
 
@@ -5198,7 +5156,6 @@ def test_rebuild_can_run_twice_without_losing_non_deleted_sources() -> None:
             user_id="user-1",
             session_id="session-1",
             query="猫",
-            intent=RecallIntent.CHAT,
         )
     )
 
@@ -5723,7 +5680,6 @@ def test_session_rebuild_keeps_other_session_l3_memories() -> None:
             user_id="user-1",
             session_id="session-2",
             query="换工作",
-            intent=RecallIntent.CHAT,
         )
     )
 
@@ -5826,7 +5782,6 @@ def test_user_rebuild_uses_external_history_even_when_local_journal_is_empty() -
             user_id="user-1",
             session_id="session-history",
             query="我的猫叫什么？",
-            intent=RecallIntent.CHAT,
         )
     )
 
@@ -6944,38 +6899,34 @@ def test_async_append_response_redacts_l3_events() -> None:
 def test_extract_favorite_drink_marker_set_dedup() -> None:
     """回归 L-3：'favorite drink' 重复 marker 改成 frozenset 后仍能正确识别 drink 类。"""
     # drink 路径：包含 'favorite drink' marker + 'favorite drink is' 正则
-    drink_result = MemoryService._extract_favorite_consumable(
-        "User's favorite drink is oat milk latte"
-    )
+    drink_result = extract_favorite_consumable("User's favorite drink is oat milk latte")
     assert drink_result is not None
     assert drink_result[0] == "drink"
     assert "oat milk latte" in drink_result[1]
 
     # 中文 drink marker：'喜欢喝' 仍走 drink 分支
-    drink_result_zh = MemoryService._extract_favorite_consumable("用户喜欢喝美式咖啡")
+    drink_result_zh = extract_favorite_consumable("用户喜欢喝美式咖啡")
     assert drink_result_zh is not None
     assert drink_result_zh[0] == "drink"
     assert "美式咖啡" in drink_result_zh[1]
 
     # 无关文本必须仍返回 None（防止 frozenset 改写引入误命中）
-    assert MemoryService._extract_favorite_consumable("hello world") is None
+    assert extract_favorite_consumable("hello world") is None
 
 
 def test_extract_favorite_food_marker_set_dedup() -> None:
     """回归 L-3：'favorite food' 重复 marker 改成 frozenset 后仍能正确识别 food 类。"""
-    food_result = MemoryService._extract_favorite_consumable("User's favorite food is sushi")
+    food_result = extract_favorite_consumable("User's favorite food is sushi")
     assert food_result is not None
     assert food_result[0] == "food"
 
     # 中文 '喜欢吃' 仍走 food 分支
-    food_result_zh = MemoryService._extract_favorite_consumable("用户喜欢吃麻辣烫")
+    food_result_zh = extract_favorite_consumable("用户喜欢吃麻辣烫")
     assert food_result_zh is not None
     assert food_result_zh[0] == "food"
 
     # 'food preference changed' marker 仍命中
-    food_result_alt = MemoryService._extract_favorite_consumable(
-        "User's food preference changed to vegan"
-    )
+    food_result_alt = extract_favorite_consumable("User's food preference changed to vegan")
     assert food_result_alt is not None
     assert food_result_alt[0] == "food"
 
@@ -7667,7 +7618,6 @@ def test_recall_degrades_to_l1_l2_when_l3_backend_search_fails() -> None:
             user_id="user-1",
             session_id="session-1",
             query="今天有什么新鲜事？",
-            intent=RecallIntent.CHAT,
         )
     )
 
@@ -7701,7 +7651,6 @@ def test_recall_degraded_response_keeps_l1_l2() -> None:
             user_id="user-1",
             session_id="session-1",
             query="今天天气怎么样？",
-            intent=RecallIntent.CHAT,
         )
     )
 

@@ -26,7 +26,6 @@ from thinkback.memory.schemas import (
     DeleteScope,
     MessageRole,
     OperationType,
-    RecallIntent,
     RecallMemoryRequest,
     SummaryState,
     TaskStatus,
@@ -74,7 +73,6 @@ def _make_recall_request(
     user_id: str = "user-1",
     session_id: str = "session-1",
     query: str = "换工作",
-    intent: RecallIntent = RecallIntent.CHAT,
     l3_limit: int = 5,
     l3_score_threshold: float = 0.5,
     token_budget: int = 1200,
@@ -83,7 +81,6 @@ def _make_recall_request(
         user_id=user_id,
         session_id=session_id,
         query=query,
-        intent=intent,
         l3_limit=l3_limit,
         l3_score_threshold=l3_score_threshold,
         token_budget=token_budget,
@@ -528,7 +525,6 @@ def test_recall_extra_field_raises_forbidden() -> None:
             user_id="user-1",
             session_id="session-1",
             query="hi",
-            intent=RecallIntent.CHAT,
             unknown_field="oops",  # type: ignore[call-arg]
         )
     assert "Extra inputs are not permitted" in str(excinfo.value) or "unknown_field" in str(

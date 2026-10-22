@@ -6,7 +6,6 @@ from thinkback.memory.schemas import (
     DeleteScope,
     MessageRole,
     RebuildMemoryRequest,
-    RecallIntent,
     RecallMemoryRequest,
 )
 from thinkback.memory.service import MemoryService
@@ -49,7 +48,6 @@ def test_fake_backend_full_chain_append_recall_delete_rebuild_recall() -> None:
             user_id="user-e2e",
             session_id="session-e2e",
             query="换工作",
-            intent=RecallIntent.CHAT,
         )
     )
 
@@ -75,7 +73,6 @@ def test_fake_backend_full_chain_append_recall_delete_rebuild_recall() -> None:
             user_id="user-e2e",
             session_id="session-e2e",
             query="睡觉",
-            intent=RecallIntent.CHAT,
         )
     )
 
@@ -93,7 +90,6 @@ def test_fake_backend_full_chain_append_recall_delete_rebuild_recall() -> None:
             user_id="user-e2e",
             session_id="session-e2e",
             query="换工作",
-            intent=RecallIntent.CHAT,
         )
     )
 

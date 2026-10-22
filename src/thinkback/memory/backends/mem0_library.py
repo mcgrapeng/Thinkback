@@ -42,12 +42,6 @@ THINKBACK_CUSTOM_INSTRUCTIONS = """Additional requirements:
 6. Output must be pure Chinese characters and Chinese punctuation. Do NOT append a parenthetical pinyin transliteration (e.g. "Mashu (麻薯)"). Write only the entity value in Chinese."""
 
 
-def _build_custom_instructions() -> str:
-    """thinkback 的追加抽取约束（挂到 v2 custom_instructions）。"""
-
-    return THINKBACK_CUSTOM_INSTRUCTIONS
-
-
 def build_mem0_library_config(
     *,
     llm_api_key: str,
@@ -104,7 +98,7 @@ def build_mem0_library_config(
         "history_db_path": history_db_path,
         # P1b：v2 键名为 custom_instructions（原 custom_fact_extraction_prompt
         # 已改名），语义从"替换 system prompt"变为"user prompt 追加段"。
-        "custom_instructions": _build_custom_instructions(),
+        "custom_instructions": THINKBACK_CUSTOM_INSTRUCTIONS,
     }
 
 

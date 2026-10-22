@@ -51,8 +51,6 @@ describe("IntegrationPage", () => {
           created_at: "2026-05-04T10:00:00Z",
         },
       ],
-      "/admin/api/mem0/configs": [],
-      "/admin/api/mem0/sections": [],
     });
     renderPage();
 
@@ -63,8 +61,6 @@ describe("IntegrationPage", () => {
   it("无 Key 时展示空态引导", async () => {
     stubFetch({
       "/admin/api/integration/keys": [],
-      "/admin/api/mem0/configs": [],
-      "/admin/api/mem0/sections": [],
     });
     renderPage();
 

@@ -61,7 +61,9 @@ def test_clipped_memory_is_not_counted_as_recalled() -> None:
         user_id="user-1",
         memory_scope_id="thinkback",
         source_refs=[],
-        memory_text="上海",
+        # 内容质量高于长记忆（排序键的第二位）→ 排在前面。
+        # 预算裁剪取「排名前缀」：短记忆先进上下文，长记忆因超预算被裁掉。
+        memory_text="2024 年 3 月我入职了上海的阿里巴巴云智能团队",
     )
 
     response = service.recall(

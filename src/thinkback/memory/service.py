@@ -29,17 +29,7 @@ from thinkback.domain.safety import (
 from thinkback.domain.slots import (
     canonical_memory_text,
     canonical_memory_text_from_source,
-    conflict_partition,
-    conflict_partition_from_metadata,
     context_terms,
-    extract_birthday,
-    extract_communication_preference,
-    extract_current_location,
-    extract_current_nickname,
-    extract_current_work_status,
-    extract_favorite_consumable,
-    extract_pet_name,
-    extract_sleep_reminder_preference,
     is_backend_managed_memory_id,
     is_local_index_memory_id,
     is_same_source_local_p0_memory,
@@ -89,7 +79,6 @@ from thinkback.memory.schemas import (
     OperationType,
     RebuildMemoryRequest,
     RebuildMemoryResponse,
-    RecallIntent,
     RecallMemoryRequest,
     RecallMemoryResponse,
     SourceType,
@@ -1163,7 +1152,7 @@ L2 更新 (缓存失效)
         return l3_events
 
     def recall(self, request: RecallMemoryRequest) -> RecallMemoryResponse:
-        """按意图召回 L1/L2/L3 记忆。
+        """召回 L1/L2/L3 记忆。
 
         request.query 只用于匹配和后端检索；日志记录 query_length 与召回参数，避免
         将用户查询原文写入日志。
@@ -1171,7 +1160,7 @@ L2 更新 (缓存失效)
         流程图::
 
             进入 RecallMemoryRequest
-            (user_id, session_id, intent, query,
+            (user_id, session_id, query,
              l3_limit, token_budget, l3_score_threshold)
                 │
                 ▼
@@ -1180,13 +1169,9 @@ L2 更新 (缓存失效)
             INFO: "memory recall started"
                 │
                 ▼
-            ┌── 意图拦截 ──────────────────────────────┐
-            │  intent == RecallIntent.SENSITIVE        │
-            │    └─► LOGGER_MEMORY.failed              │
-            │        raise ValueError("fail-closed …") │
-            └───────────────────────┬─────────────────┘
-                                │
-                                ▼
+            （无意图拦截：intent 轴已删除）
+                │
+                ▼
             items = []
             degradation_reasons = []
                 │
@@ -1213,13 +1198,9 @@ L2 更新 (缓存失效)
             └───────────────────────┬─────────────────┘
                                 │
                                 ▼
-            must_query_l3 = (intent is RecallIntent.CHAT)
+            （总是查 L3：intent 轴已删除，没有「跳过 L3」这条路）
                 │
-                ├─ False → 跳过 L3
-                │
-                └─ True:
-                       │
-                       ▼
+                ▼
             ┌── L3 召回 (后端语义检索) ────────────────┐
             │  active = _active_memories(user_id, …)  │
             │  by_backend_id = {m.backend_memory_id: │
@@ -1277,23 +1258,17 @@ L2 更新 (缓存失效)
             "recall",
             user_id=request.user_id,
             session_id=request.session_id,
-            intent=request.intent.value,
             query_length=len(request.query),
             l3_limit=request.l3_limit,
         )
         recall_log = logger.bind(
             user_id=request.user_id,
             session_id=request.session_id,
-            intent=request.intent.value,
             query_length=len(request.query),
             l3_limit=request.l3_limit,
             token_budget=request.token_budget,
         )
         recall_log.info("memory recall started")
-        if request.intent is RecallIntent.SENSITIVE:
-            LOGGER_MEMORY.failed("recall", "INTENT_ERROR", detail="fail_closed_intent")
-            recall_log.bind(reason="fail_closed_intent").warning("memory recall rejected")
-            raise ValueError(f"fail-closed recall intent: {request.intent.value}")
 
         items: list[MemoryItem] = []
         degradation_reasons: list[str] = []
@@ -1333,71 +1308,69 @@ L2 更新 (缓存失效)
         elif summary and summary.summary_state is SummaryState.REBUILDING:
             degradation_reasons.append("l2_rebuilding")
 
-        must_query_l3 = request.intent is RecallIntent.CHAT
         recalled_entries: list[Any] = []
-        if must_query_l3:
-            active_memories = self._active_memories(request.user_id, l3_scope_id)
-            active_memory_by_backend_id = {
-                memory.backend_memory_id: memory for memory in active_memories
-            }
-            query_slot = self._query_conflict_slot(request.query)
-            if query_slot:
-                backfilled = self._backfill_matching_slot_memories(
-                    items,
-                    query=request.query,
-                    active_memories=active_memories,
+        active_memories = self._active_memories(request.user_id, l3_scope_id)
+        active_memory_by_backend_id = {
+            memory.backend_memory_id: memory for memory in active_memories
+        }
+        query_slot = self._query_conflict_slot(request.query)
+        if query_slot:
+            backfilled = self._backfill_matching_slot_memories(
+                items,
+                query=request.query,
+                active_memories=active_memories,
+            )
+            recalled_entries.extend(backfilled)
+        if not self._should_skip_backend_search(query_slot, items):
+            # N-7: mem0 网络/服务抖动时 backend.search 可能抛 RuntimeError
+            # （由 Mem0LibraryMemoryBackend._call 统一包装）。V1 设计要求
+            # 降级为只返回 L1/L2，不允许直接 502 让上游雪崩。这里只识别
+            # RuntimeError，其他异常（如 KeyboardInterrupt）继续向上抛。
+            try:
+                backend_items = self.backend.search(
+                    request.query,
+                    user_id=request.user_id,
+                    memory_scope_id=l3_scope_id,
+                    limit=request.l3_limit,
+                    threshold=request.l3_score_threshold,
                 )
-                recalled_entries.extend(backfilled)
-            if not self._should_skip_backend_search(query_slot, items):
-                # N-7: mem0 网络/服务抖动时 backend.search 可能抛 RuntimeError
-                # （由 Mem0LibraryMemoryBackend._call 统一包装）。V1 设计要求
-                # 降级为只返回 L1/L2，不允许直接 502 让上游雪崩。这里只识别
-                # RuntimeError，其他异常（如 KeyboardInterrupt）继续向上抛。
-                try:
-                    backend_items = self.backend.search(
-                        request.query,
-                        user_id=request.user_id,
-                        memory_scope_id=l3_scope_id,
-                        limit=request.l3_limit,
-                        threshold=request.l3_score_threshold,
+            except RuntimeError as exc:
+                recall_log.bind(
+                    error_type=type(exc).__name__,
+                    error_message=str(exc),
+                ).warning("memory recall degraded: l3 backend unreachable")
+                degradation_reasons.append("l3_backend_unreachable")
+                backend_items = []
+            for item in backend_items:
+                memory_id = str(item.get("id", ""))
+                indexed_memory = active_memory_by_backend_id.get(memory_id)
+                if indexed_memory is None:
+                    continue
+                # P2#6 双时态兜底：失效时刻已定的记忆不再进入召回
+                # （状态过滤之外的第二道闸，覆盖多副本竞争/遗留行）。
+                if getattr(indexed_memory, "invalid_at", None) is not None:
+                    continue
+                if not self._memory_context_allowed(indexed_memory, request.query):
+                    continue
+                if (
+                    query_slot
+                    and self._memory_conflict_slot(indexed_memory.memory_text) != query_slot
+                ):
+                    continue
+                items.append(
+                    MemoryItem(
+                        layer="L3",
+                        content=indexed_memory.memory_text,
+                        source="mem0",
+                        memory_id=indexed_memory.memory_id,
+                        score=item.get("score"),
+                        metadata=self._recall_l3_metadata(item.get("metadata")),
+                        recall_count=getattr(indexed_memory, "recall_count", 0) or 0,
+                        last_recalled_at=getattr(indexed_memory, "last_recalled_at", None),
+                        valid_at=getattr(indexed_memory, "valid_at", None),
                     )
-                except RuntimeError as exc:
-                    recall_log.bind(
-                        error_type=type(exc).__name__,
-                        error_message=str(exc),
-                    ).warning("memory recall degraded: l3 backend unreachable")
-                    degradation_reasons.append("l3_backend_unreachable")
-                    backend_items = []
-                for item in backend_items:
-                    memory_id = str(item.get("id", ""))
-                    indexed_memory = active_memory_by_backend_id.get(memory_id)
-                    if indexed_memory is None:
-                        continue
-                    # P2#6 双时态兜底：失效时刻已定的记忆不再进入召回
-                    # （状态过滤之外的第二道闸，覆盖多副本竞争/遗留行）。
-                    if getattr(indexed_memory, "invalid_at", None) is not None:
-                        continue
-                    if not self._memory_context_allowed(indexed_memory, request.query):
-                        continue
-                    if (
-                        query_slot
-                        and self._memory_conflict_slot(indexed_memory.memory_text) != query_slot
-                    ):
-                        continue
-                    items.append(
-                        MemoryItem(
-                            layer="L3",
-                            content=indexed_memory.memory_text,
-                            source="mem0",
-                            memory_id=indexed_memory.memory_id,
-                            score=item.get("score"),
-                            metadata=self._recall_l3_metadata(item.get("metadata")),
-                            recall_count=getattr(indexed_memory, "recall_count", 0) or 0,
-                            last_recalled_at=getattr(indexed_memory, "last_recalled_at", None),
-                            valid_at=getattr(indexed_memory, "valid_at", None),
-                        )
-                    )
-                    recalled_entries.append(indexed_memory)
+                )
+                recalled_entries.append(indexed_memory)
 
         clipped_items = self._dedupe_and_clip(items, request.token_budget)
         # P2#7：被召回即强化（艾宾浩斯信号，debounce 限流写放大）。
@@ -1421,7 +1394,7 @@ L2 更新 (缓存失效)
             item_count=len(clipped_items),
             degraded=bool(degradation_reasons),
             degradation_reasons=degradation_reasons,
-            queried_l3=must_query_l3,
+            queried_l3=True,
         ).info("memory recall completed")
         return RecallMemoryResponse(
             status="ok",
@@ -2566,7 +2539,6 @@ L2 更新 (缓存失效)
                 memory_scope_id=l3_scope_id,
                 backend_memory_id=current.backend_memory_id,
                 memory_text=request.content,
-                l3_metadata={"source_refs": current.source_refs},
             )
             pending_backend_writes.extend(supersede_pending)
         except Exception:
@@ -3431,8 +3403,6 @@ L2 更新 (缓存失效)
                     for memory in self.repository.active_memories(user_id, memory_scope_id)
                     if self._memory_conflict_slot(memory.memory_text)
                     == self._memory_conflict_slot(memory_text)
-                    and self._conflict_partition(memory)
-                    == self._conflict_partition_from_metadata(l3_metadata)
                     and any(
                         source_ref_key(ref) in {source_ref_key(raw_ref) for raw_ref in source_refs}
                         for ref in memory.source_refs
@@ -3455,7 +3425,6 @@ L2 更新 (缓存失效)
                     memory_scope_id=memory_scope_id,
                     backend_memory_id=backend_id,
                     memory_text=memory_text,
-                    l3_metadata=l3_metadata,
                 )
                 pending_backend_writes.extend(supersede_pending)
                 self.repository.add_memory_index(
@@ -3815,7 +3784,6 @@ L2 更新 (缓存失效)
                 memory_scope_id=memory_scope_id,
                 backend_memory_id=backend_id,
                 memory_text=memory_text,
-                l3_metadata=l3_metadata,
             )
             pending_backend_writes.extend(supersede_pending)
         self.repository.add_memory_index(
@@ -3929,20 +3897,16 @@ L2 更新 (缓存失效)
         memory_scope_id: str,
         backend_memory_id: str,
         memory_text: str,
-        l3_metadata: dict[str, Any] | None = None,
     ) -> tuple[list[str], list[Any]]:
         new_slot = self._memory_conflict_slot(memory_text)
         if new_slot is None:
             return [], []
-        new_partition = self._conflict_partition_from_metadata(l3_metadata or {})
         superseded_ids: list[str] = []
         pending_backend_writes: list[Any] = []
         for memory in self.repository.active_memories(user_id, memory_scope_id):
             if memory.backend_memory_id == backend_memory_id:
                 continue
             if self._memory_conflict_slot(memory.memory_text) != new_slot:
-                continue
-            if self._conflict_partition(memory) != new_partition:
                 continue
             superseded = self.repository.mark_memory_superseded(memory.memory_id)
             if superseded is None:
@@ -3976,7 +3940,6 @@ L2 更新 (缓存失效)
         new_slot = self._memory_conflict_slot(memory_text)
         if new_slot is None:
             return False
-        new_partition = self._conflict_partition_from_metadata(l3_metadata or {})
         new_cursor = self._source_cursor(user_id, l3_metadata or {})
         if new_cursor is None:
             return False
@@ -3984,8 +3947,6 @@ L2 更新 (缓存失效)
             if memory.backend_memory_id == backend_memory_id:
                 continue
             if self._memory_conflict_slot(memory.memory_text) != new_slot:
-                continue
-            if self._conflict_partition(memory) != new_partition:
                 continue
             existing_cursor = self._source_cursor(user_id, memory.metadata)
             if existing_cursor is None:
@@ -4044,14 +4005,6 @@ L2 更新 (缓存失效)
             self.repository.mark_memory_deleted(memory.memory_id)
 
     @staticmethod
-    def _conflict_partition_from_metadata(_metadata: dict[str, Any]) -> tuple[()]:
-        return conflict_partition_from_metadata(_metadata)
-
-    @staticmethod
-    def _conflict_partition(_memory: Any) -> tuple[()]:
-        return conflict_partition(_memory)
-
-    @staticmethod
     def _memory_conflict_slot(memory_text: str) -> str | None:
         return memory_conflict_slot(memory_text)
 
@@ -4101,38 +4054,6 @@ L2 更新 (缓存失效)
     @classmethod
     def _p0_canonical_memory_for_source_slot(cls, memory_text: str, source_text: str) -> str | None:
         return p0_canonical_memory_for_source_slot(memory_text, source_text)
-
-    @staticmethod
-    def _extract_current_nickname(memory_text: str) -> str | None:
-        return extract_current_nickname(memory_text)
-
-    @staticmethod
-    def _extract_pet_name(memory_text: str) -> tuple[str, str] | None:
-        return extract_pet_name(memory_text)
-
-    @staticmethod
-    def _extract_current_location(memory_text: str) -> str | None:
-        return extract_current_location(memory_text)
-
-    @staticmethod
-    def _extract_current_work_status(memory_text: str) -> str | None:
-        return extract_current_work_status(memory_text)
-
-    @staticmethod
-    def _extract_communication_preference(memory_text: str) -> str | None:
-        return extract_communication_preference(memory_text)
-
-    @staticmethod
-    def _extract_birthday(memory_text: str) -> str | None:
-        return extract_birthday(memory_text)
-
-    @staticmethod
-    def _extract_favorite_consumable(memory_text: str) -> tuple[str, str] | None:
-        return extract_favorite_consumable(memory_text)
-
-    @staticmethod
-    def _extract_sleep_reminder_preference(memory_text: str) -> str | None:
-        return extract_sleep_reminder_preference(memory_text)
 
     def _l3_metadata(
         self, source_refs: list[dict[str, str]], request_metadata: dict[str, Any]

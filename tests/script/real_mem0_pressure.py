@@ -29,7 +29,6 @@ from thinkback.memory.schemas import (
     MemoryStatus,
     MessageRole,
     RebuildMemoryRequest,
-    RecallIntent,
     RecallMemoryRequest,
 )
 from thinkback.memory.service import MemoryService
@@ -206,7 +205,6 @@ def main() -> None:
             user_id=scope.user_id,
             session_id=scope.session_id,
             query="用户关于睡觉和工作压力的长期偏好",
-            intent=RecallIntent.CHAT,
             l3_limit=10,
         )
     )
@@ -239,7 +237,6 @@ def main() -> None:
             user_id=scope.user_id,
             session_id=scope.session_id,
             query=target.memory_text or "用户长期记忆",
-            intent=RecallIntent.CHAT,
             l3_limit=10,
         )
     )
@@ -263,7 +260,6 @@ def main() -> None:
             user_id=scope.user_id,
             session_id=scope.session_id,
             query="用户换工作和称呼偏好",
-            intent=RecallIntent.CHAT,
             l3_limit=10,
         )
     )
