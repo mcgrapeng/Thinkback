@@ -169,6 +169,45 @@ def _verify_secret(record: ApiKey, secret: str) -> bool:
     return secrets.compare_digest(record.secret_hash, expected)
 
 
+class ApiKeyError(Exception):
+    """API Key 校验失败。
+
+    HTTP 侧转成 401/403 的错误响应，gRPC 侧转成 UNAUTHENTICATED/
+    PERMISSION_DENIED。**两种传输共用同一份判定** —— 「同口径」不能靠两处
+    实现碰巧一致。
+    """
+
+    def __init__(self, message: str, *, status_code: int = 401, code: str = "TB-1002") -> None:
+        super().__init__(message)
+        self.message = message
+        self.status_code = status_code
+        self.code = code
+
+
+def authenticate_api_key(authorization: str) -> ApiKey:
+    """校验 ``Authorization: Bearer tbk_{env}_{key_id}_{secret}``。
+
+    成功返回 key 记录（含 tenant 与 scopes）；失败抛 :class:`ApiKeyError`。
+    错误信息里不含 key_id 也不含 secret —— 日志里只该出现 key 指纹。
+    """
+
+    parsed = _parse_api_key(authorization)
+    if not parsed:
+        raise ApiKeyError(
+            "Invalid Authorization header. Expected: Bearer tbk_{env}_{key_id}_{secret}"
+        )
+
+    key_id, secret = parsed
+    record = get_api_key(key_id)
+    if not record or not record.is_active:
+        raise ApiKeyError("API key not found or revoked")
+
+    if not _verify_secret(record, secret):
+        raise ApiKeyError("Invalid API key secret")
+
+    return record
+
+
 async def require_auth(
     request: Request,
     authorization: Annotated[str, Header()] = "",
@@ -178,44 +217,19 @@ async def require_auth(
     """认证依赖:解析 API key → 验证 → 返回 AuthContext。"""
     request_id = x_request_id or f"req_{secrets.token_hex(8)}"
 
-    parsed = _parse_api_key(authorization)
-    if not parsed:
+    try:
+        record = authenticate_api_key(authorization)
+    except ApiKeyError as exc:
         raise HTTPException(
-            status_code=401,
+            status_code=exc.status_code,
             detail={
                 "error": {
-                    "code": "TB-1002",
-                    "message": "Invalid Authorization header. Expected: Bearer tbk_{env}_{key_id}_{secret}",
+                    "code": exc.code,
+                    "message": exc.message,
                     "request_id": request_id,
                 }
             },
-        )
-
-    key_id, secret = parsed
-    record = get_api_key(key_id)
-    if not record or not record.is_active:
-        raise HTTPException(
-            status_code=401,
-            detail={
-                "error": {
-                    "code": "TB-1002",
-                    "message": "API key not found or revoked",
-                    "request_id": request_id,
-                }
-            },
-        )
-
-    if not _verify_secret(record, secret):
-        raise HTTPException(
-            status_code=401,
-            detail={
-                "error": {
-                    "code": "TB-1002",
-                    "message": "Invalid API key secret",
-                    "request_id": request_id,
-                }
-            },
-        )
+        ) from exc
 
     # tenant 一致性检查 —— 头是**强制**的。
     # 原实现是 `if x_tenant_id and ...`：客户端不传就不校验,而 v1_memory.py 的

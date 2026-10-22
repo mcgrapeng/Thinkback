@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from thinkback.domain.tenant import scoped_user_id
 from thinkback.memory.schemas import (
     AppendMemoryRequest,
     DataClassification,
@@ -34,6 +35,56 @@ from thinkback.memory.schemas import (
     UpdateMemoryRequest,
 )
 from thinkback.rpc import memory_pb2 as pb
+
+# ── gRPC ↔ HTTP 的取值口径（必须与 memory/schemas.py 的 RecallMemoryRequest 一致）──
+#
+# proto3 的标量字段没有 presence：分不清「客户端没传」与「客户端传了 0」。
+# 约定：**0 / 0.0 一律按「没传」处理**，取 HTTP 侧的默认值；越界值直接报错
+# （HTTP 侧是 422，gRPC 侧是 INVALID_ARGUMENT），不静默夹取 —— 静默夹取会让
+# 调用方以为自己拿到了 50 条，实际拿到的是被悄悄改过的值。
+L3_LIMIT_DEFAULT = 5
+L3_LIMIT_MAX = 50
+L3_SCORE_THRESHOLD_DEFAULT = 0.5
+TOKEN_BUDGET_DEFAULT = 1200
+TOKEN_BUDGET_MIN = 100
+TOKEN_BUDGET_MAX = 12000
+
+
+def resolve_l3_limit(value: int) -> int:
+    """gRPC 的 l3_limit → HTTP 同口径（默认 5、上限 50）。"""
+
+    if value == 0:
+        return L3_LIMIT_DEFAULT
+    if value < 0 or value > L3_LIMIT_MAX:
+        raise ValueError(f"l3_limit must be between 0 and {L3_LIMIT_MAX}, got {value}")
+    return value
+
+
+def resolve_l3_score_threshold(value: float) -> float:
+    """gRPC 的 l3_score_threshold → HTTP 同口径（默认 0.5、范围 0-1）。
+
+    原实现直接透传 proto 的 0.0 默认值，等于「不过滤」—— HTTP 侧是 0.5，
+    两边对同一条记忆的召回结果不同。
+    """
+
+    if value == 0.0:
+        return L3_SCORE_THRESHOLD_DEFAULT
+    if value < 0.0 or value > 1.0:
+        raise ValueError(f"l3_score_threshold must be between 0.0 and 1.0, got {value}")
+    return value
+
+
+def resolve_token_budget(value: int) -> int:
+    """gRPC 的 token_budget → HTTP 同口径（默认 1200、范围 100-12000）。"""
+
+    if value == 0:
+        return TOKEN_BUDGET_DEFAULT
+    if value < TOKEN_BUDGET_MIN or value > TOKEN_BUDGET_MAX:
+        raise ValueError(
+            f"token_budget must be between {TOKEN_BUDGET_MIN} and {TOKEN_BUDGET_MAX}, got {value}"
+        )
+    return value
+
 
 # ── enum maps (proto → domain) ──────────────────────────────────────────────
 
@@ -114,7 +165,7 @@ _SUMMARY_STATE_TO_PB = {
 # ── request converters ───────────────────────────────────────────────────────
 
 
-def to_append_request(req: pb.AppendRequest) -> AppendMemoryRequest:
+def to_append_request(req: pb.AppendRequest, *, tenant_id: str = "") -> AppendMemoryRequest:
     from datetime import datetime
 
     messages = [
@@ -128,7 +179,7 @@ def to_append_request(req: pb.AppendRequest) -> AppendMemoryRequest:
     ]
     return AppendMemoryRequest(
         request_id=req.request_id,
-        user_id=req.user_id,
+        user_id=scoped_user_id(tenant_id, req.user_id),
         session_id=req.session_id,
         round_id=req.round_id,
         messages=messages,
@@ -138,22 +189,22 @@ def to_append_request(req: pb.AppendRequest) -> AppendMemoryRequest:
     )
 
 
-def to_recall_request(req: pb.RecallRequest) -> RecallMemoryRequest:
+def to_recall_request(req: pb.RecallRequest, *, tenant_id: str = "") -> RecallMemoryRequest:
     return RecallMemoryRequest(
-        user_id=req.user_id,
+        user_id=scoped_user_id(tenant_id, req.user_id),
         session_id=req.session_id,
         query=req.query,
         intent=_RECALL_INTENT.get(req.intent, RecallIntent.CHAT),
-        l3_limit=req.l3_limit or 5,
-        l3_score_threshold=req.l3_score_threshold,
-        token_budget=req.token_budget or 1200,
+        l3_limit=resolve_l3_limit(req.l3_limit),
+        l3_score_threshold=resolve_l3_score_threshold(req.l3_score_threshold),
+        token_budget=resolve_token_budget(req.token_budget),
     )
 
 
-def to_delete_request(req: pb.DeleteRequest) -> DeleteMemoryRequest:
+def to_delete_request(req: pb.DeleteRequest, *, tenant_id: str = "") -> DeleteMemoryRequest:
     return DeleteMemoryRequest(
         request_id=req.request_id,
-        user_id=req.user_id,
+        user_id=scoped_user_id(tenant_id, req.user_id),
         scope=_DELETE_SCOPE[req.scope],
         operation_id=req.operation_id,
         memory_id=req.memory_id if req.HasField("memory_id") else None,
@@ -161,11 +212,11 @@ def to_delete_request(req: pb.DeleteRequest) -> DeleteMemoryRequest:
     )
 
 
-def to_update_request(req: pb.UpdateMemoryRequest) -> UpdateMemoryRequest:
+def to_update_request(req: pb.UpdateMemoryRequest, *, tenant_id: str = "") -> UpdateMemoryRequest:
     memory_type = _MEMORY_TYPE_FROM_PB.get(req.memory_type) if req.HasField("memory_type") else None
     return UpdateMemoryRequest(
         request_id=req.request_id,
-        user_id=req.user_id,
+        user_id=scoped_user_id(tenant_id, req.user_id),
         operation_id=req.operation_id,
         memory_id=req.memory_id,
         content=req.content,
@@ -173,10 +224,10 @@ def to_update_request(req: pb.UpdateMemoryRequest) -> UpdateMemoryRequest:
     )
 
 
-def to_rebuild_request(req: pb.RebuildRequest) -> RebuildMemoryRequest:
+def to_rebuild_request(req: pb.RebuildRequest, *, tenant_id: str = "") -> RebuildMemoryRequest:
     return RebuildMemoryRequest(
         request_id=req.request_id,
-        user_id=req.user_id,
+        user_id=scoped_user_id(tenant_id, req.user_id),
         operation_id=req.operation_id,
         session_id=req.session_id if req.HasField("session_id") else None,
         history_version=req.history_version if req.HasField("history_version") else None,
