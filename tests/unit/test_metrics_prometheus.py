@@ -37,6 +37,25 @@ def test_render_prometheus_exposes_all_kinds_even_with_zero_count() -> None:
         assert f'thinkback_request_total{{kind="{kind}"}} 0' in out
 
 
+def test_request_total_counter_is_monotonic_across_window_boundary() -> None:
+    """counter 只能增不能减：跨过 5 分钟窗口边界不得归零。
+
+    旧实现把 300s 滑动窗口的计数当 counter 暴露，每 5 分钟归零一次 ——
+    Prometheus 的 rate()/increase() 会把它当成进程重启，错误率与 SLO 全错。
+    """
+    registry = MetricsRegistry()
+    registry.record("append_ok", at=1000.0)
+    registry.record("append_ok", at=1001.0)
+
+    early = registry.render_prometheus(now=1001.0)
+    assert 'thinkback_request_total{kind="append_ok"} 2' in early
+
+    late = registry.render_prometheus(now=1400.0)
+    assert 'thinkback_request_total{kind="append_ok"} 2' in late
+    # 窗口计数确实归零（窗口是滑动的），但 counter 不归零。
+    assert 'thinkback_request_window_5m{kind="append_ok"} 0' in late
+
+
 def test_metrics_endpoint_returns_prometheus_text() -> None:
     """S2: GET /metrics 返回 text/plain; version=0.0.4 格式。"""
     app = create_app()

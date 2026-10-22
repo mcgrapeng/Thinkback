@@ -2,8 +2,9 @@
 
 层优先级 L3 > L2 > L1；同层按「内容质量 + 强度」排序，同内容跨层取高层。
 强度 = f(recency_hours, recall_count) —— Ebbinghaus 式信号 (S1 见 G1)。
-token 成本用 ``len(content) // 2`` 近似（中文一字约等于一个 token），
-超出预算的条目跳过而不是截断，保证原子性。
+token 成本用 :func:`estimate_tokens` 按字符集分档估算（中文一字约一个 token，
+ASCII 约四字符一个 token），超出预算的条目**停止裁剪**（而不是跳过继续试），
+保证原子性。
 
 强度公式（确定性，无 LLM）：
     strength = (1 + log1p(recall_count)) * recency_factor
@@ -51,6 +52,60 @@ LAYER_PRIORITY = {"L3": 3, "L2": 2, "L1": 1}
 
 # ponytail: half_life=72h is conservative; tune if eval shows over-penalization of recent items.
 _STRENGTH_HALF_LIFE_HOURS = 72.0
+
+# ── token 估算 ──────────────────────────────────────────────────────────────
+#
+# 口径（经验值，cl100k / 常见中文模型都落在同一量级）：
+# - CJK 表意文字、日韩文字：1 字 ≈ 1 token（汉字在 BPE 里通常切 1-2 个 token）
+# - ASCII：≈ 4 字符 1 token（英文单词平均 4-5 字符）
+# - 其余非 ASCII：≈ 2 字符 1 token（西里尔/希腊文等介于两者之间，取保守值）
+#
+# 旧口径 ``len(content) // 2`` 对中文低估约 2 倍、对英文高估约 2.4 倍：
+# 中文记忆在预算里显得比实际便宜（超预算注入），英文记忆显得比实际贵
+# （该注入的没注入）。两种语言都失准的预算裁剪等于没有裁剪。
+_CJK_RANGES: tuple[tuple[int, int], ...] = (
+    (0x3040, 0x30FF),  # 平假名 / 片假名
+    (0x3400, 0x4DBF),  # CJK 扩展 A
+    (0x4E00, 0x9FFF),  # CJK 基本区
+    (0xAC00, 0xD7AF),  # 谚文音节
+    (0xF900, 0xFAFF),  # CJK 兼容表意文字
+    (0x20000, 0x2A6DF),  # CJK 扩展 B
+)
+
+_ASCII_CHARS_PER_TOKEN = 4
+_OTHER_CHARS_PER_TOKEN = 2
+
+
+def _is_cjk(code_point: int) -> bool:
+    return any(low <= code_point <= high for low, high in _CJK_RANGES)
+
+
+def estimate_tokens(text: str) -> int:
+    """按字符集分档估算 token 数（至少 1）。
+
+    >>> estimate_tokens("用户喜欢喝美式咖啡")
+    9
+    >>> estimate_tokens("user likes americano")
+    5
+    """
+
+    cjk = 0
+    ascii_chars = 0
+    other = 0
+    for char in text:
+        code_point = ord(char)
+        if _is_cjk(code_point):
+            cjk += 1
+        elif code_point < 128:
+            ascii_chars += 1
+        else:
+            other += 1
+    total = (
+        cjk
+        + math.ceil(ascii_chars / _ASCII_CHARS_PER_TOKEN)
+        + math.ceil(other / _OTHER_CHARS_PER_TOKEN)
+    )
+    return max(1, total)
 
 
 def _strength(item: MemoryItem, now: datetime | None = None) -> float:
@@ -145,9 +200,13 @@ def dedupe_and_clip(
     )
     for item in ordered_items:
         normalized = item.content.strip()
-        cost = max(1, len(normalized) // 2)
+        cost = estimate_tokens(normalized)
         if used + cost > token_budget:
-            continue
+            # 停止裁剪而不是跳过这一条继续试后面的：排序键已经定好优先级，
+            # 预算裁剪应当取「排名前缀」—— 跳过后面的便宜条目会得到一个
+            # 「高质量的被砍掉、低质量的挤进来」的集合，注入的上下文与
+            # 排序结论自相矛盾。宁可少注入，也不要注入错的。
+            break
         used += cost
         clipped.append(item)
     return clipped

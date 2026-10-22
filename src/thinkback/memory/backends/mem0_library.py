@@ -530,38 +530,32 @@ class Mem0LibraryMemoryBackend:
         return deleted
 
     def health_check(self) -> dict[str, str]:
-        """写入并清理探针记忆，验证 Mem0 后端是否可用。"""
+        """只读探活：查询向量库，不写入任何数据。
+
+        原实现真的 ``add`` 一条探针记忆再 ``delete``。k8s 探针默认 10s 一次，
+        于是每次探活 = 一次 LLM + 一次 embedding + 一次 Milvus 写 + 一次删：
+        贵，而且在**被探测的链路**上凭空制造写流量（写失败还会让探针报不健康，
+        明明后端是好的）。改成只读查询（``get_all``）—— 验证 mem0 客户端与
+        向量库连通性，不碰任何数据。
+        """
 
         logger.debug("memory backend health check started")
-        probe_memory_ids: list[str] = []
         try:
-            events = self.add(
-                [{"role": "user", "content": "thinkback library health check"}],
-                user_id="thinkback-health",
-                memory_scope_id="thinkback-health",
-                metadata={"source_type": "system_migration", "memory_type": "event"},
+            self._call(
+                "get_all",
+                **self._scope_kwargs(
+                    "get_all",
+                    user_id="thinkback-health",
+                    memory_scope_id="thinkback-health",
+                ),
+                **self._limit_kwargs("get_all", 1),
             )
-            probe_memory_ids = [
-                str(event.get("id", ""))
-                for event in events
-                if self._is_backend_memory_id(str(event.get("id", "")))
-            ]
         except Exception as exc:
             logger.bind(error_type=type(exc).__name__).warning(
-                "memory backend health check probe add failed"
+                "memory backend health check query failed"
             )
             return {"status": "not_ready", "detail": str(exc)}
-        for memory_id in probe_memory_ids:
-            try:
-                self.delete(memory_id)
-            except Exception as exc:
-                logger.bind(memory_id=memory_id, error_type=type(exc).__name__).warning(
-                    "memory backend health check probe cleanup failed"
-                )
-                return {"status": "not_ready", "detail": str(exc)}
-        logger.bind(probe_count=len(probe_memory_ids)).debug(
-            "memory backend health check completed"
-        )
+        logger.debug("memory backend health check completed")
         return {"status": "ready", "detail": "ok"}
 
     @property

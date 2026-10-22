@@ -11,7 +11,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from thinkback.domain.content_quality import intrinsic_quality
-from thinkback.domain.recall_policy import _strength, dedupe_and_clip
+from thinkback.domain.recall_policy import _strength, dedupe_and_clip, estimate_tokens
 from thinkback.memory.schemas import MemoryItem
 
 
@@ -280,10 +280,47 @@ def test_quality_survives_token_budget_clipping() -> None:
     low = _l3(LOW_QUALITY, "m-low", recall_count=0)
     high = _l3(HIGH_QUALITY, "m-high", recall_count=0)
 
-    # token 成本 = len(content) // 2：高质量条目成本 18，低质量条目成本 3。
-    result = dedupe_and_clip([low, high], token_budget=18, now=_now())
+    # 预算按分档估算口径取「高质量那条的成本」—— 刚好只够一条。
+    result = dedupe_and_clip([low, high], token_budget=estimate_tokens(HIGH_QUALITY), now=_now())
 
     assert [item.memory_id for item in result] == ["m-high"]
+
+
+def test_clip_stops_at_first_over_budget_item() -> None:
+    """预算裁剪取「排名前缀」：排第一的装不下就停，不再塞后面便宜的条目。
+
+    旧实现用 ``continue`` —— 第一条超预算时跳过它、把后面便宜的塞进来，
+    注入的集合与排序结论自相矛盾（高质量被砍、低质量挤进上下文）。
+    """
+    first = _l3(HIGH_QUALITY, "m-first", recall_count=0)
+    second = _l3(LOW_QUALITY, "m-second", recall_count=0)
+
+    result = dedupe_and_clip(
+        [first, second], token_budget=estimate_tokens(HIGH_QUALITY) - 1, now=_now()
+    )
+
+    assert result == []
+
+
+def test_estimate_tokens_counts_chinese_as_one_token_per_char() -> None:
+    """中文一字约一个 token（旧口径 len//2 对中文低估约 2 倍）。"""
+    text = "用户喜欢喝美式咖啡"
+    assert estimate_tokens(text) == len(text)
+
+
+def test_estimate_tokens_counts_ascii_as_four_chars_per_token() -> None:
+    """ASCII 约四字符一个 token（旧口径对英文高估约 2.4 倍）。"""
+    text = "user likes americano"
+    assert estimate_tokens(text) == 5
+
+
+def test_estimate_tokens_mixes_scripts() -> None:
+    assert estimate_tokens("2024 年 3 月") == 4
+
+
+def test_estimate_tokens_is_never_below_one() -> None:
+    assert estimate_tokens("") == 1
+    assert estimate_tokens("a") == 1
 
 
 def test_strength_breaks_tie_when_quality_is_equal() -> None:
