@@ -7,15 +7,59 @@ from typing import Any, cast
 import grpc
 import pytest
 
+from thinkback.api.auth import ApiKey, Scope, generate_api_key, register_api_key
 from thinkback.memory.backends import FakeMemoryBackend
 from thinkback.memory.repositories import InMemoryMemoryRepository
 from thinkback.memory.service import MemoryService
 from thinkback.rpc import memory_pb2 as pb
 from thinkback.rpc import memory_pb2_grpc
+from thinkback.rpc.auth import ApiKeyAuthInterceptor
+
+
+class _AuthInjector(grpc.UnaryUnaryClientInterceptor):
+    """给所有出站调用补上 authorization metadata。
+
+    gRPC 端口现在**必须**带 API Key（与 HTTP 同口径），否则一律
+    UNAUTHENTICATED。本文件测的是 gRPC 业务语义，鉴权本身由
+    ``test_rpc_auth.py`` 负责，所以这里用客户端拦截器统一注入。
+    """
+
+    def __init__(self, authorization: str) -> None:
+        self._authorization = authorization
+
+    def intercept_unary_unary(self, continuation, client_call_details, request):  # type: ignore[no-untyped-def]
+        metadata = list(client_call_details.metadata or [])
+        metadata.append(("authorization", f"Bearer {self._authorization}"))
+        return continuation(client_call_details._replace(metadata=metadata), request)
 
 
 @pytest.fixture(scope="module")
-def grpc_channel():  # type: ignore[no-untyped-def]
+def api_key() -> tuple[str, ApiKey]:
+    plaintext, record = generate_api_key(
+        tenant_id="tenant_grpc_test",
+        scopes={
+            Scope.MEMORY_APPEND,
+            Scope.MEMORY_RECALL,
+            Scope.MEMORY_READ,
+            Scope.MEMORY_UPDATE,
+            Scope.MEMORY_DELETE,
+        },
+        plan="pro",
+        env="test",
+    )
+    return plaintext, record
+
+
+@pytest.fixture(autouse=True)
+def _keep_api_key_registered(api_key: tuple[str, ApiKey]) -> None:
+    """其它测试模块会 ``_API_KEYS.clear()`` —— 每个用例前把 key 重新注册回去。"""
+
+    _, record = api_key
+    register_api_key(record)
+
+
+@pytest.fixture(scope="module")
+def grpc_channel(api_key: tuple[str, ApiKey]):  # type: ignore[no-untyped-def]
     from concurrent.futures import ThreadPoolExecutor
 
     from grpc_reflection.v1alpha import reflection
@@ -27,7 +71,7 @@ def grpc_channel():  # type: ignore[no-untyped-def]
         backend=FakeMemoryBackend(),
         l3_write_mode="sync",
     )
-    server = grpc.server(ThreadPoolExecutor(max_workers=2))
+    server = grpc.server(ThreadPoolExecutor(max_workers=2), interceptors=[ApiKeyAuthInterceptor()])
     memory_pb2_grpc.add_MemoryServiceServicer_to_server(MemoryServicer(svc), server)  # type: ignore[no-untyped-call]
     reflection.enable_server_reflection(
         [pb.DESCRIPTOR.services_by_name["MemoryService"].full_name, reflection.SERVICE_NAME],
@@ -37,9 +81,12 @@ def grpc_channel():  # type: ignore[no-untyped-def]
     server.start()
     # grpc channel 默认读取 http_proxy/https_proxy 环境变量；本机代理（如 7890）
     # 会劫持 127.0.0.1 直连导致 UNAVAILABLE。内部直连必须显式关闭 HTTP 代理路由。
-    channel = grpc.insecure_channel(
-        f"127.0.0.1:{port}",
-        options=[("grpc.enable_http_proxy", 0)],
+    channel = grpc.intercept_channel(
+        grpc.insecure_channel(
+            f"127.0.0.1:{port}",
+            options=[("grpc.enable_http_proxy", 0)],
+        ),
+        _AuthInjector(api_key[0]),
     )
     yield channel
     channel.close()
@@ -172,13 +219,17 @@ def test_rebuild_returns_response(stub: memory_pb2_grpc.MemoryServiceStub) -> No
 class _RecordingContext:
     """记录 abort 调用的假 ServicerContext。"""
 
-    def __init__(self) -> None:
+    def __init__(self, metadata: tuple[tuple[str, str], ...] = ()) -> None:
         self.code: object = None
         self.detail: str = ""
+        self._metadata = metadata
 
     def abort(self, code: object, detail: str) -> None:
         self.code = code
         self.detail = detail
+
+    def invocation_metadata(self) -> tuple[tuple[str, str], ...]:
+        return self._metadata
 
 
 def test_handle_error_maps_dead_letter_to_aborted() -> None:
@@ -279,12 +330,14 @@ class _ExplodingService:
         ("GetL3BackgroundStatus", pb.L3BackgroundStatusRequest()),
     ],
 )
-def test_servicer_error_paths_abort_then_unreachable(rpc_call: str, pb_request: object) -> None:
+def test_servicer_error_paths_abort_then_unreachable(
+    rpc_call: str, pb_request: object, api_key: tuple[str, ApiKey]
+) -> None:
     """业务异常必须先经 _handle_error 映射 abort，再走 unreachable 兜底。"""
     from thinkback.rpc.servicer import MemoryServicer
 
     servicer = MemoryServicer(_ExplodingService())  # type: ignore[arg-type]
-    context = _RecordingContext()
+    context = _RecordingContext(metadata=(("authorization", f"Bearer {api_key[0]}"),))
     method = getattr(servicer, rpc_call)
 
     with pytest.raises(RuntimeError, match="unreachable"):

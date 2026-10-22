@@ -19,9 +19,12 @@ from typing import Any
 import grpc
 from loguru import logger
 
+from thinkback.api.auth import ApiKeyError
+from thinkback.domain.tenant import scoped_user_id, tenant_of_scoped_user_id
 from thinkback.memory.service import MemoryService
 from thinkback.rpc import memory_pb2 as pb
 from thinkback.rpc import memory_pb2_grpc
+from thinkback.rpc.auth import authenticate_metadata, grpc_status_for, log_auth_rejection
 from thinkback.rpc.converters import (
     _SUMMARY_STATE_TO_PB,
     _managed_item_to_pb,
@@ -90,9 +93,35 @@ class MemoryServicer(memory_pb2_grpc.MemoryServiceServicer):
     def __init__(self, service: MemoryService) -> None:
         self._svc = service
 
-    def Append(self, request: pb.AppendRequest, context: grpc.ServicerContext) -> pb.AppendResponse:
+    def _authenticate(self, context: grpc.ServicerContext, rpc: str) -> str:
+        """鉴权并返回调用方的租户 ID；失败直接 abort（不进入业务逻辑）。
+
+        必须在 try 块**之外**调用：``context.abort`` 抛的是 Exception，
+        落进 ``except Exception`` 会被 ``_handle_error`` 二次映射成 INTERNAL，
+        客户端看到的就是「内部错误」而不是「未认证」。
+        """
+
         try:
-            resp = self._svc.append(to_append_request(request))
+            record = authenticate_metadata(context.invocation_metadata())
+        except ApiKeyError as exc:
+            log_auth_rejection(exc, rpc=rpc)
+            context.abort(grpc_status_for(exc), exc.message)
+            raise RuntimeError("unreachable: context.abort raises")  # pragma: no cover
+        return record.tenant_id
+
+    def _check_task_tenant(self, resp: Any, tenant_id: str, context: grpc.ServicerContext) -> None:
+        """任务归属校验：别的租户的任务不该被本租户按 task_id 读到。"""
+
+        scope = getattr(resp, "scope", None) or {}
+        task_user = str(scope.get("user_id", ""))
+        task_tenant = tenant_of_scoped_user_id(task_user)
+        if task_tenant and tenant_id and task_tenant != tenant_id:
+            context.abort(grpc.StatusCode.PERMISSION_DENIED, "task belongs to another tenant")
+
+    def Append(self, request: pb.AppendRequest, context: grpc.ServicerContext) -> pb.AppendResponse:
+        tenant_id = self._authenticate(context, "Append")
+        try:
+            resp = self._svc.append(to_append_request(request, tenant_id=tenant_id))
             return pb.AppendResponse(
                 status=resp.status,
                 task_id=resp.task_id,
@@ -105,8 +134,9 @@ class MemoryServicer(memory_pb2_grpc.MemoryServiceServicer):
             raise RuntimeError("unreachable: _handle_error must abort")  # pragma: no cover
 
     def Recall(self, request: pb.RecallRequest, context: grpc.ServicerContext) -> pb.RecallResponse:
+        tenant_id = self._authenticate(context, "Recall")
         try:
-            resp = self._svc.recall(to_recall_request(request))
+            resp = self._svc.recall(to_recall_request(request, tenant_id=tenant_id))
             items = []
             for item in resp.items:
                 kw: dict[str, Any] = {
@@ -132,8 +162,9 @@ class MemoryServicer(memory_pb2_grpc.MemoryServiceServicer):
             raise RuntimeError("unreachable: _handle_error must abort")  # pragma: no cover
 
     def Delete(self, request: pb.DeleteRequest, context: grpc.ServicerContext) -> pb.DeleteResponse:
+        tenant_id = self._authenticate(context, "Delete")
         try:
-            resp = self._svc.delete(to_delete_request(request))
+            resp = self._svc.delete(to_delete_request(request, tenant_id=tenant_id))
             kw: dict[str, Any] = {
                 "status": resp.status,
                 "task_id": resp.task_id,
@@ -150,9 +181,11 @@ class MemoryServicer(memory_pb2_grpc.MemoryServiceServicer):
     def ListMemories(
         self, request: pb.ListMemoriesRequest, context: grpc.ServicerContext
     ) -> pb.ListMemoriesResponse:
+        tenant_id = self._authenticate(context, "ListMemories")
         try:
             resp = self._svc.list_memory_items(
-                user_id=request.user_id, include_deleted=request.include_deleted
+                user_id=scoped_user_id(tenant_id, request.user_id),
+                include_deleted=request.include_deleted,
             )
             return list_response_to_pb(resp)
         except Exception as exc:
@@ -163,8 +196,12 @@ class MemoryServicer(memory_pb2_grpc.MemoryServiceServicer):
     def GetMemory(
         self, request: pb.GetMemoryRequest, context: grpc.ServicerContext
     ) -> pb.GetMemoryResponse:
+        tenant_id = self._authenticate(context, "GetMemory")
         try:
-            resp = self._svc.get_memory_item(user_id=request.user_id, memory_id=request.memory_id)
+            resp = self._svc.get_memory_item(
+                user_id=scoped_user_id(tenant_id, request.user_id),
+                memory_id=request.memory_id,
+            )
         except Exception as exc:
             logger.bind(rpc="GetMemory", error=str(exc)).warning("grpc get_memory failed")
             _handle_error(exc, context)
@@ -178,8 +215,9 @@ class MemoryServicer(memory_pb2_grpc.MemoryServiceServicer):
     def UpdateMemory(
         self, request: pb.UpdateMemoryRequest, context: grpc.ServicerContext
     ) -> pb.UpdateMemoryResponse:
+        tenant_id = self._authenticate(context, "UpdateMemory")
         try:
-            resp = self._svc.update_memory(to_update_request(request))
+            resp = self._svc.update_memory(to_update_request(request, tenant_id=tenant_id))
             kw: dict[str, Any] = {
                 "status": resp.status,
                 "task_id": resp.task_id,
@@ -196,8 +234,9 @@ class MemoryServicer(memory_pb2_grpc.MemoryServiceServicer):
     def Rebuild(
         self, request: pb.RebuildRequest, context: grpc.ServicerContext
     ) -> pb.RebuildResponse:
+        tenant_id = self._authenticate(context, "Rebuild")
         try:
-            resp = self._svc.rebuild(to_rebuild_request(request))
+            resp = self._svc.rebuild(to_rebuild_request(request, tenant_id=tenant_id))
             return rebuild_response_to_pb(resp)
         except Exception as exc:
             logger.bind(rpc="Rebuild", error=str(exc)).warning("grpc rebuild failed")
@@ -205,6 +244,7 @@ class MemoryServicer(memory_pb2_grpc.MemoryServiceServicer):
             raise RuntimeError("unreachable: _handle_error must abort")  # pragma: no cover
 
     def GetTask(self, request: pb.GetTaskRequest, context: grpc.ServicerContext) -> pb.TaskResponse:
+        tenant_id = self._authenticate(context, "GetTask")
         try:
             resp = self._svc.get_task(request.task_id)
         except Exception as exc:
@@ -214,6 +254,7 @@ class MemoryServicer(memory_pb2_grpc.MemoryServiceServicer):
         # not-found 在 try 块外处理（同 GetMemory）。
         if resp is None:
             context.abort(grpc.StatusCode.NOT_FOUND, "task not found")
+        self._check_task_tenant(resp, tenant_id, context)
         return task_response_to_pb(resp)  # type: ignore[arg-type]
 
     def GetL3BackgroundStatus(
@@ -221,6 +262,7 @@ class MemoryServicer(memory_pb2_grpc.MemoryServiceServicer):
         request: pb.L3BackgroundStatusRequest,  # noqa: ARG002
         context: grpc.ServicerContext,
     ) -> pb.L3BackgroundStatusResponse:
+        self._authenticate(context, "GetL3BackgroundStatus")
         try:
             s = self._svc.l3_background_status()
             return pb.L3BackgroundStatusResponse(

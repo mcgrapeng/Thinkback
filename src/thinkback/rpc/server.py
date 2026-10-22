@@ -19,6 +19,7 @@ from loguru import logger
 
 from thinkback.memory.service import MemoryService
 from thinkback.rpc import memory_pb2, memory_pb2_grpc
+from thinkback.rpc.auth import ApiKeyAuthInterceptor
 from thinkback.rpc.servicer import MemoryServicer
 
 
@@ -45,6 +46,7 @@ def create_server(
     server = grpc.server(
         ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="thinkback-grpc"),
         maximum_concurrent_rpcs=max_concurrent_rpcs,
+        interceptors=[ApiKeyAuthInterceptor()],
     )
     memory_pb2_grpc.add_MemoryServiceServicer_to_server(MemoryServicer(service), server)  # type: ignore[no-untyped-call]
     reflection.enable_server_reflection(
