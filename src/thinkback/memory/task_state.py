@@ -37,4 +37,3 @@ def is_finalized(status: TaskStatus) -> bool:
 def is_dead_letter(status: TaskStatus) -> bool:
     """该状态是否为 dead_letter（需要人工介入）。"""
     return status is TaskStatus.DEAD_LETTER
-

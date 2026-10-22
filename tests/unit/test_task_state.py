@@ -25,7 +25,7 @@ def test_only_failed_is_retryable() -> None:
     assert is_retryable(TaskStatus.COMPLETED) is False
     assert is_retryable(TaskStatus.RUNNING) is False
     assert is_retryable(TaskStatus.PENDING) is False
-    assert RETRYABLE_STATUSES == frozenset({TaskStatus.FAILED})
+    assert frozenset({TaskStatus.FAILED}) == RETRYABLE_STATUSES
 
 
 def test_finalized_covers_failed_completed_and_dead_letter() -> None:
@@ -38,8 +38,9 @@ def test_finalized_covers_failed_completed_and_dead_letter() -> None:
     assert is_finalized(TaskStatus.DEAD_LETTER) is True
     assert is_finalized(TaskStatus.RUNNING) is False
     assert is_finalized(TaskStatus.PENDING) is False
-    assert FINALIZED_STATUSES == frozenset(
-        {TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.DEAD_LETTER}
+    assert (
+        frozenset({TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.DEAD_LETTER})
+        == FINALIZED_STATUSES
     )
 
 
@@ -58,4 +59,3 @@ def test_dead_letter_is_never_retryable(status: TaskStatus) -> None:
     if status is TaskStatus.DEAD_LETTER:
         assert is_retryable(status) is False
     assert is_finalized(TaskStatus.DEAD_LETTER) is True
-
