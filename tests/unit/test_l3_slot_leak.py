@@ -93,4 +93,3 @@ def test_l3_capacity_is_usable_again_after_failures() -> None:
     response = service.append(_request("r-after-recovery"))
     assert response.status in {"completed", "already_done"}
     service.shutdown_l3_executor()
-

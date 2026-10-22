@@ -66,10 +66,12 @@ async def _lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: ARG001
     _app_module.PROCESS_STARTED_AT = time()
 
     # Run database migrations on startup
-    from thinkback.infra.database.migration import run_migrations_async
+    from thinkback.infra.database.migration import run_migrations_serialized_async
 
     try:
-        await run_migrations_async()
+        # 带 advisory lock：部署里最多三个进程会同时跑 DDL（lifespan + 迁移 Job
+        # + 多副本），alembic 默认不加锁，并发迁移会撞「already exists」或死锁。
+        await run_migrations_serialized_async()
         logger.info("memory service database migrations applied")
     except Exception as exc:
         logger.error(f"Failed to run database migrations: {exc}")

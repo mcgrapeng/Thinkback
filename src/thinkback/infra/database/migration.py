@@ -60,4 +60,57 @@ async def run_migrations_async() -> None:
     await asyncio.to_thread(run_migrations)
 
 
+async def run_migrations_serialized_async() -> None:
+    """带 PostgreSQL advisory lock 的迁移执行（多进程启动时串行化）。
+
+    部署拓扑里最多有三个进程同时对同一个库跑 DDL：FastAPI lifespan（每次
+    启动都跑）、``k8s/job-migrate.yaml`` 的迁移 Job、以及多副本 Deployment。
+    alembic 默认不加锁，并发 ``create_index`` / ``add_column`` 会撞
+    「already exists」（Pod 启动失败）或死锁。
+
+    advisory lock 是会话级的：拿不到锁就说明别的进程正在迁移 —— 等它。
+    拿不到锁的等待上限由 ``pg_advisory_lock`` 的等待语义保证（阻塞直到可用）。
+    """
+    await asyncio.to_thread(run_migrations_with_advisory_lock)
+
+
+# 固定一把 advisory lock 的 key（应用内唯一即可）。
+_MIGRATION_LOCK_ID = 0x7E1BA6C0
+
+
+def run_migrations_with_advisory_lock() -> None:
+    """拿 advisory lock 再跑迁移（同步版本，供 lifespan 与 Job 使用）。"""
+    from sqlalchemy import text
+    from sqlalchemy.ext.asyncio import create_async_engine
+    from sqlalchemy.pool import NullPool
+
+    from thinkback.infra.config import settings
+
+    # 独立引擎（NullPool）：锁连接与业务池彻底隔离，且事件循环归属干净 ——
+    # 本函数跑在自己的 asyncio.run() 里，业务池的连接绑在别的循环上。
+    lock_engine = create_async_engine(settings.database_url, poolclass=NullPool)
+
+    async def _with_lock() -> None:
+        try:
+            async with lock_engine.connect() as conn:
+                logger.info("acquiring migration advisory lock")
+                await conn.execute(
+                    text("SELECT pg_advisory_lock(:lock_id)"),
+                    {"lock_id": _MIGRATION_LOCK_ID},
+                )
+                try:
+                    logger.info("migration advisory lock acquired")
+                    # 迁移在 worker 线程里跑（alembic 的 env.py 自己 asyncio.run）。
+                    await asyncio.to_thread(run_migrations)
+                finally:
+                    await conn.execute(
+                        text("SELECT pg_advisory_unlock(:lock_id)"),
+                        {"lock_id": _MIGRATION_LOCK_ID},
+                    )
+        finally:
+            await lock_engine.dispose()
+
+    asyncio.run(_with_lock())
+
+
 __all__ = ["run_migrations", "run_migrations_async"]

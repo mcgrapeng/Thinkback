@@ -50,9 +50,7 @@ def text_is_restricted_or_unsafe(content: str) -> bool:
 def messages_are_restricted_or_unsafe(messages: list[dict[str, str]]) -> bool:
     """整轮消息是否命中词表（只看正文，不看角色）。"""
 
-    return any(
-        text_is_restricted_or_unsafe(message.get("content", "")) for message in messages
-    )
+    return any(text_is_restricted_or_unsafe(message.get("content", "")) for message in messages)
 
 
 def restricted_reason(messages: list[dict[str, str]]) -> str | None:

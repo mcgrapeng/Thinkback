@@ -36,6 +36,10 @@ class MetricsRegistry:
             "recall_ok": deque(),
             "recall_fail": deque(),
         }
+        # 单调累计计数（counter 语义）：与滑动窗口分开。
+        # 原先把窗口计数当 counter 暴露：每 5 分钟归零一次，Prometheus 的
+        # rate()/increase() 会把它当成进程重启 → 错误率与 SLO 全错。
+        self._totals: dict[WindowKind, int] = dict.fromkeys(self._buckets, 0)
         self._lock = Lock()
 
     def _prune_locked(self, kind: WindowKind, now: float) -> None:
@@ -49,6 +53,12 @@ class MetricsRegistry:
         with self._lock:
             self._prune_locked(kind, now)
             self._buckets[kind].append(now)
+            self._totals[kind] += 1
+
+    def totals(self) -> dict[WindowKind, int]:
+        """进程启动以来的累计计数（只增不减，counter 语义）。"""
+        with self._lock:
+            return dict(self._totals)
 
     def snapshot(self, *, now: float | None = None) -> dict[str, dict[str, float]]:
         """返回各 kind 的窗口内计数 + 5min 内速率（per minute）。
@@ -76,16 +86,23 @@ class MetricsRegistry:
         if now is None:
             now = time.monotonic()
         snap = self._snapshot_at(now)
+        totals = self.totals()
         lines: list[str] = []
         # HELP / TYPE 头各仅加一次。
         lines.append("# HELP thinkback_request_total Request outcomes (since process start).")
         lines.append("# TYPE thinkback_request_total counter")
-        for kind, value in snap.items():
-            lines.append(f'thinkback_request_total{{kind="{kind}"}} {int(value["count"])}')
+        for kind in self._totals:
+            lines.append(f'thinkback_request_total{{kind="{kind}"}} {int(totals.get(kind, 0))}')
         lines.append("# HELP thinkback_request_per_minute Rolling 5min per-minute rate.")
         lines.append("# TYPE thinkback_request_per_minute gauge")
-        for kind, value in snap.items():
-            lines.append(f'thinkback_request_per_minute{{kind="{kind}"}} {value["per_minute"]}')
+        for name, value in snap.items():
+            lines.append(f'thinkback_request_per_minute{{kind="{name}"}} {value["per_minute"]}')
+        lines.append(
+            "# HELP thinkback_request_window_5m Request outcomes in the rolling 5min window."
+        )
+        lines.append("# TYPE thinkback_request_window_5m gauge")
+        for name, value in snap.items():
+            lines.append(f'thinkback_request_window_5m{{kind="{name}"}} {int(value["count"])}')
         return "\n".join(lines) + "\n"
 
     def _snapshot_text(self, *, now: float | None = None) -> str:
