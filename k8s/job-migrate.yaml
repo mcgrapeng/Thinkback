@@ -23,10 +23,12 @@ spec:
         - name: thinkback-migrate
           image: thinkback:0.1.0
           imagePullPolicy: IfNotPresent
+          # 走带 advisory lock 的迁移入口：与应用 lifespan 用同一把锁，
+          # Job 与 Pod 启动并发跑 DDL 时串行化。
           command:
-            - alembic
-            - upgrade
-            - head
+            - python
+            - -m
+            - thinkback.infra.database.migration
           env:
             - name: PYTHONPATH
               value: /app/src

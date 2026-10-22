@@ -608,7 +608,13 @@ def test_mem0_library_backend_supports_top_k_mem0_versions() -> None:
     ]
 
 
-def test_mem0_library_backend_health_check_runs_library_add_and_cleanup_probe() -> None:
+def test_mem0_library_backend_health_check_uses_read_only_query() -> None:
+    """探活只读：不得写任何数据。
+
+    原实现真的 add 一条探针记忆再 delete —— k8s 探针 10s 一次 = 一次 LLM +
+    一次 embedding + 一次 Milvus 写 + 一次删。
+    """
+
     from thinkback.memory.backends import Mem0LibraryMemoryBackend
 
     class FakeMemoryClient:
@@ -623,6 +629,10 @@ def test_mem0_library_backend_health_check_runs_library_add_and_cleanup_probe() 
             self.calls.append(("delete", (memory_id,), {}))
             return {"message": "Memory deleted successfully!"}
 
+        def get_all(self, *, filters, limit):  # type: ignore[no-untyped-def]
+            self.calls.append(("get_all", (), {"filters": filters, "limit": limit}))
+            return {"results": []}
+
     client = FakeMemoryClient()
     backend = Mem0LibraryMemoryBackend(
         config={"history_db_path": ".mem0/history.db"}, memory_client=client
@@ -631,20 +641,17 @@ def test_mem0_library_backend_health_check_runs_library_add_and_cleanup_probe() 
     status = backend.health_check()
 
     assert status == {"status": "ready", "detail": "ok"}
-    assert client.calls[0][0] == "add"
-    assert client.calls[0][1][0][0]["role"] == "user"
-    assert client.calls[0][2]["user_id"] == "thinkback-health"
-    assert client.calls[0][2]["agent_id"] == "thinkback-health"
-    assert client.calls[0][2]["metadata"]["memory_scope_id"] == "thinkback-health"
-    assert client.calls[1:] == [("delete", ("health-memory",), {})]
+    assert [call[0] for call in client.calls] == ["get_all"]
+    assert client.calls[0][2]["filters"]["user_id"] == "thinkback-health"
+    assert client.calls[0][2]["filters"]["agent_id"] == "thinkback-health"
+    assert client.calls[0][2]["limit"] == 1
 
 
-def test_mem0_library_backend_health_check_reports_llm_probe_failure() -> None:
+def test_mem0_library_backend_health_check_reports_query_failure() -> None:
     from thinkback.memory.backends import Mem0LibraryMemoryBackend
 
     class FakeMemoryClient:
-        def add(self, messages, **kwargs):  # type: ignore[no-untyped-def]
-            _ = messages
+        def get_all(self, **kwargs):  # type: ignore[no-untyped-def]
             _ = kwargs
             raise RuntimeError("connection refused")
 
@@ -655,32 +662,47 @@ def test_mem0_library_backend_health_check_reports_llm_probe_failure() -> None:
     status = backend.health_check()
 
     assert status["status"] == "not_ready"
-    assert "mem0 library add failed" in status["detail"]
+    assert "mem0 library get_all failed" in status["detail"]
     assert "connection refused" in status["detail"]
 
 
-def test_mem0_library_backend_health_check_reports_cleanup_delete_failure() -> None:
+def test_mem0_library_backend_health_check_never_writes() -> None:
+    """回归：探活路径上不允许出现任何写操作。"""
+
     from thinkback.memory.backends import Mem0LibraryMemoryBackend
 
     class FakeMemoryClient:
+        def __init__(self) -> None:
+            self.writes: list[str] = []
+
         def add(self, messages, **kwargs):  # type: ignore[no-untyped-def]
-            _ = messages
-            _ = kwargs
-            return {"results": [{"id": "health-memory", "memory": "health", "event": "ADD"}]}
+            self.writes.append("add")
+            return {"results": []}
 
         def delete(self, memory_id):  # type: ignore[no-untyped-def]
-            _ = memory_id
-            raise RuntimeError("milvus delete unavailable")
+            self.writes.append("delete")
+            return {}
 
+        def update(self, memory_id, data):  # type: ignore[no-untyped-def]
+            self.writes.append("update")
+            return {}
+
+        def delete_all(self, **kwargs):  # type: ignore[no-untyped-def]
+            self.writes.append("delete_all")
+            return {}
+
+        def get_all(self, **kwargs):  # type: ignore[no-untyped-def]
+            return {"results": []}
+
+    client = FakeMemoryClient()
     backend = Mem0LibraryMemoryBackend(
-        config={"history_db_path": ".mem0/history.db"}, memory_client=FakeMemoryClient()
+        config={"history_db_path": ".mem0/history.db"}, memory_client=client
     )
 
     status = backend.health_check()
 
-    assert status["status"] == "not_ready"
-    assert "mem0 library delete failed" in status["detail"]
-    assert "milvus delete unavailable" in status["detail"]
+    assert status == {"status": "ready", "detail": "ok"}
+    assert client.writes == []
 
 
 def test_mem0_library_backend_creates_history_db_parent_directory(tmp_path) -> None:

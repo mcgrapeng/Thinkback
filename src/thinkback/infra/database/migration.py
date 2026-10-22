@@ -113,4 +113,16 @@ def run_migrations_with_advisory_lock() -> None:
     asyncio.run(_with_lock())
 
 
-__all__ = ["run_migrations", "run_migrations_async"]
+__all__ = [
+    "run_migrations",
+    "run_migrations_async",
+    "run_migrations_serialized_async",
+    "run_migrations_with_advisory_lock",
+]
+
+
+if __name__ == "__main__":  # pragma: no cover - 供 k8s 迁移 Job 调用
+    # python -m thinkback.infra.database.migration
+    # 迁移 Job 必须走这一条路径（而不是裸 alembic upgrade head）——
+    # 否则 Job 与应用 lifespan 各跑各的 DDL，并发时撞「already exists」。
+    run_migrations_with_advisory_lock()
