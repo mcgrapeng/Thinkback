@@ -27,7 +27,7 @@
 git clone https://github.com/mcgrapeng/thinkback.git && cd thinkback && make dev
 ```
 
-→ API 在 `:8000` · 治理台在 `:7001`
+→ API 在 `:7002` · 治理台在 `:7001`（端口被占用会自动顺延;Docker 与 Kubernetes 里 API 监听 `:8000`）
 
 <br>
 
@@ -120,8 +120,8 @@ Postgres + Milvus + Mem0,全部开源。K8s 原生,带存活/就绪探针与 Pro
 | **生命周期** | 索引状态机:`ACTIVE` / `DELETED` / `SUPERSEDED` / `SUPPRESSED`,与后端存储状态解耦 |
 | **可靠性** | 任务状态机,乐观锁、重试预算、死信队列,冷启动时回收孤儿任务 |
 | **治理** | 作用域删除(`MEMORY` / `SESSION` / `ALL`)配合墓碑标记,外加完整审计 |
-| **接入** | v1 公开 API —— API Key + Scope + 租户 + 限流 + 幂等键 |
-| **mem0 提示词** | 在治理台实时编辑 `custom_instructions`、`update_memory_prompt`、`memory_answer_prompt` |
+| **接入** | 内网部署的一套 HTTP / gRPC 接口面 —— 业务面免鉴权、按客户端 IP 限流、`Idempotency-Key` 幂等 |
+| **类型 profile** | `profiles/` 里按 namespace 定义准入、保留期与 TTL |
 | **运维** | K8s 清单、Helm chart、Alembic 迁移、Prometheus 指标、确定性测试套件 |
 
 > **v1.0 已发布。** 完整发布说明见[更新日志](CHANGELOG.md)。
@@ -155,7 +155,7 @@ Mem0 是一个很棒的记忆**引擎**,给你事实抽取与语义召回。但�
 | 三层分离 | ❌ | ❌ | ❌ | ✅ |
 | 任务状态机 + 死信 | ❌ | ❌ | ❌ | ✅ |
 | 双时态有效性 | ❌ | ❌ | ⚠️ 自己造 | ✅ |
-| 治理台(治理 + 密钥管理) | ❌ | ❌ | ❌ | ✅ |
+| 治理台(治理) | ❌ | ❌ | ❌ | ✅ |
 | HTTP + gRPC,共享 schema | ❌ 仅 Python | ❌ 仅 Python | ⚠️ 自己造 | ✅ |
 | 自带 LLM / embedding 端点 | ✅ | ✅ | ✅ | ✅ |
 | 可生产部署 | ❌ | ❌ | ⚠️ 自己造 | ✅ |
@@ -311,20 +311,19 @@ curl -X POST http://localhost:8000/memory/recall \
 
 ### 接入业务系统
 
-生产流量请使用 v1 公开 API —— API Key、基于 scope 的鉴权、租户隔离、限流、幂等键。
+Thinkback 部署在内网,业务 API 不需要任何凭据 —— 信任边界就是网络本身。写操作建议带
+`Idempotency-Key` 保证可重放安全;要串联日志就带 `X-Trace-Id`。
 
 ```bash
-curl -X POST https://your-thinkback/v1/memory/recall \
-  -H "Authorization: Bearer tbk_live_xxxxxxxx" \
-  -H "X-Tenant-Id: tenant_001" \
-  -H "Idempotency-Key: idem_001" \
+curl -X POST http://your-thinkback:8000/memory/recall \
   -H "Content-Type: application/json" \
+  -H "X-Trace-Id: trace-001" \
   -d '{ "user_id": "u_8421", "session_id": "s_001", "query": "用户偏好什么编辑器?", "l3_limit": 5 }'
 ```
 
 Python / TypeScript / cURL 完整示例:**[docs/SDK.md](docs/SDK.md)**。
-协议规范:
-**[docs/specs/2026-10-08-thinkback-integration-protocol-v1.md](docs/specs/2026-10-08-thinkback-integration-protocol-v1.md)**。
+完整 HTTP 接口面:**[docs/API.md](docs/API.md)**。
+v1 公开接入协议(API Key + Scope + 租户)已下线,规范保留为[历史记录](docs/specs/2026-10-08-thinkback-integration-protocol-v1.md)。
 
 <img src="assets/rule.svg" alt="" width="100%">
 
@@ -368,11 +367,11 @@ KPI 迷你趋势图、完整任务状态机、重试次数、最近错误,以及
 
 运行时配置的精选只读视图。
 
-### 接入 —— 密钥与 mem0 提示词
+### 接入 —— 协议说明(已下线)
 
-<img src="assets/screenshots/07-integration-keys.png" alt="接入" width="100%">
-
-生成与吊销 API Key;实时编辑 mem0 的抽取、更新、召回提示词。改动在下一次写入即生效,无需重启。
+这一页仍在讲 v1 公开接入协议 —— API Key、Scope 与 `/v1/memory/*`。那套接口面已从服务里移除:
+现在的业务接口是内网的 `/memory/*`,不需要 API Key。当前契约见
+[docs/API.md](docs/API.md)。
 
 <details>
 <summary><b>更多截图</b></summary>
@@ -388,10 +387,6 @@ KPI 迷你趋势图、完整任务状态机、重试次数、最近错误,以及
 **治理 —— 更新一条记忆**
 
 <img src="assets/screenshots/04-govern-update.png" alt="治理更新" width="100%">
-
-**接入 —— mem0 提示词编辑**
-
-<img src="assets/screenshots/07-integration-prompts.png" alt="mem0 提示词" width="100%">
 
 **移动端响应式布局**
 
@@ -411,8 +406,8 @@ KPI 迷你趋势图、完整任务状态机、重试次数、最近错误,以及
 | --- | --- | --- | --- |
 | `POST /memory/append`(小 round) | 8 ms | 22 ms | 850 req/s |
 | `POST /memory/recall`(5 条命中) | 24 ms | 68 ms | 410 req/s |
-| `GET /memory`(50 条结果) | 4 ms | 9 ms | 2 200 req/s |
-| `DELETE /memory/{id}`(带作用域) | 6 ms | 14 ms | 1 100 req/s |
+| `GET /memory/items`(50 条结果) | 4 ms | 9 ms | 2 200 req/s |
+| `POST /memory/delete`(带作用域) | 6 ms | 14 ms | 1 100 req/s |
 
 <img src="assets/performance.svg" alt="延迟 p50 与 p95 对比" width="100%">
 
@@ -443,8 +438,8 @@ L3 抽取异步执行 —— 端到端延迟主要由你配置的 LLM 与 embedd
 ```text
 thinkback/
 ├── src/thinkback/
-│   ├── api/           FastAPI 路由 —— 鉴权、限流、幂等、
-│   │                  标准化错误码、v1 公开端点、管理端
+│   ├── api/           FastAPI 路由 —— 记忆核心、健康探针、
+│   │                  限流、幂等、标准化错误码、管理端
 │   ├── domain/        纯业务逻辑 —— 实体、枚举、ports、错误
 │   ├── memory/        编排层 —— MemoryService、L3 后端、
 │   │                  L1+L2 仓储、Pydantic schema
@@ -453,7 +448,7 @@ thinkback/
 ├── web/               治理台(React 19 + Vite + TanStack Router)
 ├── proto/memory.proto gRPC 契约
 ├── alembic/           数据库迁移
-├── tests/             pytest 套件(663 个测试)
+├── tests/             pytest 套件(870+ 个测试)
 └── docs/              设计文档与运行手册
 ```
 
@@ -463,7 +458,9 @@ thinkback/
   `thinkback.memory.backends` 注册。Mem0 是默认实现;Qdrant 原生或 pgvector 适配器都很直接。
 - **新增治理台页面** —— 在 `web/src/pages/` 放一个文件,在 `web/src/main.tsx` 注册路由,
   在 `web/src/components/layout.tsx` 加一条侧边栏。
-- **改抽取规则** —— 在治理台(`/integration` → mem0 配置)编辑提示词,无需重启。
+- **改抽取规则** —— 改 `src/thinkback/memory/backends/mem0_library.py` 里的
+  `THINKBACK_CUSTOM_INSTRUCTIONS`,或改 `profiles/` 下的类型 profile(准入、保留期、TTL)。
+  治理台不提供提示词编辑。
 
 ### 开发
 
@@ -471,8 +468,8 @@ thinkback/
 make dev               # API + 治理台
 make test              # 后端测试套件
 make test-fast         # 只跑受本次改动影响的用例(testmon)
-make coverage          # 套件 + 92% 覆盖率门禁
-make check             # format-check + lint + typecheck + coverage(CI 跑的就是它)
+make coverage          # 套件 + 覆盖率报告(仅观测,不阻断)
+make check             # format-check + lint + typecheck + mutation-audit + eval(CI 跑的就是它)
 make test-ui           # 前端组件测试
 make test-e2e          # Playwright 端到端 + axe 可访问性扫描
 ```
@@ -485,42 +482,46 @@ make test-e2e          # Playwright 端到端 + axe 可访问性扫描
 
 ### 接口一览
 
-26+ 个端点,分三组。Swagger UI 在 `/docs`,ReDoc 在 `/redoc`。gRPC 服务
+26 个端点,分三组,外加一个 `/` 根路径探活。Swagger UI 在 `/docs`,ReDoc 在 `/redoc`。gRPC 服务
 [`proto/memory.proto`](proto/memory.proto) 覆盖同样的操作。
 
-**记忆核心 —— `/memory/*`**
+**记忆核心 —— `/memory/*`**(免鉴权;内网部署)
 
 | 方法 | 路径 | 用途 |
 | --- | --- | --- |
 | `POST` | `/memory/append` | 写入一轮对话,触发 L1/L2/L3 |
 | `POST` | `/memory/recall` | 召回记忆,带降级信号 |
-| `GET` | `/memory` | 按条件过滤与分页列出 |
-| `GET` | `/memory/{memory_id}` | 单条记忆的完整元数据 |
-| `PUT` | `/memory/{memory_id}` | 更新文本,保留历史 |
-| `DELETE` | `/memory/{memory_id}` | 作用域删除(`MEMORY` / `SESSION` / `ALL`) |
+| `POST` | `/memory/delete` | 作用域删除(`MEMORY` / `SESSION` / `ALL`),保留墓碑 |
+| `POST` | `/memory/suppress` | 逻辑下架:不可召回,原文与墓碑保留 |
+| `POST` | `/memory/erase` | 物理擦除原文 |
+| `GET` | `/memory/items` | 列出某用户的长期记忆 |
+| `GET` | `/memory/items/{memory_id}` | 单条记忆 |
+| `POST` | `/memory/update` | 更新文本,保留历史 |
 | `GET` | `/memory/tasks/{task_id}` | 任务状态:重试、最近错误、结果 |
-| `GET` | `/memory/l3/status` | L3 队列与 worker 状态 |
+| `GET` | `/memory/l3/background-status` | L3 队列与 worker 状态 |
 
-**业务接入 —— `/v1/memory/*`**(需 API Key + scope)
+**健康探针 —— `/health/*`**
 
-| 方法 | 路径 | Scope | 用途 |
-| --- | --- | --- | --- |
-| `POST` | `/v1/memory/append` | `memory:append` | 写入一轮对话 |
-| `POST` | `/v1/memory/recall` | `memory:recall` | 召回记忆 |
-| `GET` | `/v1/memory` | `memory:read` | 列出记忆 |
-| `GET/PUT/DELETE` | `/v1/memory/{id}` | `memory:read/update/delete` | 增删改查 |
+| 方法 | 路径 | 用途 |
+| --- | --- | --- |
+| `GET` | `/health` | 进程级健康(版本、环境) |
+| `GET` | `/health/live` | 存活探针 |
+| `GET` | `/health/ready` | 就绪探针(PostgreSQL / Milvus / Mem0) |
+| `GET` | `/health/metrics` | Prometheus 指标 |
 
-**管理端 —— `/admin/api/*`**
+**管理端 —— `/admin/api/*`**(`Authorization: Bearer <ADMIN_TOKEN>`)
 
 | 方法 | 路径 | 用途 |
 | --- | --- | --- |
 | `GET` | `/admin/api/overview` | KPI、系统脉搏、L3 状态、最近审计 |
 | `GET` | `/admin/api/tasks` | 任务列表,支持状态过滤 |
 | `GET` | `/admin/api/memories` | 记忆列表,含来源回链 |
+| `GET` | `/admin/api/memories/{memory_id}/source` | 单条记忆的来源回链 |
 | `GET` | `/admin/api/audit` | 审计日志,可按动作过滤 |
 | `POST` | `/admin/api/{delete,update,rebuild}` | 治理动作,幂等 |
-| `GET/PUT` | `/admin/api/mem0/configs` | 列出并实时更新 mem0 提示词 |
-| `GET/POST` | `/admin/api/integration/keys` | 列出并生成 API Key |
+| `GET` | `/admin/api/health/detail` | 依赖明细 |
+| `GET` | `/admin/api/config` | 运行时配置 |
+| `POST` | `/admin/api/maintenance/reclaim-orphan-tasks` | 回收孤儿后台任务 |
 
 含请求/响应体的完整参考:**[docs/API.md](docs/API.md)**。
 
@@ -555,7 +556,7 @@ Thinkback 绝不返回半截答案。响应会标记 `degraded=true`,`degradatio
 <summary><b>能上生产吗?</b></summary>
 
 六边形 ports、Pydantic v2 + `mypy --strict`、Alembic 迁移、Kubernetes 存活/就绪探针、Prometheus 指标,
-以及 663 个测试。治理台是 React 19 单页应用,带键盘导航、可访问性与响应式布局。
+以及 870+ 个测试。治理台是 React 19 单页应用,带键盘导航、可访问性与响应式布局。
 
 </details>
 
@@ -563,15 +564,17 @@ Thinkback 绝不返回半截答案。响应会标记 `degraded=true`,`degradatio
 <summary><b>怎么横向扩展?</b></summary>
 
 L3 抽取默认异步 —— 用 `MEMORY_L3_EXECUTOR_WORKERS` 与 `MEMORY_L3_MAX_PENDING_TASKS` 调整。
-多租户隔离通过 `X-Tenant-Id`。调优与故障恢复见[运维手册](docs/RUNBOOK.md)。
+记忆按 `namespace`(每个请求上的作用域标签)隔离,不是按租户:API 里没有租户这一维。
+调优与故障恢复见[运维手册](docs/RUNBOOK.md)。
 
 </details>
 
 <details>
-<summary><b>能自定义记忆抽取提示词吗?</b></summary>
+<summary><b>能自定义记忆抽取吗?</b></summary>
 
-可以 —— 治理台 → `/integration` → mem0 配置。实时编辑 `custom_instructions`、
-`update_memory_prompt` 与 `memory_answer_prompt`,下一次写入即生效。
+可以,但要在代码里改 —— 治理台不提供提示词编辑。抽取约束在
+`src/thinkback/memory/backends/mem0_library.py` 的 `THINKBACK_CUSTOM_INSTRUCTIONS` 里,
+记忆类型(准入、保留期、TTL、冲突处理)在 `profiles/` 下的 namespace profile 里。
 
 </details>
 
@@ -600,7 +603,7 @@ Kubernetes 清单、Helm chart、生产配置
 排障、恢复、扩缩容、应急流程
 
 <strong><a href="docs/specs/2026-10-08-thinkback-integration-protocol-v1.md">接入协议 v1</a></strong><br>
-面向业务系统的公开 API 契约
+历史文档 —— v1 公开 API 从未上线,详见规范开头的说明
 
 </td>
 </tr>

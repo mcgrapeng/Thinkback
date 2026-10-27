@@ -68,7 +68,6 @@ class EvaluationCase:
     query: str
     expected_terms: list[str] | list[list[str]]
     forbidden_terms: list[str]
-    intent: str = "chat"
     threshold: float = 0.5
     limit: int = 10
     metric_tags: tuple[str, ...] = ()
@@ -638,12 +637,12 @@ def _recall(
     scope: QualityScope,
     query: str,
     *,
-    intent: str = "chat",
     threshold: float = 0.5,
     limit: int = 10,
     request_metrics: RequestMetrics | None = None,
     latency_metrics: LatencyMetrics | None = None,
 ) -> list[dict[str, Any]]:
+    # RecallMemoryRequest 不接受 intent 轴（extra=forbid，带了就是 422）
     response = _post_json(
         base_url,
         "/memory/recall",
@@ -651,7 +650,6 @@ def _recall(
             "user_id": scope.user_id,
             "session_id": scope.session_id,
             "query": query,
-            "intent": intent,
             "l3_limit": limit,
             "l3_score_threshold": threshold,
             "token_budget": 4000,
@@ -679,7 +677,6 @@ def _query_result(
         base_url,
         scope,
         case.query,
-        intent=case.intent,
         threshold=case.threshold,
         limit=case.limit,
         request_metrics=request_metrics,
@@ -935,7 +932,6 @@ def main() -> None:
             name="nickname-current",
             category="slot_conflict",
             query="现在应该怎么称呼用户？",
-            intent="chat",
             expected_terms=["小鹏"],
             forbidden_terms=["阿鹏"],
         ),
@@ -964,7 +960,6 @@ def main() -> None:
             name="communication-current",
             category="slot_conflict",
             query="用户希望你怎么给建议？",
-            intent="chat",
             expected_terms=[["简洁直接", "concise", "direct"]],
             forbidden_terms=["先安慰", "reassurance"],
         ),
@@ -979,7 +974,6 @@ def main() -> None:
             name="drink-current",
             category="slot_conflict",
             query="用户现在喜欢喝什么？",
-            intent="chat",
             expected_terms=[["茶", "tea"]],
             forbidden_terms=["咖啡", "coffee"],
         ),
@@ -987,7 +981,6 @@ def main() -> None:
             name="food-current",
             category="slot_conflict",
             query="用户现在喜欢吃什么？",
-            intent="chat",
             expected_terms=[["寿司", "sushi"]],
             forbidden_terms=["汉堡", "hamburger", "burger"],
         ),
@@ -1002,7 +995,6 @@ def main() -> None:
             name="sleep-reminder-current",
             category="slot_conflict",
             query="用户现在还讨厌被提醒睡觉吗？",
-            intent="chat",
             expected_terms=[["温和", "gentle", "接受", "okay"]],
             forbidden_terms=["讨厌", "dislikes"],
         ),

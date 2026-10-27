@@ -27,7 +27,7 @@
 git clone https://github.com/mcgrapeng/thinkback.git && cd thinkback && make dev
 ```
 
-→ API on `:8000` · Admin console on `:7001`
+→ API on `:7002` · Admin console on `:7001` (both shift to the next free port if taken; in Docker and Kubernetes the API listens on `:8000`)
 
 <br>
 
@@ -130,8 +130,8 @@ Prometheus metrics. Apache 2.0.
 | **Lifecycle** | Index state machine: `ACTIVE` / `DELETED` / `SUPERSEDED` / `SUPPRESSED`, decoupled from backend storage state |
 | **Reliability** | Task state machine with optimistic locking, retry budgets, dead-lettering, and orphan-task reclaim on cold start |
 | **Governance** | Scoped delete (`MEMORY` / `SESSION` / `ALL`) with tombstones, plus a full audit trail |
-| **Integration** | v1 public API — API key + scope + tenant + rate limit + idempotency key |
-| **mem0 prompts** | Edit `custom_instructions`, `update_memory_prompt`, `memory_answer_prompt` live from the console |
+| **Integration** | One HTTP/gRPC surface on an internal network — no API key, per-client-IP rate limit, `Idempotency-Key` replay safety |
+| **Type profiles** | Per-namespace profiles in `profiles/` decide which memory types are admitted, how long they live, and which ones expire |
 | **Operations** | K8s manifests, Helm chart, Alembic migrations, Prometheus metrics, deterministic test suite |
 
 > **v1.0 is out.** See the [changelog](CHANGELOG.md) for the full release notes.
@@ -168,7 +168,7 @@ not give you is a *service* — and wiring it into a production app means you no
 | Three-layer separation | ❌ | ❌ | ❌ | ✅ |
 | Task state machine + dead-lettering | ❌ | ❌ | ❌ | ✅ |
 | Bitemporal validity | ❌ | ❌ | ⚠️ build it | ✅ |
-| Admin console (governance + keys) | ❌ | ❌ | ❌ | ✅ |
+| Admin console (governance) | ❌ | ❌ | ❌ | ✅ |
 | HTTP + gRPC, shared schema | ❌ Python only | ❌ Python only | ⚠️ build it | ✅ |
 | Bring-your-own LLM / embedding | ✅ | ✅ | ✅ | ✅ |
 | Production deployable | ❌ | ❌ | ⚠️ build it | ✅ |
@@ -331,21 +331,21 @@ curl -X POST http://localhost:8000/memory/recall \
 
 ### Integrating a business system
 
-For production traffic use the v1 public API — API key, scope-based auth, tenant isolation, rate
-limits, idempotency keys.
+Thinkback is deployed on an internal network, and the business API needs no credentials —
+the network is the trust boundary. Send `Idempotency-Key` on writes for replay safety and
+`X-Trace-Id` if you want to correlate your logs with the service logs.
 
 ```bash
-curl -X POST https://your-thinkback/v1/memory/recall \
-  -H "Authorization: Bearer tbk_live_xxxxxxxx" \
-  -H "X-Tenant-Id: tenant_001" \
-  -H "Idempotency-Key: idem_001" \
+curl -X POST http://your-thinkback:8000/memory/recall \
   -H "Content-Type: application/json" \
+  -H "X-Trace-Id: trace-001" \
   -d '{ "user_id": "u_8421", "session_id": "s_001", "query": "用户偏好什么编辑器?", "l3_limit": 5 }'
 ```
 
 Python, TypeScript, and cURL walkthroughs: **[docs/SDK.md](docs/SDK.md)**.
-Protocol spec:
-**[docs/specs/2026-10-08-thinkback-integration-protocol-v1.md](docs/specs/2026-10-08-thinkback-integration-protocol-v1.md)**.
+Full HTTP surface: **[docs/API.md](docs/API.md)**.
+The v1 public integration protocol (API key + scope + tenant) was removed — the spec is kept
+as a [historical record](docs/specs/2026-10-08-thinkback-integration-protocol-v1.md).
 
 <img src="assets/rule.svg" alt="" width="100%">
 
@@ -390,12 +390,12 @@ Every delete, update, and rebuild, filterable, with operator and timestamp.
 
 A curated, read-only view of runtime configuration.
 
-### Integration — keys and mem0 prompts
+### Integration — protocol notes (retired)
 
-<img src="assets/screenshots/07-integration-keys.png" alt="Integration" width="100%">
-
-Generate and revoke API keys; edit mem0 extraction, update, and answer prompts live. Changes apply
-on the next write — no restart.
+This page still documents the v1 public integration protocol — API keys, scopes, and
+`/v1/memory/*`. That surface was removed from the service: the business API is now
+`/memory/*` on an internal network, with no API key. The current contract lives in
+[docs/API.md](docs/API.md).
 
 <details>
 <summary><b>More screenshots</b></summary>
@@ -411,10 +411,6 @@ on the next write — no restart.
 **Governance — update a memory**
 
 <img src="assets/screenshots/04-govern-update.png" alt="Governance update" width="100%">
-
-**Integration — mem0 prompt editing**
-
-<img src="assets/screenshots/07-integration-prompts.png" alt="mem0 prompts" width="100%">
 
 **Mobile-responsive layout**
 
@@ -434,8 +430,8 @@ Single-node dev profile — `make dev`, M3 MacBook Air, mock LLM.
 | --- | --- | --- | --- |
 | `POST /memory/append` (small round) | 8 ms | 22 ms | 850 req/s |
 | `POST /memory/recall` (5 hits) | 24 ms | 68 ms | 410 req/s |
-| `GET /memory` (50 results) | 4 ms | 9 ms | 2 200 req/s |
-| `DELETE /memory/{id}` (scoped) | 6 ms | 14 ms | 1 100 req/s |
+| `GET /memory/items` (50 results) | 4 ms | 9 ms | 2 200 req/s |
+| `POST /memory/delete` (scoped) | 6 ms | 14 ms | 1 100 req/s |
 
 <img src="assets/performance.svg" alt="Latency p50 vs p95" width="100%">
 
@@ -468,8 +464,8 @@ All runtime config comes from environment variables. See [`.env.example`](.env.e
 ```text
 thinkback/
 ├── src/thinkback/
-│   ├── api/           FastAPI routers — auth, rate limit, idempotency,
-│   │                  standardised errors, v1 public endpoints, admin
+│   ├── api/           FastAPI routers — memory core, health probes,
+│   │                  rate limit, idempotency, standardised errors, admin
 │   ├── domain/        Pure business logic — entities, enums, ports, errors
 │   ├── memory/        Orchestration — MemoryService, L3 backends,
 │   │                  L1+L2 repositories, Pydantic schemas
@@ -478,7 +474,7 @@ thinkback/
 ├── web/               Admin console (React 19 + Vite + TanStack Router)
 ├── proto/memory.proto gRPC contract
 ├── alembic/           Database migrations
-├── tests/             pytest suite (663 tests)
+├── tests/             pytest suite (870+ tests)
 └── docs/              Design docs and runbooks
 ```
 
@@ -489,8 +485,9 @@ thinkback/
   adapters are straightforward.
 - **Add an admin page** — drop a file in `web/src/pages/`, register the route in `web/src/main.tsx`,
   add a sidebar entry in `web/src/components/layout.tsx`.
-- **Change extraction rules** — edit mem0 prompts from the console (`/integration` → mem0
-  config). No restart.
+- **Change extraction rules** — edit `THINKBACK_CUSTOM_INSTRUCTIONS` in
+  `src/thinkback/memory/backends/mem0_library.py`, or the type profile in `profiles/` (admission,
+  retention, TTL). The console does not edit prompts.
 
 ### Development
 
@@ -498,8 +495,8 @@ thinkback/
 make dev               # API + admin console
 make test              # backend suite
 make test-fast         # only tests affected by your changes (testmon)
-make coverage          # suite + 92% coverage gate
-make check             # format-check + lint + typecheck + coverage  (what CI runs)
+make coverage          # suite + coverage report (observation only, non-blocking)
+make check             # format-check + lint + typecheck + mutation-audit + eval  (what CI runs)
 make test-ui           # frontend component tests
 make test-e2e          # Playwright end-to-end + axe a11y scan
 ```
@@ -513,42 +510,46 @@ boundaries.
 
 ### API surface
 
-26+ endpoints across three groups. Swagger UI at `/docs`, ReDoc at `/redoc`. The gRPC service in
-[`proto/memory.proto`](proto/memory.proto) mirrors the same operations.
+26 endpoints across three groups, plus a `/` root probe. Swagger UI at `/docs`, ReDoc at `/redoc`.
+The gRPC service in [`proto/memory.proto`](proto/memory.proto) mirrors the same operations.
 
-**Memory core — `/memory/*`**
+**Memory core — `/memory/*`** (no auth; internal network)
 
 | Method | Path | Purpose |
 | --- | --- | --- |
 | `POST` | `/memory/append` | Write a round; triggers L1/L2/L3 |
 | `POST` | `/memory/recall` | Recall memories with a degradation signal |
-| `GET` | `/memory` | List with filters and pagination |
-| `GET` | `/memory/{memory_id}` | One memory with full metadata |
-| `PUT` | `/memory/{memory_id}` | Update text; history preserved |
-| `DELETE` | `/memory/{memory_id}` | Scoped delete (`MEMORY` / `SESSION` / `ALL`) |
+| `POST` | `/memory/delete` | Scoped delete (`MEMORY` / `SESSION` / `ALL`), tombstone kept |
+| `POST` | `/memory/suppress` | Take out of recall, keep text and tombstone |
+| `POST` | `/memory/erase` | Physically erase the text |
+| `GET` | `/memory/items` | List long-term memories of a user |
+| `GET` | `/memory/items/{memory_id}` | One memory |
+| `POST` | `/memory/update` | Update text; history preserved |
 | `GET` | `/memory/tasks/{task_id}` | Task state: retries, last error, result |
-| `GET` | `/memory/l3/status` | L3 queue and worker status |
+| `GET` | `/memory/l3/background-status` | L3 queue and worker status |
 
-**Business integration — `/v1/memory/*`** (API key + scope required)
+**Health — `/health/*`**
 
-| Method | Path | Scope | Purpose |
-| --- | --- | --- | --- |
-| `POST` | `/v1/memory/append` | `memory:append` | Write a round |
-| `POST` | `/v1/memory/recall` | `memory:recall` | Recall memories |
-| `GET` | `/v1/memory` | `memory:read` | List memories |
-| `GET/PUT/DELETE` | `/v1/memory/{id}` | `memory:read/update/delete` | CRUD |
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/health` | Process health (version, environment) |
+| `GET` | `/health/live` | Liveness probe |
+| `GET` | `/health/ready` | Readiness probe (PostgreSQL / Milvus / Mem0) |
+| `GET` | `/health/metrics` | Prometheus metrics |
 
-**Admin — `/admin/api/*`**
+**Admin — `/admin/api/*`** (`Authorization: Bearer <ADMIN_TOKEN>`)
 
 | Method | Path | Purpose |
 | --- | --- | --- |
 | `GET` | `/admin/api/overview` | KPIs, system pulse, L3 status, recent audit |
 | `GET` | `/admin/api/tasks` | Task list with status filter |
 | `GET` | `/admin/api/memories` | Memory list with source back-link |
+| `GET` | `/admin/api/memories/{memory_id}/source` | Source back-link of one memory |
 | `GET` | `/admin/api/audit` | Audit log, filterable by action |
 | `POST` | `/admin/api/{delete,update,rebuild}` | Governance actions, idempotent |
-| `GET/PUT` | `/admin/api/mem0/configs` | List and update mem0 prompts live |
-| `GET/POST` | `/admin/api/integration/keys` | List and generate API keys |
+| `GET` | `/admin/api/health/detail` | Dependency detail |
+| `GET` | `/admin/api/config` | Runtime config |
+| `POST` | `/admin/api/maintenance/reclaim-orphan-tasks` | Reclaim orphaned background tasks |
 
 Full reference with request/response bodies: **[docs/API.md](docs/API.md)**.
 
@@ -586,7 +587,7 @@ surface an error.
 <summary><b>Is it production-ready?</b></summary>
 
 Hexagonal ports, Pydantic v2 with `mypy --strict`, Alembic migrations, Kubernetes liveness/readiness
-probes, Prometheus metrics, and 663 tests. The admin console is a React 19 SPA with keyboard
+probes, Prometheus metrics, and 870+ tests. The admin console is a React 19 SPA with keyboard
 navigation, accessibility, and responsive layout.
 
 </details>
@@ -595,16 +596,19 @@ navigation, accessibility, and responsive layout.
 <summary><b>How does it scale?</b></summary>
 
 L3 extraction is async by default — scale it with `MEMORY_L3_EXECUTOR_WORKERS` and
-`MEMORY_L3_MAX_PENDING_TASKS`. Multi-tenant isolation via `X-Tenant-Id`. See the
+`MEMORY_L3_MAX_PENDING_TASKS`. Memory is isolated per `namespace` (the scope tag on every
+request), not per tenant: there is no tenant dimension in the API. See the
 [operations runbook](docs/RUNBOOK.md) for tuning and recovery.
 
 </details>
 
 <details>
-<summary><b>Can I customize memory extraction prompts?</b></summary>
+<summary><b>Can I customize memory extraction?</b></summary>
 
-Yes — admin console → `/integration` → mem0 config. Edit `custom_instructions`,
-`update_memory_prompt`, and `memory_answer_prompt` live. Changes apply on the next write.
+Yes, in code — the console does not edit prompts. Extraction constraints live in
+`THINKBACK_CUSTOM_INSTRUCTIONS` (`src/thinkback/memory/backends/mem0_library.py`), and the
+memory types (admission, retention, TTL, conflict handling) live in the namespace profile
+under `profiles/`.
 
 </details>
 
@@ -633,7 +637,7 @@ Kubernetes manifests, Helm chart, production config
 Debugging, recovery, scaling, incident procedures
 
 <strong><a href="docs/specs/2026-10-08-thinkback-integration-protocol-v1.md">Integration protocol v1</a></strong><br>
-The public API contract for business systems
+Historical — the v1 public API was never shipped; see the notes in the spec
 
 </td>
 </tr>

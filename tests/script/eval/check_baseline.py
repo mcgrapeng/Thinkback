@@ -1,8 +1,13 @@
-"""评测基线守卫：自包含评测报告不得低于 tests/eval/baseline.json。
+"""评测基线守卫：评测报告不得低于对应基线。
 
 防两类回归：
 1. 通过率下跌（总通过率或任一类别低于基线）；
 2. 用例集漂移（删除/改名用例让通过率看起来回升——基线钉住必有用例名单）。
+
+基线可按 ``mode`` 分档：同一套用例有两种跑法（自包含契约评测 / 真实栈评测），
+报告目录混放时只挑 mode 匹配的那一份，避免拿真实栈报告去卡自包含基线（反之亦然）。
+真实栈基线还可以加 ``max_failure_rate_by_bucket``：按失败归因桶限比例，
+把「没抽出来」「抽出来但缺事实」「事实已在索引却没召回」分开看。
 
 用法：
     uv run python tests/script/eval/check_baseline.py            # 取最新报告
@@ -17,28 +22,46 @@ import argparse
 import json
 import sys
 from pathlib import Path
+from typing import Any
 
 REPORT_DIR = Path("docs/memory/report")
 DEFAULT_BASELINE = Path("tests/eval/baseline.json")
 
 
-def _latest_report(report_dir: Path) -> Path:
+def _report_mode(path: Path) -> str | None:
+    """报告里的 ``mode``；读不出来就当没有（不参与 mode 过滤）。"""
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    mode = payload.get("mode")
+    return mode if isinstance(mode, str) else None
+
+
+def _latest_report(report_dir: Path, mode: str | None = None) -> Path:
     candidates = sorted(report_dir.glob("*.json"), key=lambda path: path.stat().st_mtime)
+    if mode is not None:
+        candidates = [path for path in candidates if _report_mode(path) == mode]
     if not candidates:
-        raise FileNotFoundError(f"no evaluation reports under {report_dir}")
+        suffix = f" with mode={mode}" if mode else ""
+        raise FileNotFoundError(f"no evaluation reports under {report_dir}{suffix}")
     return candidates[-1]
 
 
-def check(report_path: Path, baseline_path: Path) -> list[str]:
-    report = json.loads(report_path.read_text(encoding="utf-8"))
-    baseline = json.loads(baseline_path.read_text(encoding="utf-8"))
-
+def check_report(report: dict[str, Any], baseline: dict[str, Any]) -> list[str]:
+    """比对报告与基线，返回违规列表（空列表 = 达标）。"""
     violations: list[str] = []
     if report.get("report_type") != baseline.get("report_type"):
         return [
             f"report_type mismatch: report={report.get('report_type')!r} "
             f"baseline={baseline.get('report_type')!r}"
         ]
+
+    expected_mode = baseline.get("mode")
+    if expected_mode is not None and report.get("mode") != expected_mode:
+        violations.append(
+            f"mode mismatch: report={report.get('mode')!r} baseline={expected_mode!r}"
+        )
 
     results = report.get("results") or []
     present_cases = {entry.get("name") for entry in results}
@@ -63,7 +86,25 @@ def check(report_path: Path, baseline_path: Path) -> list[str]:
                 f"category {category!r} pass rate {float(metric['pass_rate']):.1%} "
                 f"< baseline {float(min_rate):.1%}"
             )
+
+    buckets = aggregate.get("failure_buckets") or {}
+    for bucket, max_rate in (baseline.get("max_failure_rate_by_bucket") or {}).items():
+        metric = buckets.get(bucket)
+        if metric is None:
+            violations.append(f"failure bucket missing from report: {bucket}")
+            continue
+        actual = float(metric.get("rate", 0.0))
+        if actual > float(max_rate):
+            violations.append(
+                f"failure bucket {bucket!r} rate {actual:.1%} > baseline {float(max_rate):.1%}"
+            )
     return violations
+
+
+def check(report_path: Path, baseline_path: Path) -> list[str]:
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    baseline = json.loads(baseline_path.read_text(encoding="utf-8"))
+    return check_report(report, baseline)
 
 
 def main(argv: list[str]) -> int:
@@ -76,8 +117,13 @@ def main(argv: list[str]) -> int:
     args = parser.parse_args(argv[1:])
 
     try:
-        report_path = args.report if args.report is not None else _latest_report(args.report_dir)
-        violations = check(report_path, args.baseline)
+        baseline = json.loads(args.baseline.read_text(encoding="utf-8"))
+        report_path = (
+            args.report
+            if args.report is not None
+            else _latest_report(args.report_dir, baseline.get("mode"))
+        )
+        violations = check_report(json.loads(report_path.read_text(encoding="utf-8")), baseline)
     except (OSError, json.JSONDecodeError) as exc:
         print(f"基线检查输入错误: {exc}", file=sys.stderr)
         return 2
