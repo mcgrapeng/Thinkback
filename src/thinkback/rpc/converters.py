@@ -11,7 +11,6 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from thinkback.domain.tenant import scoped_user_id
 from thinkback.memory.schemas import (
     AppendMemoryRequest,
     DataClassification,
@@ -160,7 +159,7 @@ _SUMMARY_STATE_TO_PB = {
 # ── request converters ───────────────────────────────────────────────────────
 
 
-def to_append_request(req: pb.AppendRequest, *, tenant_id: str = "") -> AppendMemoryRequest:
+def to_append_request(req: pb.AppendRequest) -> AppendMemoryRequest:
     from datetime import datetime
 
     messages = [
@@ -174,7 +173,7 @@ def to_append_request(req: pb.AppendRequest, *, tenant_id: str = "") -> AppendMe
     ]
     return AppendMemoryRequest(
         request_id=req.request_id,
-        user_id=scoped_user_id(tenant_id, req.user_id),
+        user_id=req.user_id,
         session_id=req.session_id,
         round_id=req.round_id,
         messages=messages,
@@ -184,14 +183,14 @@ def to_append_request(req: pb.AppendRequest, *, tenant_id: str = "") -> AppendMe
     )
 
 
-def to_recall_request(req: pb.RecallRequest, *, tenant_id: str = "") -> RecallMemoryRequest:
+def to_recall_request(req: pb.RecallRequest) -> RecallMemoryRequest:
     if req.intent == pb.RECALL_INTENT_SENSITIVE:
         # 域模型的 intent 轴已删除（枚举只有两个值，SENSITIVE 无条件 raise，
         # 是 fail-useless 不是 fail-closed）。proto 里的枚举值还在（生成代码
         # 不重新生成），这里显式拒绝，保持对外行为不变：PERMISSION_DENIED。
         raise ValueError("fail-closed recall intent: sensitive is not supported")
     return RecallMemoryRequest(
-        user_id=scoped_user_id(tenant_id, req.user_id),
+        user_id=req.user_id,
         session_id=req.session_id,
         query=req.query,
         l3_limit=resolve_l3_limit(req.l3_limit),
@@ -200,10 +199,10 @@ def to_recall_request(req: pb.RecallRequest, *, tenant_id: str = "") -> RecallMe
     )
 
 
-def to_delete_request(req: pb.DeleteRequest, *, tenant_id: str = "") -> DeleteMemoryRequest:
+def to_delete_request(req: pb.DeleteRequest) -> DeleteMemoryRequest:
     return DeleteMemoryRequest(
         request_id=req.request_id,
-        user_id=scoped_user_id(tenant_id, req.user_id),
+        user_id=req.user_id,
         scope=_DELETE_SCOPE[req.scope],
         operation_id=req.operation_id,
         memory_id=req.memory_id if req.HasField("memory_id") else None,
@@ -211,11 +210,11 @@ def to_delete_request(req: pb.DeleteRequest, *, tenant_id: str = "") -> DeleteMe
     )
 
 
-def to_update_request(req: pb.UpdateMemoryRequest, *, tenant_id: str = "") -> UpdateMemoryRequest:
+def to_update_request(req: pb.UpdateMemoryRequest) -> UpdateMemoryRequest:
     memory_type = _MEMORY_TYPE_FROM_PB.get(req.memory_type) if req.HasField("memory_type") else None
     return UpdateMemoryRequest(
         request_id=req.request_id,
-        user_id=scoped_user_id(tenant_id, req.user_id),
+        user_id=req.user_id,
         operation_id=req.operation_id,
         memory_id=req.memory_id,
         content=req.content,
@@ -223,10 +222,10 @@ def to_update_request(req: pb.UpdateMemoryRequest, *, tenant_id: str = "") -> Up
     )
 
 
-def to_rebuild_request(req: pb.RebuildRequest, *, tenant_id: str = "") -> RebuildMemoryRequest:
+def to_rebuild_request(req: pb.RebuildRequest) -> RebuildMemoryRequest:
     return RebuildMemoryRequest(
         request_id=req.request_id,
-        user_id=scoped_user_id(tenant_id, req.user_id),
+        user_id=req.user_id,
         operation_id=req.operation_id,
         session_id=req.session_id if req.HasField("session_id") else None,
         history_version=req.history_version if req.HasField("history_version") else None,
