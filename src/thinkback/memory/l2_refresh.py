@@ -18,6 +18,7 @@ futures 单独记账，``drain`` 由 ``MemoryService.drain_l3_background_tasks``
 
 from __future__ import annotations
 
+import time
 from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor, wait
 from contextvars import copy_context
@@ -76,14 +77,16 @@ class L2BackgroundRefresher:
 
         scope = (user_id, session_scope_id)
         with self._state_lock:
+            # 计数先落：在飞期间的 append 也要计数，否则在飞结束后
+            # 这几轮永远等不到下一次刷新（trailing 刷新缺失）。
+            counter = self._append_counters.get(scope, 0) + 1
+            self._append_counters[scope] = counter
             if scope in self._pending_scopes:
                 # 已有一次在飞的刷新，等它完成后计数自然对齐
                 return
             has_llm_summary = scope in self._llm_refreshed_scopes
-            counter = self._append_counters.get(scope, 0) + 1
             due = not has_llm_summary or counter >= self.refresh_interval_rounds
             if not due:
-                self._append_counters[scope] = counter
                 return
             self._append_counters[scope] = 0
             self._pending_scopes.add(scope)
@@ -105,13 +108,28 @@ class L2BackgroundRefresher:
         future.add_done_callback(lambda done_future: context.run(self._finish, done_future, scope))
 
     def drain(self, timeout: float | None = None) -> None:
-        """等待在飞的 L2 刷新完成（失败已被记录，不向上抛）。"""
+        """等待在飞的 L2 刷新完成（失败已被记录，不向上抛）。
 
-        with self._state_lock:
-            futures = list(self._futures)
-        if not futures:
-            return
-        wait(futures, timeout=timeout)
+        要连 trailing 刷新一起等：在飞刷新结束后可能立刻补一次新的，
+        所以循环到既没有 future 也没有 pending scope 为止。
+        """
+        deadline = None if timeout is None else time.monotonic() + timeout
+        while True:
+            with self._state_lock:
+                futures = list(self._futures)
+                pending = bool(self._pending_scopes)
+            if not futures and not pending:
+                return
+            remaining: float | None = None
+            if deadline is not None:
+                remaining = max(0.0, deadline - time.monotonic())
+                if remaining <= 0:
+                    return
+            wait(futures, timeout=remaining)
+            if not futures and pending:
+                # future 已完成但完成回调还没跑（trailing 刷新尚未提交）：
+                # 等一小会儿再收一次。
+                time.sleep(0.005)
 
     @property
     def pending_count(self) -> int:
@@ -124,9 +142,15 @@ class L2BackgroundRefresher:
         with self._state_lock:
             self._futures.discard(future)
             self._pending_scopes.discard(scope)
+            # 在飞期间累计的轮次达到阈值 → 补一次 trailing 刷新，
+            # 否则这些轮次会被旧快照吞掉，直到再攒够 N 轮才更新。
+            trailing_due = self._append_counters.get(scope, 0) >= self.refresh_interval_rounds
         if future.done() and not future.cancelled() and future.exception() is not None:
             # _run_refresh 自身已捕获并落日志；这里只做记账清理。
             pass
+        if trailing_due:
+            user_id, session_scope_id = scope
+            self.maybe_submit(user_id, session_scope_id)
 
     def _run_refresh(self, user_id: str, session_scope_id: str) -> None:
         refresh_log = logger.bind(user_id=user_id, session_scope_id=session_scope_id)
@@ -141,20 +165,34 @@ class L2BackgroundRefresher:
                 if (entry.session_id, entry.round_id) not in excluded_refs
             ]
             previous_summary = self._previous_llm_summary(user_id, session_scope_id)
+            # 乐观锁：带着当前版本去写。删除、状态变更、别人的写入都会让
+            # 版本 +1，于是这份旧快照写不进来（不会把 DIRTY 改回 ACTIVE）。
+            current = self._repository.get_summary(user_id, session_scope_id)
+            expected_row_version = current.row_version if current is not None else None
             if not rounds:
                 refresh_log.debug("memory l2 llm refresh skipped: no active rounds")
                 return
             summary_text, structured_sections = self._composer(rounds, previous_summary)
             if not summary_text or not summary_text.strip():
                 raise RuntimeError("l2 llm composer returned empty summary")
-            self._repository.upsert_summary_from_rounds(
+            written = self._repository.upsert_summary_from_rounds(
                 user_id,
                 session_scope_id,
                 rounds,
                 summary_text=summary_text.strip(),
                 summary_kind="llm",
                 structured_sections=structured_sections,
+                expected_row_version=expected_row_version,
             )
+            if written.summary_text != summary_text.strip():
+                # 写不进去：期间有人改过这一行（多半是删除置脏）。
+                # 保留对方的结果，并且不把本 scope 记成已刷新 ——
+                # 否则下一轮会把别人的内容当「上一版 LLM 摘要」喂进模型。
+                refresh_log.bind(
+                    current_state=written.summary_state,
+                    current_kind=written.summary_kind,
+                ).warning("memory l2 llm refresh superseded by concurrent write")
+                return
             with self._state_lock:
                 self._llm_refreshed_scopes.add((user_id, session_scope_id))
             if self._on_refreshed is not None:

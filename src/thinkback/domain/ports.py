@@ -52,11 +52,15 @@ class MemoryRepository(Protocol):
         summary_kind: str = "concat",
         structured_sections: dict[str, str] | None = None,
         preserve_llm: bool = False,
+        expected_row_version: int | None = None,
     ) -> SummaryEntry:
         """``preserve_llm=True`` 时，若当前摘要已是 llm 版则跳过 concat 覆盖。
 
         G4: ``structured_sections`` 是 schema 化的 4 段画像（llm 综合版填，
         concat 降级版保持空 dict）。
+
+        ``expected_row_version`` 非 None 时是乐观锁：只有当前行版本仍等于它
+        才写入，否则不写并返回当前行（调用方据此判断自己被覆盖了）。
         """
         ...
 

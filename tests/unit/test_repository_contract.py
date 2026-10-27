@@ -286,6 +286,40 @@ def test_upsert_summary_from_rounds_tracks_cursor(repository) -> None:  # type: 
     assert fetched.summary_id == summary.summary_id
 
 
+def test_upsert_summary_rejects_stale_row_version(repository) -> None:  # type: ignore[no-untyped-def]
+    """基于旧版本的摘要写入必须被拒绝：删除、状态变更都会让版本 +1。"""
+    first = repository.upsert_summary_from_rounds("user-1", "session-1", [], summary_text="v1")
+    assert first.row_version == 0
+
+    second = repository.upsert_summary_from_rounds(
+        "user-1", "session-1", [], summary_text="v2", expected_row_version=0
+    )
+    assert second.summary_text == "v2"
+    assert second.row_version == 1
+
+    stale = repository.upsert_summary_from_rounds(
+        "user-1", "session-1", [], summary_text="v3", expected_row_version=0
+    )
+    assert stale.summary_text == "v2"
+    assert stale.row_version == 1
+
+
+def test_mark_summary_bumps_row_version(repository) -> None:  # type: ignore[no-untyped-def]
+    """置脏（删除、编辑）必须让版本 +1：在飞的旧刷新因此写不进来。"""
+    repository.upsert_summary_from_rounds("user-1", "session-1", [], summary_text="v1")
+    before = repository.get_summary("user-1", "session-1")
+    assert before is not None
+    # in-memory 实现返回的是活对象，版本号要取快照值再比较。
+    before_version = before.row_version
+
+    repository.mark_summary("user-1", "session-1", SummaryState.DIRTY)
+
+    after = repository.get_summary("user-1", "session-1")
+    assert after is not None
+    assert after.summary_state is SummaryState.DIRTY
+    assert after.row_version == before_version + 1
+
+
 def test_mark_summary_overrides_state(repository) -> None:  # type: ignore[no-untyped-def]
     repository.upsert_summary_from_rounds("user-1", "session-1", [])
     repository.mark_summary("user-1", "session-1", SummaryState.STALE)

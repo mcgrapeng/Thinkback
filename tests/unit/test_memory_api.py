@@ -142,6 +142,9 @@ async def test_recall_uses_dedicated_worker_pool_when_write_pool_is_full(
 
     try:
         append_response = client.post("/memory/append", json=append_payload())
+        # 写预算只压写路径：recall 用回默认预算。读写各有独立的信号量与线程池，
+        # 共用同一个旋钮会让 recall 的线程交接也只剩 1ms，机器一忙就误报 503。
+        monkeypatch.setattr(memory_api.settings, "memory_api_worker_wait_seconds", 5.0)
         recall_response = client.post(
             "/memory/recall",
             json={
