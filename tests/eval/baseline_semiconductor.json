@@ -1,0 +1,29 @@
+{
+  "report_type": "thinking_memory_semiconductor_vertical_evaluation",
+  "min_total_pass_rate": 1.0,
+  "min_pass_rate_by_category": {
+    "工艺咨询": 1.0,
+    "设备选型": 1.0,
+    "良率分析": 1.0,
+    "客户支持": 1.0,
+    "垂类机制": 1.0
+  },
+  "required_cases": [
+    "case_semi_process_node_and_stage",
+    "case_semi_lithography_generation",
+    "case_semi_device_architecture_preference",
+    "case_semi_euv_tool_vendor",
+    "case_semi_etch_and_metrology_vendors",
+    "case_semi_tool_selection_constraint",
+    "case_semi_yield_loss_defect_type",
+    "case_semi_spc_control_method",
+    "case_semi_yield_target_and_current",
+    "case_semi_customer_reliability_requirement",
+    "case_semi_customer_product_context",
+    "case_semi_support_escalation_issue",
+    "case_semi_namespace_isolation",
+    "case_semi_assistant_not_user_fact",
+    "case_semi_procedure_type_requires_approval",
+    "case_semi_equipment_context_has_ttl"
+  ]
+}

@@ -7,6 +7,7 @@
 用法：
     uv run python tests/script/eval/check_baseline.py            # 取最新报告
     uv run python tests/script/eval/check_baseline.py --report <path>
+    uv run python tests/script/eval/check_baseline.py --report-dir <dir> --baseline <file>
 
 退出码：0=达标；1=回归；2=输入错误。"""
 
@@ -21,10 +22,10 @@ REPORT_DIR = Path("docs/memory/report")
 DEFAULT_BASELINE = Path("tests/eval/baseline.json")
 
 
-def _latest_report() -> Path:
-    candidates = sorted(REPORT_DIR.glob("*.json"), key=lambda path: path.stat().st_mtime)
+def _latest_report(report_dir: Path) -> Path:
+    candidates = sorted(report_dir.glob("*.json"), key=lambda path: path.stat().st_mtime)
     if not candidates:
-        raise FileNotFoundError(f"no evaluation reports under {REPORT_DIR}")
+        raise FileNotFoundError(f"no evaluation reports under {report_dir}")
     return candidates[-1]
 
 
@@ -68,11 +69,12 @@ def check(report_path: Path, baseline_path: Path) -> list[str]:
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--report", type=Path, default=None, help="评测报告 JSON（缺省取最新）")
+    parser.add_argument("--report-dir", type=Path, default=REPORT_DIR, help="报告目录（缺省最新一份）")
     parser.add_argument("--baseline", type=Path, default=DEFAULT_BASELINE)
     args = parser.parse_args(argv[1:])
 
     try:
-        report_path = args.report if args.report is not None else _latest_report()
+        report_path = args.report if args.report is not None else _latest_report(args.report_dir)
         violations = check(report_path, args.baseline)
     except (OSError, json.JSONDecodeError) as exc:
         print(f"基线检查输入错误: {exc}", file=sys.stderr)

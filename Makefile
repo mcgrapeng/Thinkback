@@ -62,6 +62,10 @@ test-e2e:
 eval:
 	uv run --group dev python tests/script/run_self_contained_evaluation.py
 	uv run --group dev python tests/script/eval/check_baseline.py
+	uv run --group dev python tests/script/eval/run_semiconductor_evaluation.py
+	uv run --group dev python tests/script/eval/check_baseline.py \
+		--report-dir docs/memory/report/semiconductor \
+		--baseline tests/eval/baseline_semiconductor.json
 
 # API 契约模糊测试（schemathesis，审计层：不进 check，分钟级）
 test-fuzz:
