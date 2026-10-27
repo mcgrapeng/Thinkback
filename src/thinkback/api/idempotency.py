@@ -50,56 +50,76 @@ class IdempotencyCache:
     """
 
     def __init__(self) -> None:
-        self._store: OrderedDict[tuple[str, str, str], CachedResponse] = OrderedDict()
-        self._index: dict[tuple[str, str], set[str]] = {}
+        self._store: OrderedDict[tuple[str, str, str, str, str], CachedResponse] = OrderedDict()
+        self._index: dict[tuple[str, str, str, str], set[str]] = {}
 
-    def _make_key(self, scope: str, idem_key: str, body_hash: str) -> tuple[str, str, str]:
-        return (scope, idem_key, body_hash)
+    def _make_key(
+        self, scope: str, idem_key: str, method: str, path: str, body_hash: str
+    ) -> tuple[str, str, str, str, str]:
+        return (scope, idem_key, method, path, body_hash)
 
-    def get(self, scope: str, idem_key: str, body_hash: str) -> CachedResponse | None:
-        key = self._make_key(scope, idem_key, body_hash)
+    def _prune_expired(self) -> int:
+        """清掉过期条目及其冲突索引，避免「过期后换 body 永远 409」。"""
+        now = time.time()
+        expired = [k for k, v in self._store.items() if now - v.timestamp > CACHE_TTL]
+        for key in expired:
+            del self._store[key]
+            scope, idem_key, method, path, body_hash = key
+            hashes = self._index.get((scope, idem_key, method, path))
+            if hashes is not None:
+                hashes.discard(body_hash)
+                if not hashes:
+                    self._index.pop((scope, idem_key, method, path), None)
+        return len(expired)
+
+    def get(
+        self, scope: str, idem_key: str, method: str, path: str, body_hash: str
+    ) -> CachedResponse | None:
+        self._prune_expired()
+        key = self._make_key(scope, idem_key, method, path, body_hash)
         entry = self._store.get(key)
         if entry is None:
-            return None
-        if time.time() - entry.timestamp > CACHE_TTL:
-            del self._store[key]
             return None
         self._store.move_to_end(key)
         return entry
 
-    def get_conflict(self, scope: str, idem_key: str, body_hash: str) -> bool:
+    def get_conflict(
+        self, scope: str, idem_key: str, method: str, path: str, body_hash: str
+    ) -> bool:
         """检查同 key 但不同 body 是否存在(冲突)。"""
-        hashes = self._index.get((scope, idem_key))
+        self._prune_expired()
+        hashes = self._index.get((scope, idem_key, method, path))
         if not hashes:
             return False
         return body_hash not in hashes
 
-    def put(self, scope: str, idem_key: str, body_hash: str, response: CachedResponse) -> None:
-        key = self._make_key(scope, idem_key, body_hash)
+    def put(
+        self,
+        scope: str,
+        idem_key: str,
+        method: str,
+        path: str,
+        body_hash: str,
+        response: CachedResponse,
+    ) -> None:
+        self._prune_expired()
+        key = self._make_key(scope, idem_key, method, path, body_hash)
         self._store[key] = response
         self._store.move_to_end(key)
-        self._index.setdefault((scope, idem_key), set()).add(body_hash)
+        self._index.setdefault((scope, idem_key, method, path), set()).add(body_hash)
         while len(self._store) > MAX_CACHE_SIZE:
             evicted_key, _ = self._store.popitem(last=False)
-            evicted_scope, evicted_idem, evicted_hash = evicted_key
-            hashes = self._index.get((evicted_scope, evicted_idem))
+            evicted_scope, evicted_idem, evicted_method, evicted_path, evicted_hash = evicted_key
+            hashes = self._index.get((evicted_scope, evicted_idem, evicted_method, evicted_path))
             if hashes is not None:
                 hashes.discard(evicted_hash)
                 if not hashes:
-                    self._index.pop((evicted_scope, evicted_idem), None)
+                    self._index.pop(
+                        (evicted_scope, evicted_idem, evicted_method, evicted_path), None
+                    )
 
     def clear_expired(self) -> int:
-        now = time.time()
-        expired = [k for k, v in self._store.items() if now - v.timestamp > CACHE_TTL]
-        for k in expired:
-            del self._store[k]
-            scope, idem_key, body_hash = k
-            hashes = self._index.get((scope, idem_key))
-            if hashes is not None:
-                hashes.discard(body_hash)
-                if not hashes:
-                    self._index.pop((scope, idem_key), None)
-        return len(expired)
+        return self._prune_expired()
 
 
 # 全局缓存实例(生产替换为持久化层)
@@ -137,8 +157,8 @@ class IdempotencyMiddleware(BaseHTTPMiddleware):
         body = await request.body()
         body_hash = hashlib.sha256(body).hexdigest()[:16]
 
-        # 检查冲突
-        if self.cache.get_conflict(scope, idem_key, body_hash):
+        # 检查冲突：同 key 不同 body（按 method+path 区分端点）
+        if self.cache.get_conflict(scope, idem_key, request.method, request.url.path, body_hash):
             logger.warning(f"idempotency.conflict key={idem_key}")
             return JSONResponse(
                 status_code=409,
@@ -154,7 +174,7 @@ class IdempotencyMiddleware(BaseHTTPMiddleware):
             )
 
         # 检查缓存
-        cached = self.cache.get(scope, idem_key, body_hash)
+        cached = self.cache.get(scope, idem_key, request.method, request.url.path, body_hash)
         if cached:
             logger.info(f"idempotency.cache_hit key={idem_key}")
             return Response(
@@ -185,6 +205,8 @@ class IdempotencyMiddleware(BaseHTTPMiddleware):
             self.cache.put(
                 scope,
                 idem_key,
+                request.method,
+                request.url.path,
                 body_hash,
                 CachedResponse(
                     body=resp_body,

@@ -28,7 +28,7 @@ from thinkback.domain.enums import (
     TaskStatus,
 )
 from thinkback.domain.errors import TaskStaleWriteError
-from thinkback.domain.keys import fingerprint, round_sort_key, scope_key, source_ref_key
+from thinkback.domain.keys import request_fingerprint, round_sort_key, scope_key, source_ref_key
 from thinkback.domain.summarization import summarize_rounds
 from thinkback.memory.repositories._l1_cache import L1_CACHE_LIMIT, L1CacheMixin
 from thinkback.memory.schemas import AppendMemoryRequest
@@ -96,7 +96,7 @@ class InMemoryMemoryRepository(L1CacheMixin):
             round_index=request.round_index,
             messages=messages,
             source_timestamp=request.source_timestamp,
-            round_fingerprint=fingerprint(messages),
+            round_fingerprint=request_fingerprint(request),
         )
         self.journal_by_round[request.round_id] = entry
         return entry
