@@ -1,7 +1,7 @@
 # thinkback Kubernetes 资源
 
 本目录提供 `thinkback` 的 Kubernetes 基线资源，包括 API Deployment、
-迁移 Job、Service、ConfigMap 和 Secret 示例。
+迁移 Job、Service、NetworkPolicy、ConfigMap 和 Secret 示例。
 
 生产环境需要由平台或运维先准备 PostgreSQL、OpenAI-compatible LLM endpoint、
 独立 OpenAI-compatible embedding endpoint，以及独立共享 Milvus 服务。
@@ -11,6 +11,66 @@ Mem0 以 Library 方式运行在 `thinkback` 进程内，并通过 Milvus 承载
 thinkback 是 Thinkback 内部服务，进程内不做调用方鉴权；公网入口、流量准入由网关、mTLS、服务身份或内网 ACL 在上游解决。
 本服务调用 LLM、Embedding、Milvus、PostgreSQL 等外部依赖必须的凭据由 Secret 注入。
 认证边界以 [Thinkback记忆三层架构](../docs/memory/Thinkback记忆三层架构.md) 第 0.1 节为准，本文不重复定义。
+
+## 网络边界（必读）
+
+业务面没有鉴权，意味着「集群内谁能连到 `Service/thinkback`」就是唯一边界。
+`k8s/networkpolicy.yaml` 用两条策略把这层边界显式写出来：
+
+1. `thinkback-api-default-deny-ingress`：对 API Pod（`app=thinkback, component=api`）
+   默认拒绝一切入站流量；
+2. `thinkback-api-allow-caller-namespaces`：只放行带
+   `thinkback.io/allowed-caller-namespace=true` 标签的 namespace 到 8000（HTTP）
+   与 50051（gRPC）。
+
+部署方在上线前必须做的事（**不用改 manifest**，给网关 namespace 打标签即可）：
+
+```bash
+kubectl label namespace <你的网关 namespace> thinkback.io/allowed-caller-namespace=true
+```
+
+如果集群不允许给 namespace 打标签，就改 `k8s/networkpolicy.yaml` 里 allow 策略的
+`namespaceSelector.matchLabels`——具体是 `k8s/networkpolicy.yaml:67`，把
+
+```yaml
+              thinkback.io/allowed-caller-namespace: "true"
+```
+
+换成
+
+```yaml
+              kubernetes.io/metadata.name: <your-gateway-ns>
+```
+
+（该文件里只有这一处需要改，位置在 `# >>> 部署方改这里 <<<` 注释下方。）
+
+注意：
+
+- 集群 CNI 必须实现 NetworkPolicy（Calico / Cilium / Antrea 等）。不支持时
+  本文件不生效，服务仍是「集群内任意 Pod 可调」。
+- 本文件只收口入口，不收口出口。API 出站还要连 PostgreSQL / Milvus / LLM /
+  Embedding / DNS，这些地址与部署相关，需要平台方按真实地址另写 egress 策略。
+- kubelet 探针不受影响（k8s 规定到 Pod 所在节点的流量始终放行）。
+- 监控抓 `/health/metrics` 也要从被放行的 namespace 发起，否则抓不到。
+
+## 单副本约束
+
+`deployment-api.yaml` 的 `replicas` 固定为 1，**在下面这些状态搬到共享存储
+（Redis / PostgreSQL）之前不要改**：
+
+| 进程内状态 | 位置 | 多副本后果 |
+| --- | --- | --- |
+| 幂等缓存 | `src/thinkback/api/idempotency.py` | 同一个 `Idempotency-Key` 在两个 Pod 上都被执行 |
+| 限流桶 | `src/thinkback/api/ratelimit.py` | 按客户端 IP 分桶，配额实际翻倍 |
+| L1 短期记忆缓存 | `src/thinkback/memory/repositories/_l1_cache.py` | 旧 Pod 的缓存可能把已删除的记忆召回回来（复活） |
+| Mem0 history.db | `src/thinkback/infra/config.py`（`mem0_history_db_path`） | 每个 Pod 各一份本地 SQLite，多副本擦除要逐副本做 |
+| 滑动窗口 metrics | `src/thinkback/api/metrics.py` | 进程内计数，重启清零，多副本需外部聚合 |
+
+发布策略用 `strategy: Recreate`：旧 Pod 先退出 Service endpoints、SIGTERM 后不再接新
+请求，再起新 Pod，任何时刻不会有两个 Pod 同时对外服务，也就不会出现两个 Pod 共享
+一套被劈开的进程内状态。代价是每次发布有短暂不可用——单副本本来就无法零停机滚动，
+这个取舍是刻意的。`RollingUpdate` + `maxSurge: 1` 会让新 Pod 先 Ready、旧 Pod 还在
+服务，流量被劈成两半，是不能接受的。
 
 ## 构建镜像
 
@@ -72,8 +132,12 @@ kubectl apply -f k8s/secret.example.yaml
 kubectl apply -f k8s/job-migrate.yaml
 kubectl wait --for=condition=complete job/thinkback-migrate --timeout=120s
 kubectl apply -f k8s/service.yaml
+kubectl apply -f k8s/networkpolicy.yaml
 kubectl apply -f k8s/deployment-api.yaml
 ```
+
+`networkpolicy.yaml` 建议和 Service、Deployment 一起 apply：先落默认拒绝策略，
+再放行批准 namespace，避免中间存在一个「谁都能调」的窗口。
 
 ## 验证
 
@@ -83,3 +147,23 @@ kubectl port-forward service/thinkback 8000:8000
 curl http://127.0.0.1:8000/health/live
 curl http://127.0.0.1:8000/health/ready
 ```
+
+验证网络边界。`thinkback` Service 的 FQDN 是
+`thinkback.<thinkback 所在 namespace>.svc.cluster.local`，从两个不同的 namespace 各发一次：
+
+```bash
+# 边界内（打了标签的网关 namespace）—— 应当成功返回 {"status":"alive"}
+kubectl run netpol-ok --rm -it --restart=Never --image=curlimages/curl \
+  --namespace=<打了标签的网关 namespace> -- \
+  curl -sS -m 5 http://thinkback.<thinkback 所在 namespace>.svc.cluster.local:8000/health/live
+
+# 边界外（未打标签的 namespace）—— 应当超时或连接被拒
+kubectl run netpol-deny --rm -it --restart=Never --image=curlimages/curl \
+  --namespace=<未打标签的 namespace> -- \
+  curl -sS -m 5 http://thinkback.<thinkback 所在 namespace>.svc.cluster.local:8000/health/live
+```
+
+`curlimages/curl` 未安装时用同镜像的等价物（`busybox wget` 等）也可以，重点是
+**两个 namespace 的结果必须不同**；如果都能通，说明 CNI 没实现 NetworkPolicy 或
+标签没打上。
+

@@ -1,0 +1,74 @@
+# thinkback 业务面不做调用方鉴权（D10 决策，见 docs/specs/2026-10-26-thinkback-memory-plugin-design.md）：
+# /memory/append、/memory/recall、/memory/erase 只要能连上就能读写任意 user_id 的记忆。
+# 因此「谁能连到 ClusterIP」就是唯一的信任边界，必须在这里显式收口，
+# 否则集群里任何一个能解析 Service 名字的 Pod 都能读写所有用户的记忆。
+#
+# 本文件包含两个策略：
+#   1. thinkback-api-default-deny-ingress     —— 对 API Pod 默认拒绝一切入站
+#   2. thinkback-api-allow-caller-namespaces  —— 只放行批准 namespace 的 8000/50051
+#
+# 前提：集群 CNI 必须实现 NetworkPolicy（Calico / Cilium / Antrea 等）。
+# CNI 不支持时本文件不生效，服务仍然是「集群内任意 Pod 可调」，这一条要写进上线检查单。
+#
+# 部署方要做的一步（不用改本文件）：
+#   kubectl label namespace <你的网关 namespace> thinkback.io/allowed-caller-namespace=true
+# 多个网关 / 入口 namespace 就多打几个标签。
+#
+# 本文件不覆盖的范围（不是遗漏，是刻意留给平台方按真实地址补）：
+#   - 出口（egress）不受限：API 需要连 PostgreSQL / Milvus / LLM / Embedding / DNS，
+#     这些地址与部署相关，收口要按真实地址另写策略，这里不猜。
+#   - 到 Pod 所在节点的流量按 k8s 规定始终放行，kubelet 的 /health/live、
+#     /health/ready 探针不受本策略影响。
+#   - 监控侧抓 /health/metrics 也必须从被放行的 namespace 发起，否则抓不到。
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: thinkback-api-default-deny-ingress
+  labels:
+    app: thinkback
+    component: api
+spec:
+  # 与 k8s/deployment-api.yaml 的 Pod 模板标签保持一致。
+  podSelector:
+    matchLabels:
+      app: thinkback
+      component: api
+  policyTypes:
+    - Ingress
+  # 空规则列表 = 不允许任何入站流量；下面的 allow 策略是唯一例外。
+  ingress: []
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: thinkback-api-allow-caller-namespaces
+  labels:
+    app: thinkback
+    component: api
+spec:
+  podSelector:
+    matchLabels:
+      app: thinkback
+      component: api
+  policyTypes:
+    - Ingress
+  ingress:
+    # >>> 部署方改这里 <<<
+    # 默认按 namespace 标签放行（推荐）：给调用方 namespace 打上
+    #   thinkback.io/allowed-caller-namespace=true
+    # 即可，无需改本文件。
+    # 若集群不允许给 namespace 打标签，把下面的 matchLabels 换成
+    #   kubernetes.io/metadata.name: <你的网关 namespace>
+    # （本文件里只有这一处需要改，就是下面第 67 行）。
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              thinkback.io/allowed-caller-namespace: "true"
+      ports:
+        # 8000 = HTTP API（Service thinkback 的 http 端口），50051 = gRPC。
+        # 两者都与 k8s/service.yaml 的 targetPort 和容器端口一致。
+        - protocol: TCP
+          port: 8000
+        - protocol: TCP
+          port: 50051
