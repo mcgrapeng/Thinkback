@@ -1801,7 +1801,9 @@ L2 更新 (缓存失效)
             affected_sessions = set(self._user_summary_scope_ids(request.user_id))
             round_ids_by_session = {}
 
-        if not targets:
+        if not targets and request.scope is DeleteScope.MEMORY:
+            # 单条擦除没有目标 = 没有可擦的内容。其余 scope 必须继续走
+            # L1/L2 清理：只有 L1/L2 的会话同样属于用户的记忆。
             return DeleteMemoryResponse(
                 status="completed",
                 task_id=f"memory-erase:{request.operation_id}",
@@ -1815,7 +1817,13 @@ L2 更新 (缓存失效)
             for memory in targets
             if self._is_backend_managed_memory_id(memory.backend_memory_id)
         ]
-        if backend_ids:
+        if request.scope is DeleteScope.ALL:
+            # ALL 必须覆盖本地没有索引行的后端记录（抽取后索引失败等暗数据），
+            # 只按本地索引逐条删会留下不可管理也不可见的残留。
+            self.backend.delete_all(
+                user_id=request.user_id, memory_scope_id=l3_scope_id
+            )
+        elif backend_ids:
             self.backend.delete_many(backend_ids)
 
         # 本地业务索引行物理删除
@@ -1857,7 +1865,7 @@ L2 更新 (缓存失效)
             memory
             for memory in self.repository.list_memories(request.user_id, l3_scope_id)
             if memory.memory_id == request.memory_id
-            and memory.memory_status is not MemoryStatus.DELETED
+            and self._is_erasable_memory(memory)
         ]
 
     def _erase_targets_session(self, request: DeleteMemoryRequest, l3_scope_id: str) -> list[Any]:
@@ -1865,12 +1873,27 @@ L2 更新 (缓存失效)
             raise ValueError("session_id is required for session deletion")
         return [
             memory
-            for memory in self.repository.active_memories(request.user_id, l3_scope_id)
-            if any(ref.get("session_id") == request.session_id for ref in memory.source_refs)
+            for memory in self.repository.list_memories(request.user_id, l3_scope_id)
+            if self._is_erasable_memory(memory)
+            and any(ref.get("session_id") == request.session_id for ref in memory.source_refs)
         ]
 
     def _erase_targets_all(self, request: DeleteMemoryRequest, l3_scope_id: str) -> list[Any]:
-        return list(self.repository.active_memories(request.user_id, l3_scope_id))
+        return [
+            memory
+            for memory in self.repository.list_memories(request.user_id, l3_scope_id)
+            if self._is_erasable_memory(memory)
+        ]
+
+    @classmethod
+    def _is_erasable_memory(cls, memory: Any) -> bool:
+        """可物理擦除的记忆行。
+
+        包含 DELETED/SUPERSEDED/SUPPRESSED：suppress 保留的原文同样要能被
+        erase 真正清掉。内容无关的墓碑行（delete-all/delete-session 等）
+        不擦，它们是删除屏障。
+        """
+        return cls._is_manageable_memory(memory)
 
     def _record_erase_audit(
         self,
