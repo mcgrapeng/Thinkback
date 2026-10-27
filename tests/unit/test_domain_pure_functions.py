@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+import pytest
+
 from tests.unit.test_memory_service import make_append
 from thinkback.domain.entities import JournalEntry
 from thinkback.domain.keys import fingerprint, request_fingerprint, round_sort_key
@@ -238,3 +240,13 @@ def test_request_fingerprint_covers_behavior_changing_metadata() -> None:
     base = make_append(round_id="r-behavior")
     forced = base.model_copy(update={"metadata": {"force_extract": True}})
     assert request_fingerprint(base) != request_fingerprint(forced)
+
+
+def test_scoped_user_id_rejects_tenant_containing_separator() -> None:
+    """tenant 含分隔符会与 user_id 拼出别的租户主体，必须在拼接处拒绝。"""
+    from thinkback.domain.tenant import scoped_user_id
+
+    with pytest.raises(ValueError, match="must not contain"):
+        scoped_user_id("acme:prod", "alice")
+    # user_id 里的冒号是允许的：只有 tenant 需要受限，拼接才不会碰撞。
+    assert scoped_user_id("acme", "prod:alice") == "acme:prod:alice"
