@@ -46,9 +46,14 @@
 | Task 4 幂等键区分端点 + 指纹 canonical 化 | 完成 | `60a0920` |
 | Task 5 assistant 断言不进长期事实 | 完成 | （与 Task 6 同批） |
 | Task 6 敏感分类落库前拦截 | 完成 | `4369d9c` |
+| P1 内网化收口（方案二） | 完成 | `04b33e5`（gRPC 去鉴权）、`1ac2a06`（HTTP 去 v1 与鉴权、限流幂等按 IP） |
+| mem0 引擎升级 | 完成 | `29a3719`（2.1.0 → 2.2.1） |
+| tenant 碰撞止血 | 完成 | `a254517` |
 
 验收结果：`mypy` 无错误；全套件 856 passed；`make eval` 20/20、baseline 达标；`make mutation-audit` 已跑。
 `ruff format/check` 仅剩用户 WIP 文件 `tests/unit/test_api_key_auth.py` 的 SIM300 与 B017，未改动该文件。
+
+**方案二落地说明**：业务面只保留 `/memory/*`，v1 与 API Key/Scope/Tenant 机制已删除；`/admin/api/*` 仍要求 ADMIN_TOKEN；限流与幂等按客户端 IP；`/v1/memory/append` 实测 404、`/memory/append` 正常进入校验。真实 Milvus 契约验证仍未通过（arm64 容器崩溃），门禁尚未满足。
 
 ---
 
