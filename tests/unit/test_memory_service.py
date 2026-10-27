@@ -8614,3 +8614,88 @@ def test_type_registration_drives_source_roles_and_classification() -> None:
     stored = backend.add_calls[0]["metadata"]
     assert stored["memory_type"] == "process_preference"
     assert stored["data_classification"] == "personal"
+
+
+def test_suppress_keeps_record_but_hides_from_recall() -> None:
+    """suppress（逻辑下架）：不可召回，但记录与原文仍在，供审计。"""
+    repository = InMemoryMemoryRepository()
+    backend = FakeMemoryBackend()
+    service = MemoryService(repository=repository, backend=backend, l3_write_mode="sync")
+    service.append(make_append(round_id="r-suppress", content="我养了一只猫叫团子"))
+    memory = repository.active_memories("user-1", "thinkback")[0]
+
+    service.suppress_memory(
+        DeleteMemoryRequest(
+            request_id="req-suppress",
+            user_id="user-1",
+            scope=DeleteScope.MEMORY,
+            operation_id="op-suppress",
+            memory_id=memory.memory_id,
+        )
+    )
+
+    assert repository.active_memories("user-1", "thinkback") == []
+    # 记录仍在（可审计）
+    stored = repository.get_memory_index(memory.memory_id)
+    assert stored is not None
+    assert stored.memory_status is MemoryStatus.DELETED
+    assert stored.memory_text
+
+
+def test_erase_removes_records_from_local_store() -> None:
+    """erase（物理擦除）：L1 原文、L2 摘要正文、L3 索引行都不剩。"""
+    repository = InMemoryMemoryRepository()
+    backend = FakeMemoryBackend()
+    service = MemoryService(repository=repository, backend=backend, l3_write_mode="sync")
+    service.append(make_append(round_id="r-erase", content="我的身份证号是 110101199001011234"))
+    memory = repository.active_memories("user-1", "thinkback")[0]
+
+    response = service.erase(
+        DeleteMemoryRequest(
+            request_id="req-erase",
+            user_id="user-1",
+            scope=DeleteScope.MEMORY,
+            operation_id="op-erase",
+            memory_id=memory.memory_id,
+        )
+    )
+
+    assert response.affected_memories == 1
+    # L3 索引行没了
+    assert repository.get_memory_index(memory.memory_id) is None
+    # L1 轮次原文没了
+    assert repository.get_round("r-erase") is None
+    # L2 摘要正文没了
+    summary = repository.get_summary("user-1", "session-1")
+    assert summary is not None
+    assert summary.summary_text == ""
+    # 后端向量记录没了
+    assert backend.memories == {}
+
+
+def test_erase_records_audit_without_content() -> None:
+    """审计只留范围与数量，不留原文，并如实标注 Mem0 history 残留。"""
+    repository = InMemoryMemoryRepository()
+    service = MemoryService(
+        repository=repository, backend=FakeMemoryBackend(), l3_write_mode="sync"
+    )
+    service.append(make_append(round_id="r-erase-audit", content="秘密内容 SECRET-TOKEN"))
+    memory = repository.active_memories("user-1", "thinkback")[0]
+
+    service.erase(
+        DeleteMemoryRequest(
+            request_id="req-erase-audit",
+            user_id="user-1",
+            scope=DeleteScope.MEMORY,
+            operation_id="op-erase-audit",
+            memory_id=memory.memory_id,
+        )
+    )
+
+    audits = repository.list_admin_audit()
+    assert audits
+    audit = audits[-1]
+    assert audit.action == "memory.erase"
+    assert audit.detail["affected_memories"] == 1
+    assert audit.detail["mem0_history_purged"] is False
+    assert "SECRET-TOKEN" not in str(audit.detail)

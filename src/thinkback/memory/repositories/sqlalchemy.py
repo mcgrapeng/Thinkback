@@ -15,7 +15,7 @@ from typing import Any, TypeVar
 from uuid import uuid4
 
 from loguru import logger
-from sqlalchemy import and_, func, literal, not_, or_, select, update
+from sqlalchemy import and_, delete, func, literal, not_, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -922,6 +922,72 @@ class SqlAlchemyMemoryRepository(L1CacheMixin):
 
     def mark_memory_deleted(self, memory_id: str) -> MemoryIndexEntry | None:
         return self._run(self._mark_memory_deleted(memory_id))
+
+    def delete_memory_rows(self, memory_ids: list[str]) -> int:
+        """物理删除 L3 业务索引行（erase 语义）。"""
+        return self._run(self._delete_memory_rows(memory_ids))
+
+    async def _delete_memory_rows(self, memory_ids: list[str]) -> int:
+        if not memory_ids:
+            return 0
+        async with self.session_factory() as session:
+            result = await session.execute(
+                delete(MemoryRecord).where(MemoryRecord.memory_id.in_(memory_ids))
+            )
+            await session.commit()
+            return int(getattr(result, "rowcount", 0) or 0)
+
+    def delete_rounds(
+        self,
+        user_id: str,
+        memory_scope_id: str,
+        session_id: str | None = None,
+        round_ids: list[str] | None = None,
+    ) -> int:
+        """物理删除 L1 轮次原文行（erase 语义）。"""
+        return self._run(self._delete_rounds(user_id, memory_scope_id, session_id, round_ids))
+
+    async def _delete_rounds(
+        self,
+        user_id: str,
+        memory_scope_id: str,
+        session_id: str | None = None,
+        round_ids: list[str] | None = None,
+    ) -> int:
+        conditions = [
+            SummaryRoundJournalRecord.user_id == user_id,
+            SummaryRoundJournalRecord.memory_scope_id == memory_scope_id,
+        ]
+        if session_id is not None:
+            conditions.append(SummaryRoundJournalRecord.session_id == session_id)
+        if round_ids is not None:
+            conditions.append(SummaryRoundJournalRecord.round_id.in_(round_ids))
+        async with self.session_factory() as session:
+            result = await session.execute(
+                delete(SummaryRoundJournalRecord).where(and_(*conditions))
+            )
+            await session.commit()
+            return int(getattr(result, "rowcount", 0) or 0)
+
+    def clear_summary(self, user_id: str, memory_scope_id: str) -> None:
+        """清空 L2 会话摘要正文（erase 语义）。"""
+        self._run(self._clear_summary(user_id, memory_scope_id))
+
+    async def _clear_summary(self, user_id: str, memory_scope_id: str) -> None:
+        async with self.session_factory() as session:
+            record = await session.scalar(
+                select(CurrentSummaryRecord).where(
+                    and_(
+                        CurrentSummaryRecord.user_id == user_id,
+                        CurrentSummaryRecord.memory_scope_id == memory_scope_id,
+                    )
+                )
+            )
+            if record is None:
+                return
+            record.summary_text = ""
+            record.structured_sections = {}
+            await session.commit()
 
     async def _mark_memory_deleted(self, memory_id: str) -> MemoryIndexEntry | None:
         return await self._set_memory_status(memory_id, MemoryStatus.DELETED)

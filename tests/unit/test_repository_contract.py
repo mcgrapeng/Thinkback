@@ -858,3 +858,54 @@ def test_admin_audit_round_trip_orders_desc(repository) -> None:  # type: ignore
         "audit-1"
     ]
     assert repository.list_admin_audit(action="nope") == []
+
+
+# ---------------------------------------------------------------------------
+# erase 语义：物理删除（两条后端行为必须一致）
+# ---------------------------------------------------------------------------
+
+
+def test_delete_memory_rows_removes_rows_physically(repository) -> None:  # type: ignore[no-untyped-def]
+    first = repository.add_memory_index(
+        backend_memory_id="b-erase-1",
+        user_id="user-1",
+        memory_scope_id="thinkback",
+        source_refs=[],
+        memory_text="User is vegetarian",
+    )
+    second = repository.add_memory_index(
+        backend_memory_id="b-erase-2",
+        user_id="user-1",
+        memory_scope_id="thinkback",
+        source_refs=[],
+        memory_text="User lives in Shanghai",
+    )
+
+    deleted = repository.delete_memory_rows([first.memory_id])
+
+    assert deleted == 1
+    assert repository.get_memory_index(first.memory_id) is None
+    assert repository.get_memory_index(second.memory_id) is not None
+
+
+def test_delete_rounds_removes_only_requested_rounds(repository) -> None:  # type: ignore[no-untyped-def]
+    repository.save_round(make_append(round_id="r-keep"))
+    repository.save_round(make_append(round_id="r-drop"))
+
+    deleted = repository.delete_rounds("user-1", "session-1", round_ids=["r-drop"])
+
+    assert deleted == 1
+    assert repository.get_round("r-keep") is not None
+    assert repository.get_round("r-drop") is None
+
+
+def test_clear_summary_empties_text(repository) -> None:  # type: ignore[no-untyped-def]
+    repository.upsert_summary_from_rounds(
+        "user-1", "session-1", repository.list_rounds("user-1", "session-1")
+    )
+
+    repository.clear_summary("user-1", "session-1")
+
+    summary = repository.get_summary("user-1", "session-1")
+    assert summary is not None
+    assert summary.summary_text == ""
