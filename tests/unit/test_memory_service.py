@@ -16,7 +16,6 @@ from thinkback.memory.schemas import (
     AppendMemoryRequest,
     DeleteMemoryRequest,
     DeleteScope,
-    MemoryItem,
     MemoryStatus,
     MemoryType,
     MessageRole,
@@ -2395,7 +2394,8 @@ def test_recall_uses_business_index_directly_for_clear_slot_queries() -> None:
         )
     )
 
-    assert backend.search_count == 0
+    # 语义检索始终执行（复合提问不能只看一个槽位）；业务索引仍提供该槽位事实。
+    assert backend.search_count >= 1
     assert [item.content for item in response.items if item.layer == "L3"] == [
         "User has a dog named 豆包"
     ]
@@ -3306,7 +3306,14 @@ def test_recall_searches_backend_for_non_slot_city_topic_queries() -> None:
     ]
 
 
-def test_recall_filters_noisy_backend_items_for_unrelated_non_slot_query() -> None:
+def test_recall_keeps_engine_items_without_local_word_overlap() -> None:
+    """引擎判相关的项即使与 query 词面无交集也要保留。
+
+    旧实现在本地用词典交集硬过滤，语义等价的记忆会被误杀
+    （"User is vegetarian." ↔ "What should I eat?"）。相关度归引擎
+    （mem0 2.2.x 的 semantic + BM25 + entity 融合分 + threshold），
+    Thinkback 只做本地索引状态过滤。
+    """
     repository = InMemoryMemoryRepository()
     backend = NoisySearchBackend()
     service = MemoryService(repository=repository, backend=backend)
@@ -3322,6 +3329,33 @@ def test_recall_filters_noisy_backend_items_for_unrelated_non_slot_query() -> No
         "event": "ADD",
         "user_id": "user-1",
         "agent_id": "thinkback",
+        "metadata": {},
+        "score": 0.9,
+    }
+
+    response = service.recall(
+        RecallMemoryRequest(
+            user_id="user-1",
+            session_id="session-2",
+            query="用户最近提到咖啡馆了吗？",
+        )
+    )
+
+    assert [item.content for item in response.items if item.layer == "L3"] == [
+        "User has a dog named 豆包"
+    ]
+
+
+def test_recall_excludes_engine_items_missing_from_local_index() -> None:
+    """本地索引里没有（或已失效）的引擎命中不得进入上下文。"""
+    repository = InMemoryMemoryRepository()
+    backend = NoisySearchBackend()
+    service = MemoryService(repository=repository, backend=backend)
+    backend.memories["not-indexed"] = {
+        "id": "not-indexed",
+        "user_id": "user-1",
+        "agent_id": "thinkback",
+        "memory": "User has a dog named 豆包",
         "metadata": {},
         "score": 0.9,
     }
@@ -4026,9 +4060,12 @@ def test_recall_backfills_sleep_reminder_slot_when_backend_misses() -> None:
     assert l3_contents == ["User sleep reminder preference: okay with gentle sleep reminders"]
 
 
-def test_recall_does_not_search_backend_when_known_slot_has_no_active_business_index_match() -> (
-    None
-):
+def test_recall_searches_backend_even_when_known_slot_has_no_active_business_index_match() -> None:
+    """槽位没有活跃事实时仍要检索引擎，但本地索引里没有的命中不得进上下文。
+
+    旧实现在这里完全跳过 backend.search，复合提问会因此丢掉一半答案；
+    现在检索始终执行，精度由本地索引状态 + 引擎阈值保证。
+    """
     backend = RecordingSearchBackend()
     service = MemoryService(repository=InMemoryMemoryRepository(), backend=backend)
     backend.memories["stale-cat"] = {
@@ -4049,7 +4086,7 @@ def test_recall_does_not_search_backend_when_known_slot_has_no_active_business_i
     )
 
     assert [item.content for item in response.items if item.layer == "L3"] == []
-    assert backend.search_count == 0
+    assert backend.search_count >= 1
 
 
 def test_recall_token_budget_prefers_l3_over_l1_when_clipping() -> None:
@@ -7030,25 +7067,16 @@ def test_context_terms_marker_set_dedup() -> None:
 #   覆盖)；本测试断言 _should_skip_backend_search 存在并被 recall 实际调用。
 
 
-def test_should_skip_backend_search_truth_table() -> None:
-    """S4: 抽出的 _should_skip_backend_search 真值表完整覆盖（4 行）。"""
-    items_with_l3 = [MemoryItem(layer="L3", content="x", source="mem0", memory_id="m1")]
-    items_no_l3: list[Any] = []
-    assert MemoryService._should_skip_backend_search("preferred_nickname", items_with_l3) is True
-    assert MemoryService._should_skip_backend_search("preferred_nickname", items_no_l3) is True
-    assert MemoryService._should_skip_backend_search(None, items_with_l3) is False
-    assert MemoryService._should_skip_backend_search(None, items_no_l3) is False
+def test_query_conflict_slots_distinguishes_single_and_composite_questions() -> None:
+    """单槽位提问命中一个槽位；复合提问命中多个槽位（用于决定要不要按槽位过滤）。"""
+    from thinkback.domain.slots import query_conflict_slots
 
-
-def test_recall_uses_extracted_skip_backend_search_function() -> None:
-    """S4: recall 实际通过 _should_skip_backend_search 决定是否调 backend.search。"""
-    import inspect
-
-    source = inspect.getsource(MemoryService.recall)
-    assert "_should_skip_backend_search" in source
-    assert 'if query_slot and not any(item.layer == "L3"' not in source, (
-        "S4 内联: 'if ... pass' 死代码应已被 _should_skip_backend_search 取代"
-    )
+    assert query_conflict_slots("用户的猫叫什么？") == ["pet_name:cat"]
+    assert query_conflict_slots("我住哪里，最近喜欢喝什么？") == [
+        "current_location",
+        "favorite:drink",
+    ]
+    assert query_conflict_slots("今天天气怎么样") == []
 
 
 # ---------------------------------------------------------------------------
@@ -8289,3 +8317,138 @@ def test_classification_defaults_and_unknown_values() -> None:
         assert_storable("sensitive")
     assert_storable("personal")
     assert_storable("normal")
+
+
+class _CountingSearchBackend(FakeMemoryBackend):
+    """记录 search 调用次数，并可固定返回一条事实。"""
+
+    def __init__(self, fixed_memory: str | None = None) -> None:
+        super().__init__()
+        self.search_calls = 0
+        self.fixed_memory = fixed_memory
+
+    def add(self, messages, *, user_id, memory_scope_id, metadata=None, infer=True):  # type: ignore[no-untyped-def]
+        if self.fixed_memory is None:
+            return super().add(
+                messages,
+                user_id=user_id,
+                memory_scope_id=memory_scope_id,
+                metadata=metadata,
+                infer=infer,
+            )
+        memory_id = "fixed-fact-1"
+        self.memories[memory_id] = {
+            "id": memory_id,
+            "memory": self.fixed_memory,
+            "event": "ADD",
+            "user_id": user_id,
+            "agent_id": memory_scope_id,
+            "metadata": metadata or {},
+            "score": 1.0,
+        }
+        return [{"id": memory_id, "memory": self.fixed_memory, "event": "ADD"}]
+
+    def search(self, query, *, user_id, memory_scope_id, limit, threshold=None):  # type: ignore[no-untyped-def]
+        self.search_calls += 1
+        if self.fixed_memory is not None:
+            return [
+                {
+                    "id": "fixed-fact-1",
+                    "memory": self.fixed_memory,
+                    "event": "ADD",
+                    "score": 0.9,
+                }
+            ]
+        return super().search(
+            query,
+            user_id=user_id,
+            memory_scope_id=memory_scope_id,
+            limit=limit,
+            threshold=threshold,
+        )
+
+
+def test_recall_keeps_current_turn_when_l3_floods_budget() -> None:
+    """长期事实占满预算时，当前对话（L1）与会话摘要（L2）仍必须进入上下文。"""
+    repository = InMemoryMemoryRepository()
+    backend = FakeMemoryBackend()
+    service = MemoryService(repository=repository, backend=backend, l3_write_mode="sync")
+    for index in range(5):
+        service.append(
+            make_append(
+                round_id=f"round-flood-{index}",
+                content=f"用户的偏好条目 {index} " + "很长很长很长很长很长的内容" * 4,
+                round_index=index + 1,
+            )
+        )
+
+    response = service.recall(
+        RecallMemoryRequest(
+            user_id="user-1",
+            session_id="session-1",
+            query="用户偏好",
+            token_budget=300,
+        )
+    )
+
+    layers = {item.layer for item in response.items}
+    # 当前对话与长期事实都不能被挤掉；L2 是派生摘要，预算极紧时先让位。
+    assert "L1" in layers
+    assert "L3" in layers
+
+
+def test_recall_does_not_skip_semantic_search_for_slot_query() -> None:
+    """命中固定槽位的查询仍要跑语义检索（复合提问不能只看一个槽位）。"""
+    repository = InMemoryMemoryRepository()
+    backend = _CountingSearchBackend()
+    service = MemoryService(repository=repository, backend=backend, l3_write_mode="sync")
+    service.append(make_append(round_id="round-slot", content="我现在住在杭州"))
+
+    service.recall(
+        RecallMemoryRequest(
+            user_id="user-1",
+            session_id="session-1",
+            query="我现在住在哪里？",
+        )
+    )
+
+    assert backend.search_calls >= 1
+
+
+def test_recall_keeps_paraphrase_match() -> None:
+    """同义表达不能被词典交集硬过滤掉（User is vegetarian ↔ What should I eat）。"""
+    repository = InMemoryMemoryRepository()
+    backend = _CountingSearchBackend(fixed_memory="User is vegetarian.")
+    service = MemoryService(repository=repository, backend=backend, l3_write_mode="sync")
+    service.append(make_append(round_id="round-paraphrase", content="饮食偏好"))
+
+    response = service.recall(
+        RecallMemoryRequest(
+            user_id="user-1",
+            session_id="session-1",
+            query="What should I eat?",
+        )
+    )
+
+    assert any("vegetarian" in item.content for item in response.items)
+
+
+def test_recall_l1_preserves_speaker_roles() -> None:
+    """L1 内容要保留角色，否则助手断言会被当成用户事实。"""
+    repository = InMemoryMemoryRepository()
+    backend = FakeMemoryBackend()
+    service = MemoryService(repository=repository, backend=backend, l3_write_mode="sync")
+    service.append(make_append(round_id="round-roles", content="我住杭州"))
+
+    response = service.recall(
+        RecallMemoryRequest(
+            user_id="user-1",
+            session_id="session-1",
+            query="我住杭州",
+        )
+    )
+
+    l1_items = [item for item in response.items if item.layer == "L1"]
+    assert l1_items
+    assert "user:" in l1_items[0].content
+    assert "assistant:" in l1_items[0].content

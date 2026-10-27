@@ -36,6 +36,7 @@ from thinkback.domain.slots.query_slots import (
     context_terms,
     memory_context_allowed,
     query_conflict_slot,
+    query_conflict_slots,
     query_is_broad_memory_request,
 )
 from thinkback.domain.slots.support import (
@@ -74,6 +75,7 @@ __all__ = [
     "p0_canonical_memory_for_source_slot",
     "p0_canonical_memories_from_source",
     "query_conflict_slot",
+    "query_conflict_slots",
     "query_is_broad_memory_request",
     "round_order",
     "should_extract_to_l3",

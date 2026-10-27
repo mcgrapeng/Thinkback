@@ -286,11 +286,12 @@ def test_quality_survives_token_budget_clipping() -> None:
     assert [item.memory_id for item in result] == ["m-high"]
 
 
-def test_clip_stops_at_first_over_budget_item() -> None:
-    """预算裁剪取「排名前缀」：排第一的装不下就停，不再塞后面便宜的条目。
+def test_clip_skips_oversized_item_and_keeps_the_rest() -> None:
+    """预算裁剪：装不下的单条跳过，后面装得下的仍然注入。
 
-    旧实现用 ``continue`` —— 第一条超预算时跳过它、把后面便宜的塞进来，
-    注入的集合与排序结论自相矛盾（高质量被砍、低质量挤进上下文）。
+    旧实现遇到第一条超预算就停（取「排名前缀」），结果是一条超长内容
+    把整层清空、上下文直接空包。引擎已按相关度排好序，后面的条目同样
+    相关，只是更短 —— 跳过它比什么都不注入好。
     """
     first = _l3(HIGH_QUALITY, "m-first", recall_count=0)
     second = _l3(LOW_QUALITY, "m-second", recall_count=0)
@@ -299,7 +300,7 @@ def test_clip_stops_at_first_over_budget_item() -> None:
         [first, second], token_budget=estimate_tokens(HIGH_QUALITY) - 1, now=_now()
     )
 
-    assert result == []
+    assert [item.memory_id for item in result] == ["m-second"]
 
 
 def test_estimate_tokens_counts_chinese_as_one_token_per_char() -> None:
@@ -359,3 +360,16 @@ def test_quality_does_not_change_item_count_or_layers() -> None:
 
     assert len(result) == 3
     assert {item.layer for item in result} == {"L3", "L1"}
+
+
+def test_clip_keeps_newest_l1_turns_when_budget_is_tight() -> None:
+    """预算紧时保留最近的对话轮次，而不是最旧的。"""
+    oldest = MemoryItem(layer="L1", content="第一轮", source="r1")
+    middle = MemoryItem(layer="L1", content="第二轮", source="r2")
+    newest = MemoryItem(layer="L1", content="第三轮", source="r3")
+
+    result = dedupe_and_clip(
+        [oldest, middle, newest], token_budget=estimate_tokens("第一轮"), now=_now()
+    )
+
+    assert [item.source for item in result] == ["r3"]
