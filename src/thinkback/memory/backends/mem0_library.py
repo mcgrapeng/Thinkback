@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import concurrent.futures
+import sqlite3
 import time
 from collections.abc import Callable
 from contextlib import contextmanager, suppress
@@ -33,13 +34,18 @@ THINKBACK_OPENAI_EMBEDDER_CLASS = (
 # 4) **修正记录只写新事实，不要复读旧值** —— 当用户纠正「不叫 X，叫 Y」时，
 #    memory 只记录新事实 Y（"现在叫 Y"），不需要在同一条记忆里复读 X。
 #    这样审计 / 不变量检查才能稳定判定旧事实已被替换。
+# 7) 「New Messages 只有 user 一条」是常态（thinkback 的 L3 抽取只喂 user 消息，
+#    assistant 的话不是用户事实来源）。实测 zhiman38_27b 在只有 user 一条时直接返回
+#    {"memory": []}——整轮抽取静默为空，L3 永远写不进东西。这条规则把它掰回来，
+#    且不需要把 assistant 内容放回抽取输入（不变量不破）。
 THINKBACK_CUSTOM_INSTRUCTIONS = """Additional requirements:
 1. Language: write each memory text in the SAME language as the conversation (Chinese conversations → Chinese memories). Never translate Chinese names, nicknames, places, or brands into English.
 2. Output shape: return exactly {"memory": [{"id": "<sequential string>", "text": "<one self-contained memory>"}]}. Every "text" MUST be a plain string; never nest arrays or objects inside it.
 3. Preserve Chinese entities verbatim (宠物名/昵称/地点/品牌逐字保留), including tone particles only when they are part of a name.
 4. Corrections write only the new value, never re-state the old one. When the user says "不叫 X，叫 Y" or "改成 Y", record only the new fact Y. Do NOT include X in the same memory text. The superseded memory is handled by a separate update path; your job is to surface the current truth, not the audit trail.
 5. One fact per memory. If a turn contains multiple distinct facts, emit one memory per fact. Never combine "X is Y" + "X is Z" into a single memory.
-6. Output must be pure Chinese characters and Chinese punctuation. Do NOT append a parenthetical pinyin transliteration (e.g. "Mashu (麻薯)"). Write only the entity value in Chinese."""
+6. Output must be pure Chinese characters and Chinese punctuation. Do NOT append a parenthetical pinyin transliteration (e.g. "Mashu (麻薯)"). Write only the entity value in Chinese.
+7. The "New Messages" section may contain ONLY a "user" message — the assistant has not replied yet, or the caller deliberately filtered assistant turns out. That is expected and normal: extract the user's facts from it anyway. NEVER return an empty list merely because there is no assistant turn to extract from."""
 
 
 def build_mem0_library_config(
