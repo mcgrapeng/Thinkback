@@ -306,7 +306,9 @@ Expected: FAIL，recall 直接返回 append 的缓存响应
 def fingerprint(messages: list[dict[str, Any]]) -> str:
     payload = json.dumps(
         [{"role": m["role"], "content": m["content"]} for m in messages],
-        ensure_ascii=False, sort_keys=True, separators=(",", ":"),
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
     )
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 ```

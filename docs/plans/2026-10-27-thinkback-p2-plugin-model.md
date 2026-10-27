@@ -62,6 +62,7 @@ Expected: FAIL（当前两个 namespace 写进同一个 thinkback scope，互相
 ```python
 NAMESPACE_PATTERN = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
 
+
 def _validate_namespace(value: str) -> str:
     if not NAMESPACE_PATTERN.match(value):
         raise ValueError("namespace must match [A-Za-z0-9_.-]{1,64}")
@@ -117,8 +118,9 @@ class MemoryTypeSpec:
     recall_budget: int | None = None
     entity_vocabulary: tuple[str, ...] = ()
 
+
 class MemoryTypeRegistry:
-    def get(self, name: str) -> MemoryTypeSpec: ...        # 未注册 → KeyError
+    def get(self, name: str) -> MemoryTypeSpec: ...  # 未注册 → KeyError
     def default(self) -> MemoryTypeSpec: ...
     def for_namespace(self, namespace: str) -> "MemoryTypeRegistry": ...
 ```
