@@ -47,6 +47,31 @@ def test_idempotent_replay_on_same_route() -> None:
         assert r2.headers.get("X-Idempotent-Replay") == "true"
 
 
+def test_read_path_is_not_cached_or_replayed() -> None:
+    """recall 是读操作：响应不得进幂等缓存。
+
+    缓存它意味着擦除后，同一把 Idempotency-Key 仍能回放含旧内容的响应。
+    """
+    from thinkback.api.idempotency import IdempotencyMiddleware
+
+    app = FastAPI()
+    app.add_middleware(IdempotencyMiddleware)
+    calls = {"n": 0}
+
+    @app.post("/memory/recall")
+    async def route_recall() -> dict[str, str]:
+        calls["n"] += 1
+        return {"call": str(calls["n"])}
+
+    with TestClient(app) as client:
+        headers = {"Idempotency-Key": "recall-read-key"}
+        first = client.post("/memory/recall", json={"x": 1}, headers=headers)
+        second = client.post("/memory/recall", json={"x": 1}, headers=headers)
+        assert first.json() == {"call": "1"}
+        assert second.json() == {"call": "2"}
+        assert "X-Idempotent-Replay" not in second.headers
+
+
 def test_expired_idempotency_entry_does_not_conflict() -> None:
     """过期条目必须连冲突索引一起清理，否则新 body 永远 409。"""
     cache = IdempotencyCache()
