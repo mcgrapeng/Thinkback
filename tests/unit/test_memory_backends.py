@@ -1,4 +1,5 @@
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 from threading import Barrier, Event, Lock, get_ident
 from time import sleep
 from typing import Any
@@ -150,10 +151,11 @@ def test_openai_compatible_embedding_omits_dimensions_and_uses_dummy_key(monkeyp
     result = embedder.embed("ping\npong", memory_action="search")
 
     assert result == [0.1, 0.2, 0.3]
-    assert observed["client_kwargs"] == {
-        "api_key": "not-required",
-        "base_url": "http://embedding.example.internal:7345/v1",
-    }
+    client_kwargs = observed["client_kwargs"]
+    assert client_kwargs["api_key"] == "not-required"
+    assert client_kwargs["base_url"] == "http://embedding.example.internal:7345/v1"
+    # 内网网关不该被环境里的代理劫持 → 客户端不信任环境代理
+    assert client_kwargs["http_client"].trust_env is False
     assert observed["create_kwargs"] == {
         "input": ["ping pong"],
         "model": "default-embedding",
@@ -1062,3 +1064,76 @@ def test_mem0_library_backend_delete_does_not_retry_unrelated_valueerrors(
     with pytest.raises(RuntimeError, match="connection refused"):
         backend.delete("m1")
     assert sleeps == []
+
+
+def test_mem0_library_backend_purge_history_removes_history_and_messages(
+    tmp_path: Path,
+) -> None:
+    """物理擦除引擎侧残留：按 memory_id 删历史，按 session scope 删原始消息。"""
+    import sqlite3
+
+    from thinkback.memory.backends import Mem0LibraryMemoryBackend
+
+    db_path = tmp_path / "history.db"
+    connection = sqlite3.connect(db_path)
+    connection.execute(
+        """
+        CREATE TABLE history (
+            id TEXT PRIMARY KEY, memory_id TEXT, old_memory TEXT, new_memory TEXT,
+            event TEXT, created_at DATETIME, updated_at DATETIME,
+            is_deleted INTEGER, actor_id TEXT, role TEXT
+        )
+        """
+    )
+    connection.execute(
+        """
+        CREATE TABLE messages (
+            id TEXT PRIMARY KEY, session_scope TEXT, role TEXT,
+            content TEXT, name TEXT, created_at DATETIME
+        )
+        """
+    )
+    connection.execute(
+        "INSERT INTO history (id, memory_id, old_memory, new_memory, event)"
+        " VALUES ('h1', 'm1', '旧事实 SECRET', '新事实', 'UPDATE')"
+    )
+    connection.execute(
+        "INSERT INTO history (id, memory_id, old_memory, new_memory, event)"
+        " VALUES ('h2', 'm2', '别人的事实', '别的', 'ADD')"
+    )
+    connection.execute(
+        "INSERT INTO messages (id, session_scope, role, content)"
+        " VALUES ('msg1', 'agent_id=thinkback&user_id=u1', 'user', '原始对话 SECRET')"
+    )
+    connection.execute(
+        "INSERT INTO messages (id, session_scope, role, content)"
+        " VALUES ('msg2', 'agent_id=other&user_id=u1', 'user', '别人的对话')"
+    )
+    connection.commit()
+    connection.close()
+
+    backend = Mem0LibraryMemoryBackend(config={"history_db_path": str(db_path)})
+    counts = backend.purge_history(user_id="u1", memory_ids=["m1"], scopes=["thinkback"])
+
+    assert counts == {"history": 1, "messages": 1}
+
+    connection = sqlite3.connect(db_path)
+    try:
+        history_ids = [row[0] for row in connection.execute("SELECT id FROM history")]
+        message_ids = [row[0] for row in connection.execute("SELECT id FROM messages")]
+    finally:
+        connection.close()
+    # 目标行没了，别人家的行还在
+    assert history_ids == ["h2"]
+    assert message_ids == ["msg2"]
+
+
+def test_mem0_library_backend_purge_history_without_history_db_is_noop() -> None:
+    """没有配置 history_db_path 时不报错，返回零计数。"""
+    from thinkback.memory.backends import Mem0LibraryMemoryBackend
+
+    backend = Mem0LibraryMemoryBackend(config={})
+    assert backend.purge_history(user_id="u1", memory_ids=["m1"], scopes=["thinkback"]) == {
+        "history": 0,
+        "messages": 0,
+    }

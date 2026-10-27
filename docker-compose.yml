@@ -13,7 +13,10 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
       POSTGRES_DB: ${POSTGRES_DATABASE:-thinkback}
     volumes:
-      - postgres-data:/var/lib/postgresql/data
+      # PG 18+ 要求整卷挂在 /var/lib/postgresql（数据落在其版本子目录里）。
+      # 挂在 /var/lib/postgresql/data 会被镜像判定为「升级了镜像没升级数据目录」
+      # 而拒绝启动。
+      - postgres-data:/var/lib/postgresql
     networks:
       - thinkback-network
 

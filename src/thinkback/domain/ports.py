@@ -343,6 +343,18 @@ class MemoryBackend(Protocol):
         """删除指定 user+scope 范围内所有后端记忆，返回被删除条数。"""
         ...
 
+    def purge_history(
+        self, *, user_id: str, memory_ids: list[str], scopes: list[str]
+    ) -> dict[str, int]:
+        """物理擦除引擎侧残留：事实抽取历史 + 原始消息。
+
+        ``memory_ids`` 是被擦除的后端记忆 ID（对应引擎历史里的 memory_id）；
+        ``scopes`` 是被擦除的记忆作用域（引擎按 user+scope 存原始消息）。
+
+        返回 ``{"history": n, "messages": n}``：实际删除的行数。
+        """
+        ...
+
 
 class HistorySource(Protocol):
     """外部会话历史回放源（rebuild 输入）。

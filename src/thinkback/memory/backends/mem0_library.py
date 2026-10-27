@@ -535,6 +535,77 @@ class Mem0LibraryMemoryBackend:
         ).info("memory backend delete_all completed")
         return deleted
 
+    def purge_history(
+        self, *, user_id: str, memory_ids: list[str], scopes: list[str]
+    ) -> dict[str, int]:
+        """物理擦除引擎侧残留：事实抽取历史 + 原始消息。
+
+        Mem0 2.2.1 没有公开的 history 清理接口，但它把两类原文落在本地
+        SQLite（``history_db_path``）：
+
+        - ``history`` 表：``old_memory`` / ``new_memory`` 存事实文本，
+          按 ``memory_id`` 索引；
+        - ``messages`` 表：按 ``session_scope``（user + agent）存最近 10 条
+          **原始消息**，内容就是对话原文。
+
+        这里对同一份 SQLite 文件做定向 DELETE —— 不改引擎行为、不改表结构，
+        只删指定记忆与指定作用域的行。
+
+        已知边界：``history.db`` 是进程本地文件，多副本部署时每个副本各有一份，
+        一次擦除只清到当前副本（与本适配器里记录的既有边界一致）。
+        """
+        counts = {"history": 0, "messages": 0}
+        history_db_path = self.config.get("history_db_path")
+        if not isinstance(history_db_path, str) or not history_db_path:
+            return counts
+        connection = sqlite3.connect(history_db_path, timeout=10.0)
+        try:
+            tables = {
+                str(row[0])
+                for row in connection.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                ).fetchall()
+            }
+            with connection:
+                if memory_ids and "history" in tables:
+                    placeholders = ",".join("?" for _ in memory_ids)
+                    cursor = connection.execute(
+                        f"DELETE FROM history WHERE memory_id IN ({placeholders})",
+                        memory_ids,
+                    )
+                    counts["history"] = max(cursor.rowcount, 0)
+                if scopes and "messages" in tables:
+                    for scope in scopes:
+                        cursor = connection.execute(
+                            "DELETE FROM messages WHERE session_scope = ?",
+                            (self._mem0_session_scope(user_id, scope),),
+                        )
+                        counts["messages"] += max(cursor.rowcount, 0)
+        finally:
+            connection.close()
+        logger.bind(user_id=user_id, scope_count=len(scopes), **counts).info(
+            "memory backend history purge completed"
+        )
+        return counts
+
+    @staticmethod
+    def _mem0_session_scope(user_id: str, agent_id: str) -> str:
+        """复刻 mem0 的 session scope 拼法（``mem0.memory.main._build_session_scope``）。
+
+        键按字母序：agent_id → run_id → user_id（我们不传 run_id）。
+        """
+        values = {"agent_id": agent_id, "user_id": user_id}
+
+        def escape(value: str) -> str:
+            return value.replace("%", "%25").replace("&", "%26").replace("=", "%3D")
+
+        parts = [
+            f"{key}={escape(str(values[key]))}"
+            for key in ("agent_id", "run_id", "user_id")
+            if values.get(key)
+        ]
+        return "&".join(parts)
+
     def health_check(self) -> dict[str, str]:
         """只读探活：查询向量库，不写入任何数据。
 

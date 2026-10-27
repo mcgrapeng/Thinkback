@@ -1,0 +1,34 @@
+# 内嵌 etcd（standalone 模式）的服务端配置。
+#
+# 为什么要单独一个文件：Milvus 的参数表（user.yaml）不认 etcd 的服务端参数，
+# 内嵌 etcd 只认 `etcd.config.path`（等价环境变量 ETCD_CONFIG_PATH）指向的一个
+# etcd 格式 YAML，由 etcd 自己的 embed.ConfigFromFile 解析。
+#
+# 为什么必须调这些值（Docker Desktop / arm64 本机实测）：
+#   默认 election-timeout=1s / heartbeat-interval=100ms。容器卷落在
+#   Docker Desktop 的 Docker.raw 上，fsync 实测要 5~9s（etcd 日志
+#   "slow fdatasync took 5.7s"）。一次慢 fsync 就超过选主窗口 ⇒ 丢 leader ⇒
+#   Milvus session 初始化拿到 ErrLeaderChanged ⇒ v2.6.15 直接 panic（退出码 134）。
+#   把窗口放大到 heartbeat 2s / election 10s，慢 fsync 就不会误杀 leader。
+#   默认 snapshot-count=100000 ⇒ WAL 一直长；被强杀后开机要重放整个 WAL，
+#   正好落在选主窗口里。调到 1000 让快照更勤 ⇒ 重放段更短。
+#
+# unsafe-no-fsync 牺牲崩溃时的完整性（WAL 可能写坏）：单机 dev 划算，
+# 真写坏了按 README 的恢复步骤处理（清 etcd/member 后重建集合）。
+name: default
+data-dir: /var/lib/milvus/etcd
+snapshot-count: 1000
+max-wals: 10
+max-snapshots: 5
+heartbeat-interval: 2000
+election-timeout: 10000
+listen-peer-urls: http://localhost:2380
+initial-advertise-peer-urls: http://localhost:2380
+listen-client-urls: http://localhost:2379
+advertise-client-urls: http://localhost:2379
+initial-cluster: default=http://localhost:2380
+initial-cluster-state: new
+auto-compaction-mode: revision
+auto-compaction-retention: '1000'
+quota-backend-bytes: 4294967296
+unsafe-no-fsync: true
