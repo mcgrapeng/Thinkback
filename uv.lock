@@ -1764,6 +1764,7 @@ dependencies = [
     { name = "greenlet" },
     { name = "grpcio" },
     { name = "grpcio-reflection" },
+    { name = "httpx" },
     { name = "loguru" },
     { name = "mem0ai" },
     { name = "openai" },
@@ -1779,7 +1780,6 @@ dependencies = [
 dev = [
     { name = "aiosqlite" },
     { name = "grpcio-tools" },
-    { name = "httpx" },
     { name = "hypothesis" },
     { name = "mutmut" },
     { name = "mypy" },
@@ -1801,6 +1801,7 @@ requires-dist = [
     { name = "greenlet", specifier = ">=3.5.0,<4" },
     { name = "grpcio", specifier = ">=1.60,<2.0" },
     { name = "grpcio-reflection", specifier = ">=1.60,<2.0" },
+    { name = "httpx", specifier = ">=0.28.0,<0.29" },
     { name = "loguru", specifier = ">=0.7.2,<0.8" },
     { name = "mem0ai", specifier = ">=2.2.1,<3" },
     { name = "openai", specifier = ">=2.12.0,<3" },
@@ -1816,7 +1817,6 @@ requires-dist = [
 dev = [
     { name = "aiosqlite", specifier = ">=0.22.1" },
     { name = "grpcio-tools", specifier = ">=1.60,<2.0" },
-    { name = "httpx", specifier = ">=0.28.0,<0.29" },
     { name = "hypothesis", specifier = ">=6.168.5" },
     { name = "mutmut", specifier = ">=3.8.0" },
     { name = "mypy", specifier = ">=1.14.0,<2" },

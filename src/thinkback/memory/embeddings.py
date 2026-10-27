@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from typing import Literal
 
+import httpx
 from loguru import logger
 from mem0.configs.embeddings.base import BaseEmbedderConfig
 from mem0.embeddings.base import EmbeddingBase
@@ -31,7 +32,13 @@ class OpenAICompatibleEmbeddingNoDimensions(EmbeddingBase):  # type: ignore[misc
         self.config.embedding_dims = self.config.embedding_dims or 1024
         api_key = self.config.api_key or "not-required"
         base_url = self.config.openai_base_url or "http://embedding.example.internal:7345/v1"
-        self.client = OpenAI(api_key=api_key, base_url=base_url)
+        # trust_env=False：内部网关不该被环境里的 HTTP/SOCKS 代理劫持
+        # （SOCKS 代理还会因为缺 socksio 直接构造失败）。
+        self.client = OpenAI(
+            api_key=api_key,
+            base_url=base_url,
+            http_client=httpx.Client(trust_env=False),
+        )
         logger.bind(
             model=self.config.model,
             embedding_dims=self.config.embedding_dims,
