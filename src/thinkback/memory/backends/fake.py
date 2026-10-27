@@ -109,6 +109,15 @@ class FakeMemoryBackend:
                 deleted += 1
         return deleted
 
+    def get_all(
+        self, *, user_id: str, memory_scope_id: str, limit: int = 200
+    ) -> list[dict[str, Any]]:
+        return [
+            dict(memory)
+            for memory in self.memories.values()
+            if memory["user_id"] == user_id and memory["agent_id"] == memory_scope_id
+        ][:limit]
+
     def delete_all(self, *, user_id: str, memory_scope_id: str) -> int:
         """删除指定 user+scope 范围内所有 fake 记忆，返回删除条数。"""
 
