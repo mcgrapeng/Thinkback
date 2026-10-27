@@ -1,0 +1,40 @@
+# Progress: Thinkback 深度审计
+
+## 2026-10-26
+
+- 已加载 agent-architecture-audit、ponytail-audit、research、dispatching-parallel-agents、planning-with-files。
+- 已检查工作树，确认存在用户未提交改动；本次审计不修改业务代码。
+- 已创建独立计划目录 `.planning/2026-10-26-thinkback-memory-audit/`。
+- 已读 README.zh-CN.md、pyproject.toml、Makefile、docs 目录。
+- 初步发现文档与 Makefile 对 `make check` / coverage 的描述漂移；尚未作为产品 bug。
+- 已完整读取 MemoryService（4,438 行）、MemoryBackend/Repository ports、Mem0 适配器、L2 刷新器、召回/槽位/摘要策略及摘要仓储实现。
+- 已并行启动：主流项目一手资料研究、只读安全审计、只读持久化/并发审计。安全专家代理因模型不可用失败一次，改用通用代理，不指定模型。
+- 行为验证（`.venv/bin/python` 内联脚本，均 exit 0，无网络/真实后端）：
+  - 复合 query `location + food preference` 返回 current_location 且跳过 backend.search=true。
+  - `What should I eat?` 对 `User is vegetarian.` 的 context_allowed=false。
+  - 超长 L3 + 短 L1、token_budget=100 时 dedupe_and_clip 返回空列表，预算饿死复现。
+  - 受控 blocking composer：refresh 快照 r1 时 append r2；最终 composer 仅调用 1 次，ACTIVE llm 摘要 cursor=r1，r2 未进入摘要，竞态复现。
+  - backend.update 模拟故障：API response=completed，本地=New fact，后端=Old fact，分叉复现。
+  - `data_classification=sensitive` 仍有 1 条记录进入 fake backend；`memory_type=project` 被改为 profile；custom_field 被丢弃。
+- 追加反例复现：assistant 独自断言的 Shanghai 成为 ACTIVE L3；白名单 + force_extract 时 backend=1/local ACTIVE=0/recall L3=0，暗数据成立。
+- `make test` 完成：834 passed，12.86s。
+- `make eval` 两次均为 20/20=100%、baseline 达标；最终采用第二次报告 eval-20261026-072433-7475d8。首次报告后续核查不存在，已记录，不作交付链接。
+- 结论：当前测试门禁绿与严重反例并存，需补高风险行为门禁而非看测试数量。
+- 已读取公开接入协议/SDK/部署/proto/env；确认 SDK 仍 TODO、MCP/Webhook 缺失、HTTP/gRPC schema 漂移、部署并非真正无状态。
+- 已整合安全与持久化子代理结果，并主线程抽查：tenant 冒号碰撞=true；legacy 匿名 200 有既有测试锁定；gRPC 无 Scope 映射；delete 与在飞 append 竞争后 backend+ACTIVE+recall 均复活；L2 delete 后旧刷新复活 marker；指纹结构化碰撞=true；幂等缓存无路由维且过期冲突残留=true。
+- 已写主流研究文件 `docs/report/2026-10-26-mainstream-memory-landscape.md`，并抽查 Mem0/Graphiti/LangMem/MCP/Zep/Cognee 一手资料。
+- 当前 git 业务 diff 仍只有用户原有 pyproject.toml 与评测脚本改动；本任务新增 .planning 和研究报告，未改业务实现。
+- 已完成路线比较、目标插件契约与分阶段修复计划。
+- 最终验证：`make test` 再次 834 passed/12.21s；解析 eval-20261026-072433-7475d8.json 确认 20 个用例全 passed、rate=1.0；4 个交付文件均存在且非空；`git diff --check` 无输出。
+- 最终工作树： tracked 修改仍为用户原有 2 个文件；本任务新增 .planning、主流研究文件和第二次 eval 报告。未修改业务实现。
+- 审计交付完成；未执行真实 PG/Milvus/LLM、多 Pod、mutation/fuzz/e2e/load/CVE 检查，残余风险已在答复中说明。
+- 用户确认：引擎固定 Mem0，不切换；三层记忆是核心需求。
+- 读取 10-19 重构计划与 10-21 加固计划全文，确认多数任务已提交（git log 有 8 个相关提交），计划文件未回填勾选。
+- 发现 10-19 计划的目标模型与用户约束冲突：Task 3.5 删 L2、Task 4.1 Milvus 默认关、Task 3.1 旧路由保留、Task 4.2 固定 scope 装饰。已在设计稿标为 D6/D7/D8 并给出建议。
+- 写设计稿 v1 后派发独立 reviewer 做 builder check，收到 10 个待裁决问题与 6 处事实错误；已全部修进 v2。
+- 用户提出引擎优先原则：引擎能做的交给引擎，只补引擎做不好的，只做引擎做不了的。已核实 Mem0 OSS 2.1.0 原生能力并重写设计稿 §2.4/§2.5：
+  - 引擎原生：事实抽取、每次写入自定义 prompt、语义检索、expiration_date + show_expired（TTL）、procedural 类型。
+  - 引擎缺口（2.1.0）：无 BM25/entity 混合检索（2.2.x 才有）、memory_type 只接受 procedural、timestamp/reference_date 是 Platform-only（OSS 抛错）、无 thread/租户/队列/history 清理/token 预算。
+  - 由此删除清单：固定槽位引擎 1,270 行、词典交集硬过滤、自造事实排序分、decay 清扫器 155 行；L3 语义全部归引擎。
+  - 新增 P0 动作：升级 mem0 2.1.0 → 2.2.x；真实 Mem0 契约套件与 make check 进 CI（现 CI 两者都没有）。
+- 下一步：用户回答 §12 的 1/3/9/10/11/12（范围、三层去留、语料场景、引擎升级、CI 门禁），然后进入 writing-plans。
