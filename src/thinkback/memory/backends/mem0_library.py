@@ -471,6 +471,19 @@ class Mem0LibraryMemoryBackend:
         ).info("memory backend delete_many completed")
         return deleted
 
+    def get_all(
+        self, *, user_id: str, memory_scope_id: str, limit: int = 200
+    ) -> list[dict[str, Any]]:
+        """列出该 user+scope 的后端记忆（含 metadata），用于重试对账。"""
+        result = self._call(
+            "get_all",
+            **self._scope_kwargs(
+                "get_all", user_id=user_id, memory_scope_id=memory_scope_id
+            ),
+            **self._limit_kwargs("get_all", limit),
+        )
+        return self._results(result)
+
     def delete_all(self, *, user_id: str, memory_scope_id: str) -> int:
         """删除指定用户和记忆范围内的所有后端记忆。
 

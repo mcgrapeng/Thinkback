@@ -569,29 +569,64 @@ L2 更新 (缓存失效)
                 self._l3.reserve_write_slot()
                 l3_slot_reserved = True
 
+            # 执行归属：同一 round 只允许一个写入者执行后端副作用。
+            # claim 是原子的（SQL 走 INSERT 冲突，内存实现走锁），
+            # 抢不到的一方直接回放对方的状态，不再重复抽取。
             previous_task = self.repository.get_task(task_id)
             was_retrying_failed_task = previous_task is not None and is_retryable(
                 previous_task.status
             )
-            task = previous_task or TaskEntry(
-                task_id=task_id,
-                request_id=request.request_id,
-                op_type=OperationType.WRITE_ROUND,
-                scope={
-                    "user_id": request.user_id,
-                    "session_id": request.session_id,
-                    "session_scope_id": session_scope_id,
-                    "long_term_scope_id": l3_scope_id,
-                },
-                status=TaskStatus.RUNNING,
-            )
-            task.request_id = request.request_id
-            task.status = TaskStatus.RUNNING
-            task.last_error = None
-            if was_retrying_failed_task:
+            if previous_task is None:
+                task, task_claimed = self.repository.claim_task(
+                    TaskEntry(
+                        task_id=task_id,
+                        request_id=request.request_id,
+                        op_type=OperationType.WRITE_ROUND,
+                        scope={
+                            "user_id": request.user_id,
+                            "session_id": request.session_id,
+                            "session_scope_id": session_scope_id,
+                            "long_term_scope_id": l3_scope_id,
+                            "round_id": request.round_id,
+                        },
+                        status=TaskStatus.RUNNING,
+                    )
+                )
+                if not task_claimed:
+                    if l3_slot_reserved:
+                        self._l3.release_write_slot()
+                        l3_slot_reserved = False
+                    return self._append_task_state_response(task, request)
+            else:
+                task = previous_task
+                if task.status in {TaskStatus.PENDING, TaskStatus.RUNNING}:
+                    if l3_slot_reserved:
+                        self._l3.release_write_slot()
+                        l3_slot_reserved = False
+                    return self._append_task_state_response(task, request)
+                if task.status is TaskStatus.COMPLETED:
+                    if l3_slot_reserved:
+                        self._l3.release_write_slot()
+                        l3_slot_reserved = False
+                    return self._append_task_state_response(task, request)
+                task.request_id = request.request_id
+                task.status = TaskStatus.RUNNING
+                task.last_error = None
                 task.retry_count += 1
                 self._check_retry_budget(task)
-            self.repository.save_task(task)
+                self.repository.save_task(task)
+
+            # 重试对账：上一次可能已经把事实写进后端、只是本地索引失败。
+            # 按来源引用找回那些记录，重试时不再重复抽取。
+            prefetched_events: list[dict[str, Any]] = []
+            if was_retrying_failed_task:
+                prefetched_events = self._prefetch_backend_events(
+                    user_id=request.user_id,
+                    memory_scope_id=l3_scope_id,
+                    source_refs=[
+                        {"session_id": request.session_id, "round_id": request.round_id}
+                    ],
+                )
             entry = existing or self.repository.save_round(request)
             entry.memory_scope_id = session_scope_id
             if restricted_or_unsafe:
@@ -633,6 +668,7 @@ L2 更新 (缓存失效)
                         ],
                         request_metadata=effective_metadata,
                         slot_reserved=l3_slot_reserved,
+                        prefetched_events=prefetched_events,
                     )
                     l3_slot_reserved = False
                     # 锁外执行 append 后台 publish 阶段收集到的 backend 写
@@ -665,6 +701,7 @@ L2 更新 (缓存失效)
                     memory_scope_id=l3_scope_id,
                     source_refs=[{"session_id": request.session_id, "round_id": request.round_id}],
                     request_metadata=effective_metadata,
+                    prefetched_events=prefetched_events,
                 )
                 current_round = self.repository.get_round(request.round_id)
                 round_deleted = (
@@ -857,6 +894,7 @@ L2 更新 (缓存失效)
         source_refs: list[dict[str, str]],
         request_metadata: dict[str, Any],
         slot_reserved: bool = False,
+        prefetched_events: list[dict[str, Any]] | None = None,
     ) -> None:
         """将 L3 写入提交到后台执行器。
 
@@ -891,6 +929,7 @@ L2 更新 (缓存失效)
                 memory_scope_id,
                 source_refs,
                 request_metadata,
+                prefetched_events,
             )
         except Exception:
             if reserved_here:
@@ -1080,6 +1119,7 @@ L2 更新 (缓存失效)
         memory_scope_id: str,
         source_refs: list[dict[str, str]],
         request_metadata: dict[str, Any],
+        prefetched_events: list[dict[str, Any]] | None = None,
     ) -> None:
         """后台完成 L3 写入并把可查询任务状态持久化。"""
 
@@ -1099,6 +1139,7 @@ L2 更新 (缓存失效)
                 memory_scope_id=memory_scope_id,
                 source_refs=source_refs,
                 request_metadata=request_metadata,
+                prefetched_events=prefetched_events,
             )
         except Exception as exc:
             # 关机竞态下 repository 可能已关闭：终态写丢失不能让回调抛异常
@@ -1147,6 +1188,67 @@ L2 更新 (缓存失效)
             return
         async_log.bind(l3_event_count=len(l3_events)).info("memory l3 async write completed")
 
+    def _append_task_state_response(
+        self, task: TaskEntry, request: AppendMemoryRequest
+    ) -> AppendMemoryResponse:
+        """回放已有任务的真实状态：不得把「别人在写」说成已完成。"""
+        if task.status is TaskStatus.COMPLETED:
+            status = "already_done"
+        elif task.status in {TaskStatus.PENDING, TaskStatus.RUNNING}:
+            status = "running"
+        else:
+            status = "failed"
+        return AppendMemoryResponse(
+            status=status,
+            task_id=task.task_id,
+            round_id=request.round_id,
+        )
+
+    def _prefetch_backend_events(
+        self,
+        *,
+        user_id: str,
+        memory_scope_id: str,
+        source_refs: list[dict[str, str]],
+    ) -> list[dict[str, Any]]:
+        """按来源引用找回后端里已经写入的记忆（重试对账）。
+
+        上一次写入可能已经把事实写进后端、只是本地索引失败；重试时复用
+        这些记录，避免重复抽取、重复计费和产生两条冲突事实。
+        """
+        try:
+            rows = self.backend.get_all(
+                user_id=user_id, memory_scope_id=memory_scope_id, limit=200
+            )
+        except Exception as exc:  # noqa: BLE001 - 对账失败不该挡住重试
+            logger.bind(
+                user_id=user_id,
+                memory_scope_id=memory_scope_id,
+                error_type=type(exc).__name__,
+            ).warning("memory append prefetch failed")
+            return []
+        wanted = {source_ref_key(ref) for ref in source_refs}
+        events: list[dict[str, Any]] = []
+        for row in rows:
+            metadata = row.get("metadata") or {}
+            if not isinstance(metadata, dict):
+                continue
+            refs = metadata.get("source_refs") or []
+            row_refs = {
+                source_ref_key(ref) for ref in refs if isinstance(ref, dict)
+            }
+            if not (wanted & row_refs):
+                continue
+            events.append(
+                {
+                    "id": row.get("id"),
+                    "memory": row.get("memory"),
+                    "event": row.get("event", "ADD"),
+                    "metadata": metadata,
+                }
+            )
+        return events
+
     def _run_l3_write(
         self,
         *,
@@ -1155,6 +1257,7 @@ L2 更新 (缓存失效)
         memory_scope_id: str,
         source_refs: list[dict[str, str]],
         request_metadata: dict[str, Any],
+        prefetched_events: list[dict[str, Any]] | None = None,
     ) -> list[dict[str, Any]]:
         """执行一次 L3 写入流程：检查删除遮罩、调用后端、刷新本地缓存。
 
@@ -1255,6 +1358,7 @@ L2 更新 (缓存失效)
             source_refs=source_refs,
             request_metadata=request_metadata,
             expiration_date=self._expiration_date(type_spec),
+            prefetched_events=prefetched_events,
         )
         run_log.bind(l3_event_count=len(l3_events)).info("memory l3 write completed")
         return l3_events
@@ -3790,6 +3894,7 @@ L2 更新 (缓存失效)
         source_refs: list[dict[str, str]],
         request_metadata: dict[str, Any],
         expiration_date: str | None = None,
+        prefetched_events: list[dict[str, Any]] | None = None,
     ) -> list[dict[str, Any]]:
         """调用 L3 后端提取长期记忆，并把返回事件交给本地索引。
 
@@ -3882,14 +3987,22 @@ L2 更新 (缓存失效)
         )
         if source_text:
             l3_metadata["source_text"] = source_text
-        events = self.backend.add(
-            trusted_messages,
-            user_id=user_id,
-            memory_scope_id=memory_scope_id,
-            metadata=l3_metadata,
-            infer=self.mem0_infer_facts,
-            expiration_date=expiration_date,
-        )
+        if prefetched_events:
+            # 重试对账：上一次已经把这些事实写进后端，只是本地索引没成功。
+            # 复用既有记录，不再重复抽取（省一次 LLM/embedding，也不再多一条事实）。
+            events = [dict(event) for event in prefetched_events]
+            add_log.bind(reason="prefetched_from_backend", backend_event_count=len(events)).info(
+                "memory l3 add reused existing backend records"
+            )
+        else:
+            events = self.backend.add(
+                trusted_messages,
+                user_id=user_id,
+                memory_scope_id=memory_scope_id,
+                metadata=l3_metadata,
+                infer=self.mem0_infer_facts,
+                expiration_date=expiration_date,
+            )
         if self._source_refs_excluded(user_id, memory_scope_id, source_refs):
             self.backend.delete_many(
                 [

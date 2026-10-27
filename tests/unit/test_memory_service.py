@@ -9046,6 +9046,80 @@ def test_erase_audit_reports_purge_state_instead_of_unconditional_true() -> None
     assert audit.detail["mem0_history_purged"] == "partial"
 
 
+class _CountingAddBackend(FakeMemoryBackend):
+    """记录 add 调用次数：断言后端副作用只发生一次。"""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.add_count = 0
+
+    def add(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+        self.add_count += 1
+        return super().add(*args, **kwargs)
+
+
+def test_concurrent_first_append_executes_backend_add_once() -> None:
+    """同一 round 的并发首次写入只能有一个执行者（后端副作用只发生一次）。"""
+    repository = InMemoryMemoryRepository()
+    backend = _CountingAddBackend()
+    service = MemoryService(repository=repository, backend=backend, l3_write_mode="sync")
+    barrier = Barrier(2)
+    responses: list[Any] = []
+    errors: list[BaseException] = []
+
+    def _append() -> None:
+        try:
+            barrier.wait(timeout=5)
+            responses.append(
+                service.append(
+                    make_append(round_id="r-concurrent-append", content="我负责 3nm 良率提升")
+                )
+            )
+        except BaseException as exc:  # pragma: no cover - 失败时由断言暴露
+            errors.append(exc)
+
+    workers = [Thread(target=_append) for _ in range(2)]
+    for worker in workers:
+        worker.start()
+    for worker in workers:
+        worker.join(timeout=10)
+
+    assert not errors
+    assert backend.add_count == 1
+    assert len(repository.active_memories("user-1", "thinkback")) == 1
+    # 抢不到执行权的一方不得声称已完成。
+    assert {response.status for response in responses} <= {"completed", "already_done", "running"}
+
+
+def test_append_retry_after_index_failure_reuses_backend_result() -> None:
+    """backend.add 成功、本地索引失败后重试：不得再写一条后端记忆。"""
+
+    class _FailOnceIndexRepository(InMemoryMemoryRepository):
+        def __init__(self) -> None:
+            super().__init__()
+            self.fail_next_add_index = True
+
+        def add_memory_index(self, **kwargs):  # type: ignore[no-untyped-def]
+            if self.fail_next_add_index:
+                self.fail_next_add_index = False
+                raise RuntimeError("simulated index failure")
+            return super().add_memory_index(**kwargs)
+
+    repository = _FailOnceIndexRepository()
+    backend = _CountingAddBackend()
+    service = MemoryService(repository=repository, backend=backend, l3_write_mode="sync")
+    request = make_append(round_id="r-append-retry", content="我负责 3nm 良率提升")
+
+    with pytest.raises(RuntimeError):
+        service.append(request)
+    assert backend.add_count == 1
+
+    service.append(request)
+
+    assert backend.add_count == 1
+    assert len(repository.active_memories("user-1", "thinkback")) == 1
+
+
 def test_erase_purges_engine_history_with_backend_ids_and_scope() -> None:
     """erase 必须把被删的后端 ID 与作用域交给引擎侧清理（历史 + 原始消息）。"""
 
