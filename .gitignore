@@ -312,5 +312,6 @@ test-results/
 playwright-report/
 blob-report/
 playwright/.cache/
+.planning
 
 # Untracked 2026-10 — docs/ is local-only iteration; kept on disk, not in git
