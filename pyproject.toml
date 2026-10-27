@@ -16,7 +16,7 @@ dependencies = [
     "loguru>=0.7.2,<0.8",
     "openai>=2.12.0,<3",
     "python-dotenv>=1.0.0,<2",
-    "mem0ai>=2.0.20,<3",
+    "mem0ai>=2.2.1,<3",
     "pymilvus>=3.0.0,<4",
     "grpcio>=1.60,<2.0",
     "grpcio-reflection>=1.60,<2.0",
@@ -106,12 +106,14 @@ omit = [
 # service.py（1500+ 行）全量变异留给 CI 夜间任务。
 source_paths = ["src"]
 only_mutate = [
+    "src/thinkback/api/auth.py",
     "src/thinkback/domain/keys.py",
     "src/thinkback/domain/summarization.py",
     "src/thinkback/memory/decay.py",
     "src/thinkback/memory/repositories/_l1_cache.py",
 ]
 pytest_add_cli_args_test_selection = [
+    "tests/unit/test_api_key_auth.py",
     "tests/unit/test_memory_decay.py",
     "tests/unit/test_memory_repositories.py",
     "tests/unit/test_repository_contract.py",
