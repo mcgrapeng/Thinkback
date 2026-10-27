@@ -45,7 +45,8 @@ THINKBACK_CUSTOM_INSTRUCTIONS = """Additional requirements:
 4. Corrections write only the new value, never re-state the old one. When the user says "不叫 X，叫 Y" or "改成 Y", record only the new fact Y. Do NOT include X in the same memory text. The superseded memory is handled by a separate update path; your job is to surface the current truth, not the audit trail.
 5. One fact per memory. If a turn contains multiple distinct facts, emit one memory per fact. Never combine "X is Y" + "X is Z" into a single memory.
 6. Output must be pure Chinese characters and Chinese punctuation. Do NOT append a parenthetical pinyin transliteration (e.g. "Mashu (麻薯)"). Write only the entity value in Chinese.
-7. The "New Messages" section may contain ONLY a "user" message — the assistant has not replied yet, or the caller deliberately filtered assistant turns out. That is expected and normal: extract the user's facts from it anyway. NEVER return an empty list merely because there is no assistant turn to extract from."""
+7. The "New Messages" section may contain ONLY a "user" message — the assistant has not replied yet, or the caller deliberately filtered assistant turns out. That is expected and normal: extract the user's facts from it anyway. NEVER return an empty list merely because there is no assistant turn to extract from.
+8. Facts include the user's own work and business context: responsibilities, process / equipment / tool facts, targets, requirements, constraints, deadlines, customer information, complaints, and numeric specifics (percentages, process nodes, tolerances). If the user's message contains ANY of these, extract at least one memory about it - returning an empty list for such a message is WRONG. Return an empty list ONLY for messages that truly contain no personal, work or business fact (pure greetings or acknowledgements)."""
 
 
 def build_mem0_library_config(
@@ -185,6 +186,8 @@ class Mem0LibraryMemoryBackend:
         self._memory_client_lock = RLock()
         self.max_concurrent_calls = max_concurrent_calls
         self._call_capacity = BoundedSemaphore(max_concurrent_calls)
+        # 集合一致性级别只需提升一次（进程级）。
+        self._consistency_ensured = False
 
     def add(
         self,
@@ -262,6 +265,9 @@ class Mem0LibraryMemoryBackend:
             **expiration_kwargs,
         )
         events = self._results(result)
+        # 集合由 mem0 首次写入时创建 —— 写完第一笔再把一致性级别提到 Strong
+        # （Bounded 下写后立刻查可能查不到刚写的向量）。
+        self._ensure_collection_consistency()
         logger.bind(
             user_id=user_id,
             memory_scope_id=memory_scope_id,
@@ -534,6 +540,33 @@ class Mem0LibraryMemoryBackend:
             deleted_count=deleted,
         ).info("memory backend delete_all completed")
         return deleted
+
+    def _ensure_collection_consistency(self) -> None:
+        """把 Milvus 集合的一致性级别提到 Strong（每个进程只做一次）。
+
+        Bounded 一致性下，写入后立刻用同一连接查可能查不到刚写的向量 ——
+        对「刚说过的话马上问」的记忆服务是硬伤。
+        """
+        if self._consistency_ensured:
+            return
+        self._consistency_ensured = True
+        collection_name = (
+            self.config.get("vector_store", {}).get("config", {}).get("collection_name")
+        )
+        if not isinstance(collection_name, str) or not collection_name:
+            return
+        from thinkback.infra.milvus import ensure_milvus_collection_consistency
+
+        ensure_milvus_collection_consistency(
+            milvus_url=str(self.config.get("vector_store", {}).get("config", {}).get("url", "")),
+            milvus_database=str(
+                self.config.get("vector_store", {}).get("config", {}).get("db_name", "")
+            ),
+            collection_name=collection_name,
+            milvus_token=str(
+                self.config.get("vector_store", {}).get("config", {}).get("token", "")
+            ),
+        )
 
     def purge_history(
         self, *, user_id: str, memory_ids: list[str], scopes: list[str]
