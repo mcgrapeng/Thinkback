@@ -350,8 +350,11 @@ class MemoryBackend(Protocol):
 
         ``memory_ids`` 是被擦除的后端记忆 ID（对应引擎历史里的 memory_id）；
         ``scopes`` 是被擦除的记忆作用域（引擎按 user+scope 存原始消息）。
+        空 ``scopes`` 表示不动原始消息——引擎的会话标识里没有 Thinkback 的
+        session/round，按 scope 删会连别的会话一起删。
 
-        返回 ``{"history": n, "messages": n}``：实际删除的行数。
+        返回 ``{"history": n, "messages": n, "supported": bool}``：实际删除的
+        行数，以及该后端是否真的支持清理引擎历史（没有 history 库时为 false）。
         """
         ...
 

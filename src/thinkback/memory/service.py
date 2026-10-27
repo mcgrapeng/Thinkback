@@ -2015,7 +2015,10 @@ L2 更新 (缓存失效)
                 purged = self.backend.purge_history(
                     user_id=request.user_id,
                     memory_ids=backend_ids,
-                    scopes=[namespace],
+                    # Mem0 的 session scope 只含 user+agent，没有 Thinkback 的
+                    # session/round：按 scope 删原始消息会连别的会话一起删。
+                    # 只有 ALL 范围才清整个 namespace 的消息。
+                    scopes=[namespace] if scope_value == DeleteScope.ALL.value else [],
                 )
 
                 def save_purged(current: TaskEntry) -> None:
@@ -2122,6 +2125,18 @@ L2 更新 (缓存失效)
         """审计只留范围与数量，不留原文；如实标注未覆盖的残留面。"""
         from thinkback.domain.entities import AdminAuditEntry
 
+        supported = bool(purged.get("supported", True))
+        if not supported:
+            # 后端没有可清理的引擎历史（未配置 history db / 测试后端）：
+            # 什么都没清，不得写成已清理。
+            purge_state = "unsupported"
+        elif request.scope is DeleteScope.ALL:
+            purge_state = "complete"
+        else:
+            # 单条/会话擦除按 memory_id 清了事实历史，但 namespace 里的原始
+            # 消息按设计保留（没有 round 级身份，无法只删自己那部分）。
+            purge_state = "partial"
+
         self.repository.save_admin_audit(
             AdminAuditEntry(
                 audit_id=f"audit-erase-{request.operation_id}",
@@ -2132,12 +2147,13 @@ L2 更新 (缓存失效)
                 detail={
                     "affected_memories": affected_memories,
                     "backend_records_deleted": len(backend_ids),
-                    "mem0_history_purged": True,
+                    "mem0_history_purged": purge_state,
                     "mem0_history_rows_deleted": int(purged.get("history", 0)),
                     "mem0_message_rows_deleted": int(purged.get("messages", 0)),
                     "note": (
                         "history.db 是进程本地文件，多副本部署需逐副本擦除；"
-                        "向量库删除为逻辑删除，物理回收需 compaction"
+                        "向量库删除为逻辑删除，物理回收需 compaction；"
+                        "按条目/会话擦除保留 namespace 内的原始消息"
                     ),
                 },
             )

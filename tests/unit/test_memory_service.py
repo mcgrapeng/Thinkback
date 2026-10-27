@@ -8806,7 +8806,8 @@ def test_erase_records_audit_without_content() -> None:
     audit = audits[-1]
     assert audit.action == "memory.erase"
     assert audit.detail["affected_memories"] == 1
-    assert audit.detail["mem0_history_purged"] is True
+    # Fake 后端没有引擎历史可清：审计不得声称已清理。
+    assert audit.detail["mem0_history_purged"] == "unsupported"
     assert "SECRET-TOKEN" not in str(audit.detail)
 
 
@@ -8980,6 +8981,71 @@ def test_erase_task_id_is_queryable() -> None:
     assert task.status is TaskStatus.COMPLETED
 
 
+def test_erase_scoped_does_not_purge_namespace_messages() -> None:
+    """按条目/会话擦除不得清掉同 namespace 下别的会话的原始消息。"""
+
+    class _RecordingPurgeBackend(FakeMemoryBackend):
+        def __init__(self) -> None:
+            super().__init__()
+            self.purge_calls: list[dict[str, Any]] = []
+
+        def purge_history(
+            self, *, user_id: str, memory_ids: list[str], scopes: list[str]
+        ) -> dict[str, int]:
+            self.purge_calls.append(
+                {"user_id": user_id, "memory_ids": list(memory_ids), "scopes": list(scopes)}
+            )
+            return {"history": 1, "messages": 0, "supported": True}
+
+    backend = _RecordingPurgeBackend()
+    repository = InMemoryMemoryRepository()
+    service = MemoryService(repository=repository, backend=backend, l3_write_mode="sync")
+    service.append(make_append(round_id="r-erase-scoped", content="我负责 3nm 良率提升"))
+    memory = repository.active_memories("user-1", "thinkback")[0]
+
+    service.erase(
+        DeleteMemoryRequest(
+            request_id="req-erase-scoped",
+            user_id="user-1",
+            scope=DeleteScope.MEMORY,
+            operation_id="op-erase-scoped",
+            memory_id=memory.memory_id,
+        )
+    )
+
+    assert backend.purge_calls[0]["scopes"] == []
+
+
+def test_erase_audit_reports_purge_state_instead_of_unconditional_true() -> None:
+    """审计必须如实标注引擎侧清理状态，不能无条件写 purged=true。"""
+
+    class _RecordingPurgeBackend(FakeMemoryBackend):
+        def purge_history(
+            self, *, user_id: str, memory_ids: list[str], scopes: list[str]
+        ) -> dict[str, int]:
+            return {"history": 1, "messages": 0, "supported": True}
+
+    repository = InMemoryMemoryRepository()
+    service = MemoryService(
+        repository=repository, backend=_RecordingPurgeBackend(), l3_write_mode="sync"
+    )
+    service.append(make_append(round_id="r-erase-audit-state", content="我的门禁卡号是 C12345"))
+    memory = repository.active_memories("user-1", "thinkback")[0]
+
+    service.erase(
+        DeleteMemoryRequest(
+            request_id="req-erase-audit-state",
+            user_id="user-1",
+            scope=DeleteScope.MEMORY,
+            operation_id="op-erase-audit-state",
+            memory_id=memory.memory_id,
+        )
+    )
+
+    audit = repository.list_admin_audit()[-1]
+    assert audit.detail["mem0_history_purged"] == "partial"
+
+
 def test_erase_purges_engine_history_with_backend_ids_and_scope() -> None:
     """erase 必须把被删的后端 ID 与作用域交给引擎侧清理（历史 + 原始消息）。"""
 
@@ -8994,7 +9060,7 @@ def test_erase_purges_engine_history_with_backend_ids_and_scope() -> None:
             self.purge_calls.append(
                 {"user_id": user_id, "memory_ids": list(memory_ids), "scopes": list(scopes)}
             )
-            return {"history": 1, "messages": 2}
+            return {"history": 1, "messages": 2, "supported": True}
 
     backend = _RecordingPurgeBackend()
     repository = InMemoryMemoryRepository()
@@ -9015,7 +9081,8 @@ def test_erase_purges_engine_history_with_backend_ids_and_scope() -> None:
     assert len(backend.purge_calls) == 1
     call = backend.purge_calls[0]
     assert call["user_id"] == "user-1"
-    assert call["scopes"] == ["thinkback"]
+    # 单条擦除不得按 namespace 清原始消息（会连别的会话一起删）。
+    assert call["scopes"] == []
     assert call["memory_ids"], "必须带上被删的后端记忆 ID，否则引擎历史清不掉"
 
     audit = repository.list_admin_audit()[-1]
