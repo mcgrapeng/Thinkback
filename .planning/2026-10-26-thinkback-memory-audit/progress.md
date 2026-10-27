@@ -38,3 +38,9 @@
   - 由此删除清单：固定槽位引擎 1,270 行、词典交集硬过滤、自造事实排序分、decay 清扫器 155 行；L3 语义全部归引擎。
   - 新增 P0 动作：升级 mem0 2.1.0 → 2.2.x；真实 Mem0 契约套件与 make check 进 CI（现 CI 两者都没有）。
 - 下一步：用户回答 §12 的 1/3/9/10/11/12（范围、三层去留、语料场景、引擎升级、CI 门禁），然后进入 writing-plans。
+- 设计稿按 D10（内网免鉴权）改完：鉴权项收敛，namespace 降为业务标签，admin 保留 ADMIN_TOKEN；§12 改成“已决 / 仍待信息”两张表。
+- 写实施计划 `docs/plans/2026-10-27-thinkback-p0-correctness.md`（6 个任务），并做自检补了三处精度：pending_append 轮次不在 list_rounds 结果里、CAS 耗尽异常没有 HTTP 映射、分类错误状态码。
+- Task 1（删除屏障）已实现并提交 505ae4d：墓碑携带来源轮次 + list_rounds(include_pending) + append 不复活已删轮次。新增 2 条服务级用例 + 2 条契约用例。
+- Task 2（L2 版本化）已实现并提交 e7f7e0a：ins_current_summary 加 row_version（迁移 20261027_0014，已应用到真实 PG）、写入带 expected_row_version、刷新器被覆盖时不记已刷新、在飞期间累计并补 trailing 刷新、drain 等到 trailing 结束。
+- 顺带修掉一个 flaky 用例：写预算压到 1ms 时 recall 的线程交接也被压到 1ms（A/B 证明与业务改动无关）。
+- 当前门禁状态：mypy clean；846 passed（连续两次）；eval 20/20 baseline 达标；ruff format/lint 仅剩用户 WIP 文件 tests/unit/test_api_key_auth.py（SIM300、B017、格式），未擅自改。
