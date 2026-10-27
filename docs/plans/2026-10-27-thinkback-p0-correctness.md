@@ -91,12 +91,36 @@ Expected: PASS
 Run: `uv run --group dev pytest tests/unit/test_memory_service.py tests/unit/test_repository_contract.py tests/unit/test_memory_repositories.py -q`
 Expected: 全部通过
 
-- [ ] **Step 8: 提交**
+- [x] **Step 8: 提交**
 
 ```bash
 git add src/thinkback/memory/service.py tests/unit/test_memory_service.py tests/unit/test_repository_contract.py
 git commit -m "fix(memory): 删除墓碑携带来源轮次，在飞写入不再复活已删内容"
 ```
+
+---
+
+### Task 1.5: 读写路径的等待预算解耦（修掉时序敏感用例）
+
+**Files:**
+- Modify: `tests/unit/test_memory_api.py`（`test_recall_uses_dedicated_worker_pool_when_write_pool_is_full`）
+
+**Interfaces:**
+- Consumes: `thinkback.api.memory._run_memory_call_in_pool` 读取的 `settings.memory_api_worker_wait_seconds`
+- Produces: 无新接口。
+
+- [x] **Step 1: 定位 flaky 根因**
+
+读写各有独立的信号量与线程池，但共用 `memory_api_worker_wait_seconds` 这一个旋钮。用例为了逼写路径 503 把旋钮压到 0.001s，recall 的线程交接也被压进 1ms，机器一忙就误报 503。A/B 实测：撤掉本计划全部改动后该用例同样失败，与业务改动无关。
+
+- [x] **Step 2: 只让写预算影响写路径**
+
+用例在 append 之后、recall 之前把 `memory_api_worker_wait_seconds` 恢复为默认值。
+
+- [x] **Step 3: 跑全套件**
+
+Run: `uv run --group dev pytest`
+Expected: 846 passed，0 failed（连续两次复跑稳定）
 
 ---
 
@@ -114,7 +138,7 @@ git commit -m "fix(memory): 删除墓碑携带来源轮次，在飞写入不再�
 - Consumes: `SummaryEntry(user_id, memory_scope_id, summary_text, summary_kind, summary_state, summary_cursor_round, latest_source_round_id, latest_source_timestamp, summary_id, structured_sections, row_version)`
 - Produces: `MemoryRepository.upsert_summary_from_rounds(user_id, memory_scope_id, rounds, *, summary_text=None, summary_kind="concat", structured_sections=None, preserve_llm=False, expected_row_version: int | None = None) -> SummaryEntry`；`expected_row_version` 为 None 表示不检查（现有调用方不变），非 None 时版本不匹配则不写入并返回当前行。
 
-- [ ] **Step 1: 写会红的测试（删除后旧刷新复活）**
+- [x] **Step 1: 写会红的测试（删除后旧刷新复活）**
 
 在 `tests/unit/test_l2_llm_summary.py` 新增 `test_stale_refresh_cannot_resurrect_deleted_summary`：composer 用 `Event` 阻塞；append 一轮后等 composer 开始，执行 `DeleteMemoryRequest(scope=DeleteScope.SESSION, session_id="session-1", operation_id="op-del")`，释放 composer，`drain_l3_background_tasks(timeout=10)`。
 
@@ -131,38 +155,38 @@ assert "SECRET-MARKER" not in summary.summary_text
 Run: `uv run --group dev pytest tests/unit/test_l2_llm_summary.py::test_stale_refresh_cannot_resurrect_deleted_summary -v`
 Expected: FAIL，当前 `summary_state` 为 `active` 且文本含已删内容
 
-- [ ] **Step 3: 仓储加版本**
+- [x] **Step 3: 仓储加版本**
 
 1. `SummaryEntry` 增加 `row_version: int = 0`。
 2. SQL 实现：`_upsert_summary` 的 UPDATE 加 `WHERE row_version = :expected` 条件（`expected_row_version is not None` 时），命中 0 行时重新 SELECT 返回当前行；INSERT 与 UPDATE 成功时 `row_version = row_version + 1`。
 3. InMemory 实现：`self.summaries[key].row_version` 同样按 `expected_row_version` 条件判断，失败返回现有 `SummaryEntry`。
 4. 新增 alembic 迁移：`ins_current_summary` 加 `row_version INTEGER NOT NULL DEFAULT 0`。
 
-- [ ] **Step 4: 刷新器带版本写入**
+- [x] **Step 4: 刷新器带版本写入**
 
 在 `memory/l2_refresh.py` 的 `_run_refresh`：读 `summary = self._repository.get_summary(user_id, session_scope_id)`，把 `expected_row_version = summary.row_version if summary else None` 传给 `upsert_summary_from_rounds`。写后比对返回的 `summary_text` 与自己写入的文本：不相等说明版本冲突，本次没写成功，不要把该 scope 记入 `_llm_refreshed_scopes`（否则下次刷新会把旧摘要当上一版喂给模型）。
 
-- [ ] **Step 5: 写会红的测试（在飞期间的新轮次不丢）**
+- [x] **Step 5: 写会红的测试（在飞期间的新轮次不丢）**
 
 在 `tests/unit/test_l2_llm_summary.py` 新增 `test_refresh_in_flight_triggers_trailing_refresh`：`refresh_interval_rounds=5`；第一次 composer 阻塞时再 append 4 轮（共 5 轮累计），释放后 `drain`，断言 `len(composer.calls) >= 2` 且最后一次调用的轮次数包含新轮次。
 
-- [ ] **Step 6: 修在飞计数**
+- [x] **Step 6: 修在飞计数**
 
 在 `L2BackgroundRefresher.maybe_submit`：pending 时也把 `self._append_counters[scope]` 加一并 return；`_finish` 里若 `self._append_counters.get(scope, 0) >= self.refresh_interval_rounds`，重新调用 `maybe_submit(user_id, session_scope_id)` 触发一次 trailing 刷新。
 
-- [ ] **Step 7: 加契约测试**
+- [x] **Step 7: 加契约测试**
 
 在 `tests/unit/test_repository_contract.py` 新增 `test_upsert_summary_rejects_stale_row_version`：两个实现都跑，先 upsert 一次拿到 `row_version`，再用旧的 `expected_row_version` 写一次，断言文本没变、`row_version` 递增。
 
-- [ ] **Step 8: 跑相关套件**
+- [x] **Step 8: 跑相关套件**
 
 Run: `uv run --group dev pytest tests/unit/test_l2_llm_summary.py tests/unit/test_repository_contract.py tests/unit/test_memory_repositories.py -q`
 Expected: 全部通过
 
-- [ ] **Step 9: 提交**
+- [x] **Step 9: 提交**
 
 ```bash
-git add src/thinkback/domain/entities.py src/thinkback/memory/repositories src/thinkback/memory/l2_refresh.py alembic/versions tests/unit/test_l2_llm_summary.py tests/unit/test_repository_contract.py
+git add src/thinkback/domain/entities.py src/thinkback/domain/ports.py src/thinkback/infra/database/models.py src/thinkback/memory/repositories src/thinkback/memory/l2_refresh.py alembic/versions tests/unit/test_l2_llm_summary.py tests/unit/test_repository_contract.py
 git commit -m "fix(memory): 摘要写入加版本条件，旧刷新不能覆盖新摘要或复活已删内容"
 ```
 
