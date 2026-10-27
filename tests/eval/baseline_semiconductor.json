@@ -1,5 +1,6 @@
 {
   "report_type": "thinking_memory_semiconductor_vertical_evaluation",
+  "mode": "self_contained",
   "min_total_pass_rate": 1.0,
   "min_pass_rate_by_category": {
     "工艺咨询": 1.0,

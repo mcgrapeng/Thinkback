@@ -7,15 +7,15 @@ Thinkback v1.0 is the first public release. The roadmap is a living document —
 - Three-layer memory model (L1 Round Journal / L2 Session Summary / L3 Long-term Memory)
 - Bitemporal validity (`valid_at` / `invalid_at`)
 - Business index state machine (`ACTIVE` / `DELETED` / `SUPERSEDED` / `SUPPRESSED`)
-- HTTP + gRPC with shared Pydantic schema (26+ endpoints)
+- HTTP + gRPC with shared Pydantic schema (26 endpoints)
 - Idempotent writes via `request_id` / `round_id` fingerprints
 - Explicit `degraded=True` signal with `degradation_reasons`
 - Scoped deletes (`MEMORY` / `SESSION` / `ALL`) with tombstones
 - Admin dashboard (React 19, 7 pages, Cmd-K, keyboard nav, URL deep links)
-- v1 public integration protocol (API key + Scope + Tenant + rate limit + idempotency)
-- mem0 prompt management (real-time editing of 3 core prompts)
+- Internal-network deployment: no API key on the business surface, per-client-IP rate limit, `Idempotency-Key` replay safety
+- Namespace-scoped memory with per-type profiles (admission, retention, TTL) in `profiles/`
 - K8s-native liveness/readiness probes, Prometheus metrics, Alembic migrations
-- 615+ tests
+- 870+ tests
 
 ## v1.1 (In Progress)
 
@@ -25,7 +25,7 @@ Thinkback v1.0 is the first public release. The roadmap is a living document —
 ## v1.2 (Planned)
 
 - **TypeScript SDK** (`@thinkback/sdk`) — browser + Node.js client
-- **Multi-tenant isolation** — per-tenant quotas, scoped admin views
+- **Tenant isolation** — per-tenant quotas, scoped admin views (today the isolation unit is `namespace`, not a tenant)
 - **SSO integration** — OAuth2 / OIDC for admin dashboard
 - **Memory graph view** — visualize linked memories in the admin dashboard
 - **Batch operations** — bulk delete / export / import memories

@@ -5,11 +5,24 @@
 —— 工艺咨询 / 设备选型 / 良率分析 / 客户支持四类场景的专业词能不能被记住、
 被召回；以及垂类机制（namespace 隔离、类型准入、保留期、assistant 不成为事实）。
 
-两种运行模式：
-- 默认（自包含）：InMemoryMemoryRepository + FakeMemoryBackend，不联网，
-  确定性，可进 CI 门禁。
+两种运行模式，报告里会显式标注模式，别把两种分数混着看：
+
+- 默认（``contract`` / 自包含）：InMemoryMemoryRepository + FakeMemoryBackend，
+  不联网、确定性、可进 CI 门禁。
+  **只证明编排契约**（幂等、分层、namespace 隔离、类型准入、TTL、降级）：
+  FakeMemoryBackend 不跑 LLM 抽取，直接把整轮原文当记忆存下来，
+  所以这里的「抽出来了」是假的，抽取质量与语义召回质量都不作数。
 - ``--real``：真实 PG + 真实 Milvus + 真实 Mem0 + 真实 LLM/embedding，
   看真实抽取与语义召回的水位（不进 CI，需要本地栈）。
+
+真实模式的失败按原因分桶，一眼看出是「没抽出来」「抽出来但缺事实」
+还是「事实已在索引里却没召回」：
+
+- ``extraction_empty``：后端没产出任何事件（抽取空）
+- ``extraction_missing_fact``：产出了事件，但抽出的文本里没有期望事实
+- ``retrieval_missing_fact``：事实已在索引里，召回却没带回来
+- ``forbidden_term_leaked``：召回了不该出现的禁用词（泄漏）
+- ``mechanism_violation``：垂类机制用例不满足契约（隔离 / 类型准入 / TTL）
 
 用法::
 
@@ -18,6 +31,9 @@
     uv run --group dev python tests/script/eval/check_baseline.py \\
         --report-dir docs/memory/report/semiconductor \\
         --baseline tests/eval/baseline_semiconductor.json
+    uv run --group dev python tests/script/eval/check_baseline.py \\
+        --report-dir docs/memory/report/semiconductor \\
+        --baseline tests/eval/baseline_semiconductor_real.json
 """
 
 from __future__ import annotations
@@ -40,9 +56,45 @@ from thinkback.memory.schemas import (
     RecallMemoryRequest,
 )
 
+# 仓库根要放上 sys.path 才能 import tests.script.eval.*（与 tests/script/ 下其他脚本同一套路）
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+
+from tests.script.eval.check_baseline import check_report  # noqa: E402
+
 CASES_PATH = Path("tests/eval/semiconductor_cases.json")
 REPORT_DIR = Path("docs/memory/report/semiconductor")
 REPORT_TYPE = "thinking_memory_semiconductor_vertical_evaluation"
+REAL_BASELINE_PATH = Path("tests/eval/baseline_semiconductor_real.json")
+
+MODE_CONTRACT = "self_contained"
+MODE_REAL = "real"
+
+MODE_LABELS = {
+    MODE_CONTRACT: "contract/self-contained",
+    MODE_REAL: "real",
+}
+
+MODE_DESCRIPTIONS = {
+    MODE_CONTRACT: (
+        "InMemoryMemoryRepository + FakeMemoryBackend，不联网、确定性。"
+        "FakeMemoryBackend 不跑 LLM 抽取，直接把整轮原文当记忆存下来 —— "
+        "所以只证明编排契约（幂等、分层、namespace 隔离、类型准入、TTL、降级），"
+        "不证明抽取质量，也不证明语义召回质量。"
+    ),
+    MODE_REAL: (
+        "真实 PG + Milvus + Mem0 + LLM/embedding。"
+        "能测真实抽取与语义召回水位；门槛见 tests/eval/baseline_semiconductor_real.json。"
+    ),
+}
+
+# 失败归因桶：键 = 报告里的桶名，值 = 人话解释
+FAILURE_BUCKETS = {
+    "extraction_empty": "后端没产出任何事件（抽取空）",
+    "extraction_missing_fact": "产出了事件，但抽出的文本里没有期望事实",
+    "retrieval_missing_fact": "事实已在索引里，召回却没带回来",
+    "forbidden_term_leaked": "召回了不该出现的禁用词（泄漏）",
+    "mechanism_violation": "垂类机制用例不满足契约（隔离 / 类型准入 / TTL）",
+}
 
 
 @dataclass
@@ -52,6 +104,7 @@ class CaseResult:
     passed: bool
     detail: str
     elapsed_ms: float
+    failure_bucket: str | None = None
 
 
 def _msg(message_id: str, role: MessageRole, content: str) -> MemoryMessage:
@@ -111,6 +164,34 @@ def _recall_texts(
     return [item.content for item in response.items if item.layer == "L3"]
 
 
+def _extracted_texts(repository: Any, user_id: str, namespace: str) -> list[str]:
+    """索引里已落库的长期记忆正文 —— 即后端抽出来的事实。"""
+    if repository is None:
+        return []
+    try:
+        entries = repository.active_memories(user_id, namespace)
+    except Exception:  # noqa: BLE001 - 取不到索引不该让评测崩掉，归因退化成「抽取出事件但缺事实」
+        return []
+    return [str(getattr(entry, "memory_text", "")) for entry in entries]
+
+
+def _classify_failure(
+    *,
+    events: list[Any],
+    extracted_texts: list[str],
+    missing: list[str],
+    leaked: list[str],
+) -> str:
+    """把一次失败归到一个原因桶。"""
+    if leaked:
+        return "forbidden_term_leaked"
+    if not events:
+        return "extraction_empty"
+    if any(term in text for term in missing for text in extracted_texts):
+        return "retrieval_missing_fact"
+    return "extraction_missing_fact"
+
+
 def _make_service(real: bool, repository: Any = None) -> tuple[Any, Any, Any]:
     """返回 (service, backend, repository)。
 
@@ -152,7 +233,7 @@ def _run_recall_case(
     run_token: str,
 ) -> CaseResult:
     started = time.perf_counter()
-    service, _backend, _repository = _make_service(real, repository)
+    service, _backend, service_repository = _make_service(real, repository)
     events: list[Any] = []
     for index, round_data in enumerate(case["rounds"]):
         events.extend(
@@ -173,12 +254,21 @@ def _run_recall_case(
         term for term in case.get("forbidden_terms", []) if any(term in text for text in texts)
     ]
     passed = not missing and not leaked
+    bucket = None
+    if not passed:
+        bucket = _classify_failure(
+            events=events,
+            extracted_texts=_extracted_texts(service_repository, user_id, namespace),
+            missing=missing,
+            leaked=leaked,
+        )
     return CaseResult(
         case["name"],
         case["category"],
         passed,
         f"missing={missing} leaked={leaked} events={events} texts={texts}",
         (time.perf_counter() - started) * 1000,
+        bucket,
     )
 
 
@@ -191,15 +281,18 @@ def _run_namespace_isolation_case(
     run_token: str,
 ) -> CaseResult:
     started = time.perf_counter()
-    service, _backend, _repository = _make_service(real, repository)
+    service, _backend, service_repository = _make_service(real, repository)
+    events: list[Any] = []
     for index, round_data in enumerate(case["rounds"]):
-        _append(
-            service,
-            namespace=namespace,
-            round_id=f"{case['name']}-{run_token}-r{index}",
-            user_text=round_data["user"],
-            assistant_text=round_data["assistant"],
-            user_id=user_id,
+        events.extend(
+            _append(
+                service,
+                namespace=namespace,
+                round_id=f"{case['name']}-{run_token}-r{index}",
+                user_text=round_data["user"],
+                assistant_text=round_data["assistant"],
+                user_id=user_id,
+            )
         )
     scoped = _recall_texts(service, namespace=namespace, query=case["query"], user_id=user_id)
     other = _recall_texts(service, namespace="thinkback", query=case["query"], user_id=user_id)
@@ -207,12 +300,25 @@ def _run_namespace_isolation_case(
         term for term in case.get("expected_terms", []) if not any(term in text for text in scoped)
     ]
     passed = not missing and not other
+    bucket = None
+    if not passed:
+        bucket = (
+            "mechanism_violation"
+            if other
+            else _classify_failure(
+                events=events,
+                extracted_texts=_extracted_texts(service_repository, user_id, namespace),
+                missing=missing,
+                leaked=[],
+            )
+        )
     return CaseResult(
         case["name"],
         case["category"],
         passed,
         f"missing={missing} scoped={scoped} other_namespace={other}",
         (time.perf_counter() - started) * 1000,
+        bucket,
     )
 
 
@@ -251,6 +357,7 @@ def _run_reject_type_case(
         False,
         f"未被拒绝：{case['memory_type']} 写进去了",
         (time.perf_counter() - started) * 1000,
+        "mechanism_violation",
     )
 
 
@@ -291,6 +398,7 @@ def _run_ttl_case(
         passed,
         f"expiration_date={expiration}",
         (time.perf_counter() - started) * 1000,
+        None if passed else "mechanism_violation",
     )
 
 
@@ -318,7 +426,12 @@ def run_cases(corpus: dict[str, Any], *, real: bool) -> list[CaseResult]:
             if runner is None:
                 results.append(
                     CaseResult(
-                        case["name"], case["category"], False, f"未知 kind={case['kind']}", 0.0
+                        case["name"],
+                        case["category"],
+                        False,
+                        f"未知 kind={case['kind']}",
+                        0.0,
+                        "mechanism_violation",
                     )
                 )
                 continue
@@ -336,6 +449,7 @@ def run_cases(corpus: dict[str, Any], *, real: bool) -> list[CaseResult]:
                         False,
                         f"raised: {type(exc).__name__}: {exc}",
                         0.0,
+                        "mechanism_violation",
                     )
                 )
     finally:
@@ -356,21 +470,35 @@ def aggregate(results: list[CaseResult]) -> dict[str, Any]:
         total_passed += 1 if result.passed else 0
     for bucket in by_category.values():
         bucket["pass_rate"] = bucket["passed"] / bucket["count"] if bucket["count"] else 0.0
+    failure_buckets = {
+        name: {
+            "count": sum(1 for result in results if result.failure_bucket == name),
+            "rate": (
+                sum(1 for result in results if result.failure_bucket == name) / len(results)
+                if results
+                else 0.0
+            ),
+        }
+        for name in FAILURE_BUCKETS
+    }
     return {
         "total_pass_rate": total_passed / len(results) if results else 0.0,
         "total_passed": total_passed,
         "total_count": len(results),
         "by_category": dict(sorted(by_category.items())),
+        "failure_buckets": failure_buckets,
     }
 
 
 def render_markdown(report: dict[str, Any]) -> str:
+    mode = report["mode"]
     lines = [
         "# 半导体垂类记忆评测",
         "",
         f"- 运行 ID: `{report['run_id']}`",
         f"- 生成时间: `{report['generated_at']}`",
-        f"- 模式: `{report['mode']}`",
+        f"- 模式: `{mode}`（{report['mode_label']}）",
+        f"- 模式说明: {report['mode_description']}",
         f"- 总通过率: **{report['aggregate']['total_pass_rate']:.1%}** "
         f"({report['aggregate']['total_passed']}/{report['aggregate']['total_count']})",
         "",
@@ -385,20 +513,43 @@ def render_markdown(report: dict[str, Any]) -> str:
         )
     lines += [
         "",
+        "## 失败归因",
+        "",
+        "| 归因桶 | 用例数 | 占比 | 含义 |",
+        "| --- | ---: | ---: | --- |",
+    ]
+    for name, metric in report["aggregate"]["failure_buckets"].items():
+        lines.append(
+            f"| `{name}` | {metric['count']} | {metric['rate']:.1%} | {FAILURE_BUCKETS[name]} |"
+        )
+    if mode == MODE_CONTRACT:
+        lines += [
+            "",
+            "> 自包含模式用 fake 后端，归因桶只反映编排链路，不代表真实抽取质量。",
+        ]
+    lines += [
+        "",
         "## 用例结果",
         "",
-        "| 用例 | 类别 | 通过 | 耗时 (ms) | 关键证据 |",
-        "| --- | --- | :---: | ---: | --- |",
+        "| 用例 | 类别 | 通过 | 归因桶 | 耗时 (ms) | 关键证据 |",
+        "| --- | --- | :---: | --- | ---: | --- |",
     ]
     for result in report["results"]:
         ok = "✅" if result["passed"] else "❌"
         detail = result["detail"].replace("|", "\\|").replace("\n", " ")
+        bucket = result.get("failure_bucket") or "-"
         lines.append(
-            f"| `{result['name']}` | {result['category']} | {ok} | "
+            f"| `{result['name']}` | {result['category']} | {ok} | {bucket} | "
             f"{result['elapsed_ms']:.1f} | {detail} |"
         )
     lines.append("")
     return "\n".join(lines)
+
+
+def _real_baseline_gate(report: dict[str, Any], baseline_path: Path) -> list[str]:
+    """真实栈报告对照真实栈基线；基线读不到时抛 OSError / JSONDecodeError。"""
+    baseline = json.loads(baseline_path.read_text(encoding="utf-8"))
+    return check_report(report, baseline)
 
 
 def main(argv: list[str]) -> int:
@@ -410,6 +561,12 @@ def main(argv: list[str]) -> int:
     )
     parser.add_argument("--cases", type=Path, default=CASES_PATH)
     parser.add_argument("--report-dir", type=Path, default=REPORT_DIR)
+    parser.add_argument(
+        "--baseline",
+        type=Path,
+        default=REAL_BASELINE_PATH,
+        help="真实栈模式对照的基线（自包含模式不用）",
+    )
     args = parser.parse_args(argv[1:])
 
     if args.real:
@@ -428,11 +585,14 @@ def main(argv: list[str]) -> int:
     results = run_cases(corpus, real=args.real)
     aggregate_result = aggregate(results)
     run_id = f"semi-eval-{datetime.now(UTC).strftime('%Y%m%d-%H%M%S')}-{uuid4().hex[:6]}"
+    mode = MODE_REAL if args.real else MODE_CONTRACT
     report = {
         "report_type": REPORT_TYPE,
         "run_id": run_id,
         "generated_at": datetime.now(UTC).isoformat(),
-        "mode": "real" if args.real else "self_contained",
+        "mode": mode,
+        "mode_label": MODE_LABELS[mode],
+        "mode_description": MODE_DESCRIPTIONS[mode],
         "aggregate": aggregate_result,
         "results": [
             {
@@ -441,6 +601,7 @@ def main(argv: list[str]) -> int:
                 "passed": result.passed,
                 "detail": result.detail,
                 "elapsed_ms": result.elapsed_ms,
+                "failure_bucket": result.failure_bucket,
             }
             for result in results
         ],
@@ -455,9 +616,28 @@ def main(argv: list[str]) -> int:
         f"通过率: {aggregate_result['total_pass_rate']:.1%} "
         f"({aggregate_result['total_passed']}/{aggregate_result['total_count']})"
     )
+    print(f"模式: {mode}（{MODE_LABELS[mode]}）")
     print(f"报告: {json_path}")
     print(f"       {md_path}")
-    return 0 if aggregate_result["total_pass_rate"] == 1.0 else 1
+
+    if not args.real:
+        # 自包含模式是 CI 门禁：契约必须 100% 满足，不留「差不多」。
+        return 0 if aggregate_result["total_pass_rate"] == 1.0 else 1
+
+    # 真实模式按真实栈基线判达标（抽取水位本身就有 12.5% 的缺口，
+    # 用 100% 卡会永远是红的，等于没有门禁）。
+    try:
+        violations = _real_baseline_gate(report, args.baseline)
+    except (OSError, json.JSONDecodeError) as exc:
+        print(f"真实栈基线读取失败: {exc}", file=sys.stderr)
+        return 2
+    if violations:
+        print(f"真实栈基线未达标（{args.baseline}）:", file=sys.stderr)
+        for violation in violations:
+            print(f"  - {violation}", file=sys.stderr)
+        return 1
+    print(f"真实栈基线达标（{args.baseline}）")
+    return 0
 
 
 if __name__ == "__main__":

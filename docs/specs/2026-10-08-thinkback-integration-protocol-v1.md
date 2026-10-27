@@ -1,8 +1,32 @@
 # Thinkback 接入协议 v1 — 业务系统集成规范
 
 **日期**: 2026-10-08
-**状态**: Draft
+**状态**: 历史文档（当时为 Draft，未上线）
 **目标**: 为业务系统(客服/助手/推荐/搜索等)提供统一、安全、可演进的记忆服务接入协议
+
+> **⚠️ 历史文档（已废弃，勿据此接入）**
+>
+> 这份规范描述的是 2026-10-08 当时设计的「面向公网的 v1 接入协议」。该方案**没有上线**，
+> 对应的 `/v1/memory/*` 路由、API Key / Scope / Tenant 鉴权、密钥管理接口与
+> mem0 提示词在线编辑接口都已从代码里移除。本文正文按当时的规格原样保留，作为设计决策的
+> 历史记录；**当前可用的接口面以 [docs/API.md](../../API.md) 为准**。
+> 正文里的「✅ done」等标记只描述当时的实施计划，不代表今天的服务状态。
+>
+> 与现状的差异（截至 2026-10-27）：
+>
+> | 规范里的写法 | 现在的做法 |
+> | --- | --- |
+> | `/v1/memory/*`（版本化前缀） | `/memory/*`（另有 `/health/*`、`/admin/api/*`），不再有版本前缀 |
+> | 业务面 `Authorization: Bearer tbk_live_*` + `X-Tenant-Id` + scope | 业务面**免鉴权**：内网部署，网络即信任边界；没有 API Key / scope / 租户头 |
+> | 按 API Key plan 分桶限流 | 按**客户端 IP** 分桶（600 请求/分钟，突发 50） |
+> | `Idempotency-Key` 头 | 仍然支持，作用于 `/memory/*` 的写操作（`POST` / `PUT` / `DELETE`），`POST /memory/recall` 不进缓存 |
+> | 召回请求带 `intent` | `intent` 轴已删除，请求 schema `extra="forbid"`，再带就是 422 |
+> | 管理台生成 / 吊销 API Key、在线编辑 mem0 提示词 | 相关端点已删除；抽取约束在 `THINKBACK_CUSTOM_INSTRUCTIONS` 与 `profiles/` 的类型 profile 里 |
+> | `/admin/api/*` 用 Admin Token | 仍是 `Authorization: Bearer <ADMIN_TOKEN>`，但**未配置即 503**（fail-closed），不再可选放行 |
+> | `/v1/memory/l3/status` | `/memory/l3/background-status` |
+> | `/v1/memory` 列表 / `PUT`、`DELETE /v1/memory/{id}` | `/memory/items`、`/memory/items/{memory_id}`、`/memory/update`、`/memory/delete`（另有 `/memory/suppress`、`/memory/erase`） |
+>
+> 需要一份「现在就能用」的接入说明，见 [docs/SDK.md](../../SDK.md)。
 
 ---
 

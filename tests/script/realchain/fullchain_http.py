@@ -75,13 +75,13 @@ def wait_task(task_id: str, timeout: float = 420.0) -> tuple[str, dict]:
 
 
 def recall(query: str) -> dict:
+    # RecallMemoryRequest 不接受 intent 轴（extra=forbid，带了就是 422）
     resp = client.post(
         "/memory/recall",
         json={
             "user_id": USER,
             "session_id": SESSION,
             "query": query,
-            "intent": "chat",
             "l3_limit": 8,
             "l3_score_threshold": 0.3,
             "token_budget": 2000,

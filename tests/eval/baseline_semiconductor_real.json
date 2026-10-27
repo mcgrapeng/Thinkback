@@ -1,0 +1,45 @@
+{
+  "report_type": "thinking_memory_semiconductor_vertical_evaluation",
+  "mode": "real",
+  "min_total_pass_rate": 0.6875,
+  "min_pass_rate_by_category": {
+    "工艺咨询": 0.66,
+    "设备选型": 1.0,
+    "良率分析": 0.33,
+    "客户支持": 0.33,
+    "垂类机制": 1.0
+  },
+  "max_failure_rate_by_bucket": {
+    "extraction_empty": 0.25,
+    "extraction_missing_fact": 0.25,
+    "retrieval_missing_fact": 0.125,
+    "forbidden_term_leaked": 0.0,
+    "mechanism_violation": 0.0
+  },
+  "required_cases": [
+    "case_semi_process_node_and_stage",
+    "case_semi_lithography_generation",
+    "case_semi_device_architecture_preference",
+    "case_semi_euv_tool_vendor",
+    "case_semi_etch_and_metrology_vendors",
+    "case_semi_tool_selection_constraint",
+    "case_semi_yield_loss_defect_type",
+    "case_semi_spc_control_method",
+    "case_semi_yield_target_and_current",
+    "case_semi_customer_reliability_requirement",
+    "case_semi_customer_product_context",
+    "case_semi_support_escalation_issue",
+    "case_semi_namespace_isolation",
+    "case_semi_assistant_not_user_fact",
+    "case_semi_procedure_type_requires_approval",
+    "case_semi_equipment_context_has_ttl"
+  ],
+  "notes": {
+    "purpose": "真实栈（PG + Milvus + Mem0 + LLM）评测的水位基线。与自包含基线 tests/eval/baseline_semiconductor.json 分开：自包含模式用 fake 后端，只证明编排契约，要求 100%；真实模式的抽取/召回本身就有缺口，用 100% 卡等于没有门禁。",
+    "provenance": "取自 2026-10-27 的 14 次真实栈评测（docs/memory/report/semiconductor/，mode=real）：最好 12/16 = 75%，稳定水位 11~12/16；单类别最好值 工艺咨询 3/3、设备选型 3/3、良率分析 2/3、客户支持 2/3、垂类机制 4/4。",
+    "min_total_pass_rate": "0.6875 = 11/16，比最好成绩低一个用例：正常抖动能过，再掉一个用例就该报警（早先 0.5625 的两次运行就是真回归，被这条卡住）。",
+    "min_pass_rate_by_category": "按各类别观察到的最好值取整下限：契约类（垂类机制）与确定性高的类别（设备选型）要求 100%；抽取不稳的类别（工艺咨询 2/3、良率分析 1/3、客户支持 1/3）只保底不追高。",
+    "max_failure_rate_by_bucket": "按失败归因桶限比例，超过就是某一类原因集中爆发：抽取空/抽取缺事实各不超过 25%（实测各 12.5%）；事实已在索引却召不回不超过 12.5%（实测 0，留一格给分数阈值抖动）；禁用词泄漏与机制违约为 0。",
+    "usage": "uv run --group dev python tests/script/eval/check_baseline.py --report-dir docs/memory/report/semiconductor --baseline tests/eval/baseline_semiconductor_real.json"
+  }
+}

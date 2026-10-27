@@ -133,13 +133,13 @@ def _append(
 
 
 def _recall(client: httpx.Client, base: str, user: str, session: str, query: str) -> dict[str, Any]:
+    # RecallMemoryRequest 不接受 intent 轴（extra=forbid，带了就是 422）
     response = client.post(
         f"{base}/memory/recall",
         json={
             "user_id": user,
             "session_id": session,
             "query": query,
-            "intent": "chat",
             "l3_limit": 8,
             "l3_score_threshold": 0.3,
             "token_budget": 2000,
