@@ -155,6 +155,7 @@ class AppendRequest(_message.Message):
         "source_timestamp",
         "round_index",
         "metadata",
+        "namespace",
     )
     class MetadataEntry(_message.Message):
         __slots__ = ("key", "value")
@@ -172,6 +173,7 @@ class AppendRequest(_message.Message):
     SOURCE_TIMESTAMP_FIELD_NUMBER: _ClassVar[int]
     ROUND_INDEX_FIELD_NUMBER: _ClassVar[int]
     METADATA_FIELD_NUMBER: _ClassVar[int]
+    NAMESPACE_FIELD_NUMBER: _ClassVar[int]
     request_id: str
     user_id: str
     session_id: str
@@ -180,6 +182,7 @@ class AppendRequest(_message.Message):
     source_timestamp: str
     round_index: int
     metadata: _containers.ScalarMap[str, str]
+    namespace: str
     def __init__(
         self,
         request_id: _Optional[str] = ...,
@@ -190,6 +193,7 @@ class AppendRequest(_message.Message):
         source_timestamp: _Optional[str] = ...,
         round_index: _Optional[int] = ...,
         metadata: _Optional[_Mapping[str, str]] = ...,
+        namespace: _Optional[str] = ...,
     ) -> None: ...
 
 class AppendResponse(_message.Message):
@@ -219,6 +223,7 @@ class RecallRequest(_message.Message):
         "l3_limit",
         "l3_score_threshold",
         "token_budget",
+        "namespace",
     )
     USER_ID_FIELD_NUMBER: _ClassVar[int]
     SESSION_ID_FIELD_NUMBER: _ClassVar[int]
@@ -227,6 +232,7 @@ class RecallRequest(_message.Message):
     L3_LIMIT_FIELD_NUMBER: _ClassVar[int]
     L3_SCORE_THRESHOLD_FIELD_NUMBER: _ClassVar[int]
     TOKEN_BUDGET_FIELD_NUMBER: _ClassVar[int]
+    NAMESPACE_FIELD_NUMBER: _ClassVar[int]
     user_id: str
     session_id: str
     query: str
@@ -234,6 +240,7 @@ class RecallRequest(_message.Message):
     l3_limit: int
     l3_score_threshold: float
     token_budget: int
+    namespace: str
     def __init__(
         self,
         user_id: _Optional[str] = ...,
@@ -243,6 +250,7 @@ class RecallRequest(_message.Message):
         l3_limit: _Optional[int] = ...,
         l3_score_threshold: _Optional[float] = ...,
         token_budget: _Optional[int] = ...,
+        namespace: _Optional[str] = ...,
     ) -> None: ...
 
 class MemoryItem(_message.Message):
@@ -296,19 +304,29 @@ class RecallResponse(_message.Message):
     ) -> None: ...
 
 class DeleteRequest(_message.Message):
-    __slots__ = ("request_id", "user_id", "scope", "operation_id", "memory_id", "session_id")
+    __slots__ = (
+        "request_id",
+        "user_id",
+        "scope",
+        "operation_id",
+        "memory_id",
+        "session_id",
+        "namespace",
+    )
     REQUEST_ID_FIELD_NUMBER: _ClassVar[int]
     USER_ID_FIELD_NUMBER: _ClassVar[int]
     SCOPE_FIELD_NUMBER: _ClassVar[int]
     OPERATION_ID_FIELD_NUMBER: _ClassVar[int]
     MEMORY_ID_FIELD_NUMBER: _ClassVar[int]
     SESSION_ID_FIELD_NUMBER: _ClassVar[int]
+    NAMESPACE_FIELD_NUMBER: _ClassVar[int]
     request_id: str
     user_id: str
     scope: DeleteScope
     operation_id: str
     memory_id: str
     session_id: str
+    namespace: str
     def __init__(
         self,
         request_id: _Optional[str] = ...,
@@ -317,6 +335,7 @@ class DeleteRequest(_message.Message):
         operation_id: _Optional[str] = ...,
         memory_id: _Optional[str] = ...,
         session_id: _Optional[str] = ...,
+        namespace: _Optional[str] = ...,
     ) -> None: ...
 
 class DeleteResponse(_message.Message):
@@ -338,12 +357,19 @@ class DeleteResponse(_message.Message):
     ) -> None: ...
 
 class ListMemoriesRequest(_message.Message):
-    __slots__ = ("user_id", "include_deleted")
+    __slots__ = ("user_id", "include_deleted", "namespace")
     USER_ID_FIELD_NUMBER: _ClassVar[int]
     INCLUDE_DELETED_FIELD_NUMBER: _ClassVar[int]
+    NAMESPACE_FIELD_NUMBER: _ClassVar[int]
     user_id: str
     include_deleted: bool
-    def __init__(self, user_id: _Optional[str] = ..., include_deleted: bool = ...) -> None: ...
+    namespace: str
+    def __init__(
+        self,
+        user_id: _Optional[str] = ...,
+        include_deleted: bool = ...,
+        namespace: _Optional[str] = ...,
+    ) -> None: ...
 
 class ManagedMemoryItem(_message.Message):
     __slots__ = (
@@ -393,12 +419,19 @@ class ListMemoriesResponse(_message.Message):
     ) -> None: ...
 
 class GetMemoryRequest(_message.Message):
-    __slots__ = ("memory_id", "user_id")
+    __slots__ = ("memory_id", "user_id", "namespace")
     MEMORY_ID_FIELD_NUMBER: _ClassVar[int]
     USER_ID_FIELD_NUMBER: _ClassVar[int]
+    NAMESPACE_FIELD_NUMBER: _ClassVar[int]
     memory_id: str
     user_id: str
-    def __init__(self, memory_id: _Optional[str] = ..., user_id: _Optional[str] = ...) -> None: ...
+    namespace: str
+    def __init__(
+        self,
+        memory_id: _Optional[str] = ...,
+        user_id: _Optional[str] = ...,
+        namespace: _Optional[str] = ...,
+    ) -> None: ...
 
 class GetMemoryResponse(_message.Message):
     __slots__ = ("status", "memory")
@@ -413,19 +446,29 @@ class GetMemoryResponse(_message.Message):
     ) -> None: ...
 
 class UpdateMemoryRequest(_message.Message):
-    __slots__ = ("request_id", "user_id", "operation_id", "memory_id", "content", "memory_type")
+    __slots__ = (
+        "request_id",
+        "user_id",
+        "operation_id",
+        "memory_id",
+        "content",
+        "memory_type",
+        "namespace",
+    )
     REQUEST_ID_FIELD_NUMBER: _ClassVar[int]
     USER_ID_FIELD_NUMBER: _ClassVar[int]
     OPERATION_ID_FIELD_NUMBER: _ClassVar[int]
     MEMORY_ID_FIELD_NUMBER: _ClassVar[int]
     CONTENT_FIELD_NUMBER: _ClassVar[int]
     MEMORY_TYPE_FIELD_NUMBER: _ClassVar[int]
+    NAMESPACE_FIELD_NUMBER: _ClassVar[int]
     request_id: str
     user_id: str
     operation_id: str
     memory_id: str
     content: str
     memory_type: MemoryType
+    namespace: str
     def __init__(
         self,
         request_id: _Optional[str] = ...,
@@ -434,6 +477,7 @@ class UpdateMemoryRequest(_message.Message):
         memory_id: _Optional[str] = ...,
         content: _Optional[str] = ...,
         memory_type: _Optional[_Union[MemoryType, str]] = ...,
+        namespace: _Optional[str] = ...,
     ) -> None: ...
 
 class UpdateMemoryResponse(_message.Message):
@@ -463,6 +507,7 @@ class RebuildRequest(_message.Message):
         "history_version",
         "rebuild_l2",
         "rebuild_l3",
+        "namespace",
     )
     REQUEST_ID_FIELD_NUMBER: _ClassVar[int]
     USER_ID_FIELD_NUMBER: _ClassVar[int]
@@ -471,6 +516,7 @@ class RebuildRequest(_message.Message):
     HISTORY_VERSION_FIELD_NUMBER: _ClassVar[int]
     REBUILD_L2_FIELD_NUMBER: _ClassVar[int]
     REBUILD_L3_FIELD_NUMBER: _ClassVar[int]
+    NAMESPACE_FIELD_NUMBER: _ClassVar[int]
     request_id: str
     user_id: str
     operation_id: str
@@ -478,6 +524,7 @@ class RebuildRequest(_message.Message):
     history_version: str
     rebuild_l2: bool
     rebuild_l3: bool
+    namespace: str
     def __init__(
         self,
         request_id: _Optional[str] = ...,
@@ -487,6 +534,7 @@ class RebuildRequest(_message.Message):
         history_version: _Optional[str] = ...,
         rebuild_l2: bool = ...,
         rebuild_l3: bool = ...,
+        namespace: _Optional[str] = ...,
     ) -> None: ...
 
 class RebuildResponse(_message.Message):

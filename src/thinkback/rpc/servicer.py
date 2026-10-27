@@ -25,6 +25,7 @@ from thinkback.rpc import memory_pb2_grpc
 from thinkback.rpc.converters import (
     _SUMMARY_STATE_TO_PB,
     _managed_item_to_pb,
+    _namespace,
     get_response_to_pb,
     list_response_to_pb,
     rebuild_response_to_pb,
@@ -157,6 +158,7 @@ class MemoryServicer(memory_pb2_grpc.MemoryServiceServicer):
             resp = self._svc.list_memory_items(
                 user_id=request.user_id,
                 include_deleted=request.include_deleted,
+                namespace=_namespace(request.namespace),
             )
             return list_response_to_pb(resp)
         except Exception as exc:
@@ -171,6 +173,7 @@ class MemoryServicer(memory_pb2_grpc.MemoryServiceServicer):
             resp = self._svc.get_memory_item(
                 user_id=request.user_id,
                 memory_id=request.memory_id,
+                namespace=_namespace(request.namespace),
             )
         except Exception as exc:
             logger.bind(rpc="GetMemory", error=str(exc)).warning("grpc get_memory failed")
