@@ -88,6 +88,9 @@ class Settings(BaseSettings):
     memory_llm_model: str = "qwen-plus-latest"
     memory_embedding_model: str = "default-embedding"
     mem0_history_db_path: str = ".mem0/history.db"
+    # 记忆类型注册表 profile 目录：每个 namespace 一个 JSON（<namespace>.json）。
+    # 没有对应文件时回落到内置默认注册表。
+    memory_type_profile_dir: str = "profiles"
     # mem0.add() 是否走 LLM 事实抽取（要 chat/completions endpoint）。
     # 设为 False 时退化为纯向量存储：raw message 落地为一条记忆，
     # thinkback 的 P0 槽位逻辑负责结构化抽取。

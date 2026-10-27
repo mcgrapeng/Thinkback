@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime
 from typing import Annotated, Any
 
@@ -59,6 +60,18 @@ IdStr = Annotated[str, StringConstraints(min_length=1, max_length=ID_MAX_LENGTH)
 # AppendMemoryRequest.metadata 软上限：避免超大 JSON 触发 PG JSONB TOAST / 失败。
 # 64KB 既能覆盖合理 metadata，也能在请求体层早期失败。
 METADATA_MAX_BYTES = 65536
+
+# namespace：记忆的作用域标签（企业/应用/助手/垂类）。
+# 取代固定的 "thinkback" 常量：同一 user 在不同 namespace 下的长期记忆互不可见。
+# 禁 ':' —— 它会与 user_id 拼接产生跨作用域碰撞。
+NAMESPACE_PATTERN = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
+DEFAULT_NAMESPACE = "thinkback"
+
+
+def _validate_namespace(value: str) -> str:
+    if not NAMESPACE_PATTERN.match(value):
+        raise ValueError("namespace must match [A-Za-z0-9_.-]{1,64}")
+    return value
 
 
 def _validate_metadata_size(value: dict[str, Any]) -> dict[str, Any]:
@@ -115,10 +128,19 @@ class AppendMemoryRequest(BaseModel):
     )
     source_timestamp: datetime = Field(description="该轮对话的源事件时间，使用 ISO 8601 格式。")
     round_index: int | None = Field(default=None, description="会话内轮次序号；无序号时可为空。")
+    namespace: str = Field(
+        default=DEFAULT_NAMESPACE,
+        description="记忆作用域标签（企业/应用/助手/垂类），同一 user 的不同 namespace 互不可见。",
+    )
     metadata: dict[str, Any] = Field(
         default_factory=dict,
         description="调用方附加元数据；只用于索引和后端 metadata，不应放入密钥或大对象。",
     )
+
+    @field_validator("namespace")
+    @classmethod
+    def _check_namespace(cls, value: str) -> str:
+        return _validate_namespace(value)
 
     @field_validator("user_id", "session_id", "round_id", "request_id")
     @classmethod
@@ -192,6 +214,15 @@ class RecallMemoryRequest(BaseModel):
         le=12000,
         description="返回记忆内容的粗略 token 预算，用于裁剪召回结果。",
     )
+    namespace: str = Field(
+        default=DEFAULT_NAMESPACE,
+        description="记忆作用域标签；只召回该 namespace 下的长期记忆。",
+    )
+
+    @field_validator("namespace")
+    @classmethod
+    def _check_namespace(cls, value: str) -> str:
+        return _validate_namespace(value)
 
     @field_validator("user_id", "session_id")
     @classmethod
@@ -221,6 +252,15 @@ class DeleteMemoryRequest(BaseModel):
     operation_id: IdStr = Field(description="删除操作 ID；重复提交同一 operation_id 会做幂等处理。")
     memory_id: IdStr | None = Field(default=None, description="单条删除时必填的业务记忆 ID。")
     session_id: IdStr | None = Field(default=None, description="会话删除时使用的会话 ID。")
+    namespace: str = Field(
+        default=DEFAULT_NAMESPACE,
+        description="记忆作用域标签；只删除该 namespace 下的记忆。",
+    )
+
+    @field_validator("namespace")
+    @classmethod
+    def _check_namespace(cls, value: str) -> str:
+        return _validate_namespace(value)
 
     @field_validator("user_id", "request_id", "operation_id")
     @classmethod
@@ -269,6 +309,15 @@ class UpdateMemoryRequest(BaseModel):
         description="编辑后的长期记忆正文；服务端会去除首尾空白。",
     )
     memory_type: MemoryType | None = Field(default=None, description="可选的新记忆分类。")
+    namespace: str = Field(
+        default=DEFAULT_NAMESPACE,
+        description="记忆作用域标签；只更新该 namespace 下的记忆。",
+    )
+
+    @field_validator("namespace")
+    @classmethod
+    def _check_namespace(cls, value: str) -> str:
+        return _validate_namespace(value)
 
     @field_validator("user_id", "request_id", "operation_id", "memory_id")
     @classmethod
@@ -312,6 +361,15 @@ class RebuildMemoryRequest(BaseModel):
     )
     rebuild_l2: bool = Field(default=True, description="是否重建 L2 阶段摘要。")
     rebuild_l3: bool = Field(default=True, description="是否重建 L3 长期记忆索引。")
+    namespace: str = Field(
+        default=DEFAULT_NAMESPACE,
+        description="记忆作用域标签；只重建该 namespace 下的记忆。",
+    )
+
+    @field_validator("namespace")
+    @classmethod
+    def _check_namespace(cls, value: str) -> str:
+        return _validate_namespace(value)
 
     @field_validator("user_id", "request_id", "operation_id")
     @classmethod

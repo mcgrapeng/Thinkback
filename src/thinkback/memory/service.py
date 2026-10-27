@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import suppress
 from contextvars import copy_context
@@ -20,6 +21,7 @@ from loguru import logger
 
 from thinkback.domain.classification import assert_storable, resolve_classification
 from thinkback.domain.errors import TaskLockExhaustedError, TaskStaleWriteError
+from thinkback.domain.memory_types import MemoryTypeRegistry, MemoryTypeSpec, default_registry
 from thinkback.domain.ports import HistorySource, MemoryBackend, MemoryRepository
 from thinkback.domain.recall_policy import dedupe_and_clip
 from thinkback.domain.safety import (
@@ -233,6 +235,7 @@ class MemoryService:
         backend: MemoryBackend,
         history_source: HistorySource | None = None,
         mem0_infer_facts: bool = True,
+        registry_provider: Callable[[str], MemoryTypeRegistry] | None = None,
         l3_write_mode: Literal["sync", "async"] = "sync",
         l3_executor: ThreadPoolExecutor | None = None,
         l3_executor_workers: int = 2,
@@ -267,6 +270,8 @@ class MemoryService:
         self.repository = repository
         self.backend = backend
         self.history_source = history_source
+        # 记忆类型注册表：按 namespace 生效；未注入时用内置默认注册表。
+        self._registry_provider = registry_provider or (lambda _namespace: default_registry())
         # V2.1 瘦身：删除 ttl 读缓存（_active_memory_cache / _summary_cache）。
         # 之前每次写路径都 invalidate，cache lifetime ≈ 0；唯一受益的是"读-读-读"
         # 无穿插写的突发场景，但 mem0 读延迟 ~50ms，cache 收益不抵复杂度。
@@ -317,8 +322,55 @@ class MemoryService:
         return sorted(str(key) for key in metadata or {})[:20]
 
     @classmethod
-    def _long_term_scope_id(cls, _request: Any) -> str:
+    def _long_term_scope_id(cls, request: Any) -> str:
+        """长期记忆作用域 = 请求里的 namespace（默认 thinkback）。
+
+        同一 user 在不同 namespace（企业/应用/助手/垂类）下的长期记忆互不可见。
+        """
+        namespace = getattr(request, "namespace", None)
+        if isinstance(namespace, str) and namespace:
+            return namespace
         return cls.LONG_TERM_SCOPE_ID
+
+    def _type_registry(self, namespace: str) -> MemoryTypeRegistry:
+        return self._registry_provider(namespace)
+
+    @staticmethod
+    def _resolve_type_name(request: Any) -> str:
+        """请求声明的记忆类型：请求字段 > metadata > 默认 profile。"""
+        declared = getattr(request, "memory_type", None)
+        if isinstance(declared, MemoryType):
+            return declared.value
+        metadata = getattr(request, "metadata", None) or {}
+        raw = metadata.get("memory_type")
+        if isinstance(raw, str) and raw:
+            return raw
+        return "profile"
+
+    def _type_spec(self, request: Any, namespace: str) -> MemoryTypeSpec:
+        """取类型定义；未注册的类型直接报错（不静默降级成别的类型）。"""
+        name = self._resolve_type_name(request)
+        registry = self._type_registry(namespace)
+        try:
+            return registry.get(name)
+        except KeyError as exc:
+            raise ValueError(str(exc)) from exc
+
+    def _type_spec_from_metadata(self, metadata: dict[str, Any], namespace: str) -> MemoryTypeSpec:
+        """按 metadata 里的类型名取定义（写入路径统一走这里）。"""
+        name = str((metadata or {}).get("memory_type") or "profile")
+        registry = self._type_registry(namespace)
+        try:
+            return registry.get(name)
+        except KeyError as exc:
+            raise ValueError(str(exc)) from exc
+
+    @staticmethod
+    def _expiration_date(spec: MemoryTypeSpec) -> str | None:
+        """TTL 类型的过期日期（交给引擎执行过期）。"""
+        if spec.retention != "ttl" or not spec.ttl_days:
+            return None
+        return (datetime.now(UTC) + timedelta(days=spec.ttl_days)).date().isoformat()
 
     @staticmethod
     def _session_scope_id(request: Any) -> str:
@@ -429,9 +481,21 @@ L2 更新 (缓存失效)
 """
         session_scope_id = self._session_scope_id(request)
         l3_scope_id = self._long_term_scope_id(request)
+        # 类型注册表决定这次写入的准入：未注册的类型明确报错；需要审批的类型
+        # 没有审批通道就明确拒绝（不留「写进去但不可用」的口子）。
+        type_spec = self._type_spec(request, l3_scope_id)
+        if type_spec.review_required:
+            raise ValueError(
+                f"memory type {type_spec.name!r} requires review; no approval path is configured"
+            )
+        effective_metadata = dict(request.metadata or {})
+        if not effective_metadata.get("data_classification"):
+            effective_metadata["data_classification"] = type_spec.classification
+        # 存库的类型名以注册表为准，避免「配置说是 state、存下来是 profile」。
+        effective_metadata["memory_type"] = type_spec.name
         # 分类准入在最前面：SENSITIVE / RESTRICTED 连 L1 journal 都不落，
         # 也不会进入后续 LLM / embedding / Mem0 调用。
-        assert_storable(resolve_classification(request.metadata))
+        assert_storable(resolve_classification(effective_metadata))
         LOGGER_MEMORY.started(
             "append",
             user_id=request.user_id,
@@ -557,7 +621,7 @@ L2 更新 (缓存失效)
                         source_refs=[
                             {"session_id": request.session_id, "round_id": request.round_id}
                         ],
-                        request_metadata=request.metadata,
+                        request_metadata=effective_metadata,
                         slot_reserved=l3_slot_reserved,
                     )
                     l3_slot_reserved = False
@@ -590,7 +654,7 @@ L2 更新 (缓存失效)
                     user_id=request.user_id,
                     memory_scope_id=l3_scope_id,
                     source_refs=[{"session_id": request.session_id, "round_id": request.round_id}],
-                    request_metadata=request.metadata,
+                    request_metadata=effective_metadata,
                 )
                 current_round = self.repository.get_round(request.round_id)
                 round_deleted = (
@@ -1142,6 +1206,19 @@ L2 更新 (缓存失效)
             metadata_keys=self._metadata_key_summary(request_metadata),
         )
         run_log.info("memory l3 write started")
+        # 类型准入：注册表声明了哪些角色可以作为该类型来源、该类型是否可抽取。
+        # 程序性规则之类 extractor=none / 角色受限的类型在这里就不该抽取。
+        type_spec = self._type_spec_from_metadata(request_metadata, memory_scope_id)
+        if not type_spec.allows_extraction():
+            run_log.bind(memory_type=type_spec.name).info(
+                "memory l3 write skipped: type has no extractor"
+            )
+            return [{"event": "SKIP", "reason": "type_not_extractable"}]
+        if not type_spec.allows_role("user"):
+            run_log.bind(memory_type=type_spec.name).info(
+                "memory l3 write skipped: type does not accept user role"
+            )
+            return [{"event": "SKIP", "reason": "role_not_allowed_for_type"}]
         if self._source_refs_excluded(user_id, memory_scope_id, source_refs):
             run_log.bind(reason="source_ref_excluded").info("memory l3 write skipped")
             return [{"event": "SKIP", "reason": "source_ref_excluded"}]
@@ -1163,6 +1240,7 @@ L2 更新 (缓存失效)
             memory_scope_id=memory_scope_id,
             source_refs=source_refs,
             request_metadata=request_metadata,
+            expiration_date=self._expiration_date(type_spec),
         )
         run_log.bind(l3_event_count=len(l3_events)).info("memory l3 write completed")
         return l3_events
@@ -1677,9 +1755,9 @@ L2 更新 (缓存失效)
         return None
 
     def list_memory_items(
-        self, *, user_id: str, include_deleted: bool = False
+        self, *, user_id: str, include_deleted: bool = False, namespace: str = LONG_TERM_SCOPE_ID
     ) -> ListMemoriesResponse:
-        l3_scope_id = self.LONG_TERM_SCOPE_ID
+        l3_scope_id = namespace
         memories = (
             self.repository.list_memories(user_id, l3_scope_id)
             if include_deleted
@@ -1694,8 +1772,12 @@ L2 更新 (缓存失效)
             ],
         )
 
-    def get_memory_item(self, *, user_id: str, memory_id: str) -> GetMemoryResponse | None:
-        memory = self._find_manageable_memory(user_id=user_id, memory_id=memory_id)
+    def get_memory_item(
+        self, *, user_id: str, memory_id: str, namespace: str = LONG_TERM_SCOPE_ID
+    ) -> GetMemoryResponse | None:
+        memory = self._find_manageable_memory(
+            user_id=user_id, memory_id=memory_id, namespace=namespace
+        )
         if memory is None:
             return None
         return GetMemoryResponse(status="ok", memory=self._managed_memory_item(memory))
@@ -1809,6 +1891,7 @@ L2 更新 (缓存失效)
             user_id=request.user_id,
             memory_id=request.memory_id,
             active_only=True,
+            namespace=self._long_term_scope_id(request),
         )
         if memory is None:
             raise ValueError("memory not found")
@@ -1938,6 +2021,7 @@ L2 更新 (缓存失效)
             user_id=request.user_id,
             memory_id=request.memory_id,
             active_only=True,
+            namespace=self._long_term_scope_id(request),
         )
         if memory is None:
             raise ValueError("operation_id conflict: completed update result is no longer current")
@@ -2452,8 +2536,9 @@ L2 更新 (缓存失效)
         user_id: str,
         memory_id: str,
         active_only: bool = False,
+        namespace: str = LONG_TERM_SCOPE_ID,
     ) -> Any | None:
-        l3_scope_id = self.LONG_TERM_SCOPE_ID
+        l3_scope_id = namespace
         memories = (
             self.repository.active_memories(user_id, l3_scope_id)
             if active_only
@@ -2525,6 +2610,7 @@ L2 更新 (缓存失效)
             user_id=request.user_id,
             memory_id=memory.memory_id,
             active_only=True,
+            namespace=self._long_term_scope_id(request),
         )
         if current is None:
             raise ValueError("memory not found")
@@ -3297,6 +3383,7 @@ L2 更新 (缓存失效)
         memory_scope_id: str,
         source_refs: list[dict[str, str]],
         request_metadata: dict[str, Any],
+        expiration_date: str | None = None,
     ) -> list[dict[str, Any]]:
         """调用 L3 后端提取长期记忆，并把返回事件交给本地索引。
 
@@ -3395,6 +3482,7 @@ L2 更新 (缓存失效)
             memory_scope_id=memory_scope_id,
             metadata=l3_metadata,
             infer=self.mem0_infer_facts,
+            expiration_date=expiration_date,
         )
         if self._source_refs_excluded(user_id, memory_scope_id, source_refs):
             self.backend.delete_many(
@@ -4133,11 +4221,10 @@ L2 更新 (缓存失效)
                 request_metadata.get("data_classification"),
                 self._classify_data(request_metadata),
             ),
-            "memory_type": self._enum_value(
-                MemoryType,
-                request_metadata.get("memory_type"),
-                MemoryType.PROFILE.value,
-            ),
+            # 类型名直接用注册表解析出的名字（可能是 state/commitment 等
+            # 枚举外的类型），不再退回枚举默认值造成「配置说是 state、
+            # 存下来是 profile」。
+            "memory_type": str(request_metadata.get("memory_type") or MemoryType.PROFILE.value),
         }
         backend_categories = self._list_metadata_value(request_metadata.get("backend_categories"))
         if backend_categories:

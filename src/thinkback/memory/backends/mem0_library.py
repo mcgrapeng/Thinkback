@@ -188,6 +188,7 @@ class Mem0LibraryMemoryBackend:
         memory_scope_id: str,
         metadata: dict[str, Any] | None = None,
         infer: bool = True,
+        expiration_date: str | None = None,
     ) -> list[dict[str, Any]]:
         """向 Mem0 写入消息并返回事件摘要。
 
@@ -241,6 +242,10 @@ class Mem0LibraryMemoryBackend:
         """
         scoped_metadata = dict(metadata or {})
         scoped_metadata["memory_scope_id"] = memory_scope_id
+        # 过期交给引擎（Mem0 的 expiration_date）：过期记忆在检索时自动隐藏。
+        expiration_kwargs: dict[str, Any] = (
+            {"expiration_date": expiration_date} if expiration_date else {}
+        )
         result = self._call(
             "add",
             messages,
@@ -248,6 +253,7 @@ class Mem0LibraryMemoryBackend:
             agent_id=memory_scope_id,
             metadata=scoped_metadata,
             infer=infer,
+            **expiration_kwargs,
         )
         events = self._results(result)
         logger.bind(

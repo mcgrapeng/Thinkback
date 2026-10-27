@@ -39,8 +39,10 @@ class FakeMemoryBackend:
         memory_scope_id: str,
         metadata: dict[str, Any] | None = None,
         infer: bool = True,
+        expiration_date: str | None = None,
     ) -> list[dict[str, Any]]:
         _ = infer  # fake backend 不做 LLM 抽取，参数仅用于协议兼容
+        _ = expiration_date  # fake backend 不实现过期，参数仅用于协议兼容
         text = " ".join(
             message["content"].strip() for message in messages if message.get("content", "").strip()
         )

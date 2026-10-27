@@ -470,15 +470,20 @@ async def list_memory_items(
         default=False,
         description="是否包含已删除或已取代的业务记忆；系统墓碑不会返回。",
     ),
+    namespace: str = Query(
+        default="thinkback",
+        description="记忆作用域标签（企业/应用/助手/垂类）。",
+    ),
     service: MemoryService = Depends(get_memory_service),
 ) -> ListMemoriesResponse:
-    logger.bind(user_id=user_id, include_deleted=include_deleted).debug(
+    logger.bind(user_id=user_id, include_deleted=include_deleted, namespace=namespace).debug(
         "memory management list request received"
     )
     return await _run_read_memory_call(
         service.list_memory_items,
         user_id=user_id,
         include_deleted=include_deleted,
+        namespace=namespace,
     )
 
 
@@ -492,15 +497,20 @@ async def list_memory_items(
 async def get_memory_item(
     memory_id: str = Path(description="要查询的业务记忆 ID。"),
     user_id: str = Query(description="用户 ID；只查询该用户范围内的长期记忆。"),
+    namespace: str = Query(
+        default="thinkback",
+        description="记忆作用域标签（企业/应用/助手/垂类）。",
+    ),
     service: MemoryService = Depends(get_memory_service),
 ) -> GetMemoryResponse:
-    logger.bind(user_id=user_id, memory_id=memory_id).debug(
+    logger.bind(user_id=user_id, memory_id=memory_id, namespace=namespace).debug(
         "memory management get request received"
     )
     response = await _run_read_memory_call(
         service.get_memory_item,
         user_id=user_id,
         memory_id=memory_id,
+        namespace=namespace,
     )
     if response is None:
         raise HTTPException(status_code=404, detail="memory not found")
