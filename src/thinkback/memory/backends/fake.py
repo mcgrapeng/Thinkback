@@ -120,3 +120,11 @@ class FakeMemoryBackend:
         for memory_id in matching:
             self.memories.pop(memory_id, None)
         return len(matching)
+
+    def purge_history(
+        self, *, user_id: str, memory_ids: list[str], scopes: list[str]
+    ) -> dict[str, int]:
+        """fake 后端没有引擎侧历史表，返回零计数。"""
+
+        _ = (user_id, memory_ids, scopes)
+        return {"history": 0, "messages": 0}

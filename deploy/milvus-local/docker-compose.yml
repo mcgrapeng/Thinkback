@@ -1,0 +1,38 @@
+# 本地 standalone Milvus（真实契约验证用）。
+#
+# 为什么单独一个文件：仓库根部的 docker-compose.yml 只管 PostgreSQL ——
+# 向量库按设计属于外部基础设施。但真实契约验证（erase 断言、相关度精度）
+# 需要一个真实 Milvus，这里给出单机 dev 可复现的最小实例。
+#
+# 特点（与生产无关）：
+#   - 内嵌 etcd：不需要额外 etcd 容器（Milvus 2.6 的 standalone 默认连
+#     localhost:2379，连不上会 abort 退出）。
+#   - COMMON_STORAGETYPE=local：本地文件存对象，不用 minio。
+#   - 端口用变量：宿主机 19530 常被别的 Milvus 占着，撞端口会让容器
+#     以 exit 134 崩掉（端口绑定失败 → abort）。
+#
+# 用法：
+#   docker compose -f deploy/milvus-local/docker-compose.yml up -d
+#   MILVUS_URL=http://localhost:19540  # 跑真实链路脚本
+#   docker compose -f deploy/milvus-local/docker-compose.yml down
+services:
+  milvus:
+    image: milvusdb/milvus:v2.6.15
+    container_name: thinkback-milvus
+    command: ["milvus", "run", "standalone"]
+    ports:
+      - "${MILVUS_HOST_PORT:-19540}:19530"
+      - "${MILVUS_METRICS_HOST_PORT:-9095}:9091"
+    environment:
+      DEPLOY_MODE: STANDALONE
+      ETCD_USE_EMBED: "true"
+      ETCD_DATA_DIR: /var/lib/milvus/etcd
+      ETCD_CONFIG_PATH: /milvus/configs/advanced/etcd-local.yaml
+      COMMON_STORAGETYPE: local
+      MALLOC_CONF: background_thread:true
+    volumes:
+      - milvus-data:/var/lib/milvus
+      - ./etcd.yaml:/milvus/configs/advanced/etcd-local.yaml:ro
+
+volumes:
+  milvus-data:

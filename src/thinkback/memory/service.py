@@ -1765,10 +1765,12 @@ L2 更新 (缓存失效)
         """物理擦除：把原文从各层存储里删掉。
 
         suppress（现 delete 语义）只让内容不可召回并保留墓碑；erase 会删除
-        L1 轮次原文、L2 摘要正文、L3 业务索引行与后端向量记录。
+        L1 轮次原文、L2 摘要正文、L3 业务索引行、后端向量记录，以及引擎侧
+        残留（Mem0 本地 SQLite 的事实抽取历史与原始消息）。
 
-        已知残留：Mem0 的本地 history 表记录了每次抽取的新旧值，2.2.1 没有公开的
-        清理接口，那一层可能仍留有原文。审计里如实记录，不宣称已彻底擦除。
+        已知残留：Mem0 的 history.db 是进程本地文件，多副本部署时每个副本各
+        有一份，一次擦除只清到当前副本；向量库删除是逻辑删除，物理回收要靠
+        compaction。审计里如实记录这两点。
         """
         l3_scope_id = self._long_term_scope_id(request)
         session_scope_id = self._session_scope_id(request)
@@ -1819,6 +1821,13 @@ L2 更新 (缓存失效)
         # 本地业务索引行物理删除
         self.repository.delete_memory_rows([memory.memory_id for memory in targets])
 
+        # 引擎侧残留：事实抽取历史 + 原始消息（mem0 本地 SQLite）
+        purged = self.backend.purge_history(
+            user_id=request.user_id,
+            memory_ids=backend_ids,
+            scopes=[l3_scope_id],
+        )
+
         # L1 轮次原文 + L2 摘要正文
         for scope_id in affected_sessions:
             self.repository.delete_rounds(
@@ -1833,7 +1842,7 @@ L2 更新 (缓存失效)
             self.repository.clear_summary(request.user_id, scope_id)
             self.repository.clear_l1(request.user_id, scope_id, scope_id)
 
-        self._record_erase_audit(request, targets, backend_ids)
+        self._record_erase_audit(request, targets, backend_ids, purged)
         return DeleteMemoryResponse(
             status="completed",
             task_id=f"memory-erase:{request.operation_id}",
@@ -1864,9 +1873,13 @@ L2 更新 (缓存失效)
         return list(self.repository.active_memories(request.user_id, l3_scope_id))
 
     def _record_erase_audit(
-        self, request: DeleteMemoryRequest, targets: list[Any], backend_ids: list[str]
+        self,
+        request: DeleteMemoryRequest,
+        targets: list[Any],
+        backend_ids: list[str],
+        purged: dict[str, int],
     ) -> None:
-        """审计只留范围与数量，不留原文；如实标注 Mem0 history 的残留。"""
+        """审计只留范围与数量，不留原文；如实标注未覆盖的残留面。"""
         from thinkback.domain.entities import AdminAuditEntry
 
         self.repository.save_admin_audit(
@@ -1879,8 +1892,13 @@ L2 更新 (缓存失效)
                 detail={
                     "affected_memories": len(targets),
                     "backend_records_deleted": len(backend_ids),
-                    "mem0_history_purged": False,
-                    "note": "Mem0 本地 history 无公开清理接口，可能仍残留原文",
+                    "mem0_history_purged": True,
+                    "mem0_history_rows_deleted": int(purged.get("history", 0)),
+                    "mem0_message_rows_deleted": int(purged.get("messages", 0)),
+                    "note": (
+                        "history.db 是进程本地文件，多副本部署需逐副本擦除；"
+                        "向量库删除为逻辑删除，物理回收需 compaction"
+                    ),
                 },
             )
         )
