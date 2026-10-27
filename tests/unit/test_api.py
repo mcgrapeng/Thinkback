@@ -59,6 +59,45 @@ def test_liveness_probe_does_not_emit_info_logs(client) -> None:
     assert "HTTP request completed" not in logs
 
 
+def test_validation_error_does_not_echo_input(client) -> None:
+    """校验失败时，响应体与日志都不得回显请求正文（含凭据）。"""
+    secret = "sk-TEST-SECRET-VALUE"
+    sink: list[str] = []
+    handler_id = logger.add(sink.append, level="WARNING", format="{message}")
+
+    try:
+        response = client.post(
+            "/memory/append",
+            json={
+                "request_id": "req-validation-secret",
+                "user_id": "u-validation-secret",
+                "session_id": "s-validation-secret",
+                "round_id": "r-validation-secret",
+                "source_timestamp": "2026-10-27T10:00:00Z",
+                "messages": [
+                    {
+                        "message_id": "m1",
+                        "role": "user",
+                        "content": secret,
+                        "timestamp": "2026-10-27T10:00:00Z",
+                    },
+                    {
+                        "message_id": "m2",
+                        "role": "user",
+                        "content": secret,
+                        "timestamp": "2026-10-27T10:00:01Z",
+                    },
+                ],
+            },
+        )
+    finally:
+        logger.remove(handler_id)
+
+    assert response.status_code == 422
+    assert secret not in response.text
+    assert all(secret not in line for line in sink)
+
+
 def test_trace_id_header_is_returned(client) -> None:
     response = client.get("/health", headers={"X-Request-Id": "req-tests"})
 
