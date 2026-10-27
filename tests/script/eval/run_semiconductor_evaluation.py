@@ -35,7 +35,6 @@ from uuid import uuid4
 
 from thinkback.memory.schemas import (
     AppendMemoryRequest,
-    DeleteScope,
     MemoryMessage,
     MessageRole,
     RecallMemoryRequest,
@@ -74,8 +73,8 @@ def _append(
     metadata: dict[str, Any] | None = None,
     user_id: str = "semi-user",
     session_id: str = "semi-session",
-) -> None:
-    service.append(
+) -> list[Any]:
+    response = service.append(
         AppendMemoryRequest(
             request_id=f"req-{round_id}",
             user_id=user_id,
@@ -90,6 +89,7 @@ def _append(
             metadata=metadata or {},
         )
     )
+    return list(getattr(response, "l3_events", []) or [])
 
 
 def _recall_texts(
@@ -153,14 +153,17 @@ def _run_recall_case(
 ) -> CaseResult:
     started = time.perf_counter()
     service, _backend, _repository = _make_service(real, repository)
+    events: list[Any] = []
     for index, round_data in enumerate(case["rounds"]):
-        _append(
-            service,
-            namespace=namespace,
-            round_id=f"{case['name']}-{run_token}-r{index}",
-            user_text=round_data["user"],
-            assistant_text=round_data["assistant"],
-            user_id=user_id,
+        events.extend(
+            _append(
+                service,
+                namespace=namespace,
+                round_id=f"{case['name']}-{run_token}-r{index}",
+                user_text=round_data["user"],
+                assistant_text=round_data["assistant"],
+                user_id=user_id,
+            )
         )
     texts = _recall_texts(service, namespace=namespace, query=case["query"], user_id=user_id)
     missing = [
@@ -174,7 +177,7 @@ def _run_recall_case(
         case["name"],
         case["category"],
         passed,
-        f"missing={missing} leaked={leaked} texts={texts}",
+        f"missing={missing} leaked={leaked} events={events} texts={texts}",
         (time.perf_counter() - started) * 1000,
     )
 
@@ -319,9 +322,10 @@ def run_cases(corpus: dict[str, Any], *, real: bool) -> list[CaseResult]:
                     )
                 )
                 continue
-            # 每个用例一个独立 user：真实栈上 Milvus / PG 会累积记忆，
-            # 共用 user 会让召回串味，判定失真。
-            user_id = f"semi-{case['name']}"
+            # 每个用例一个独立 user，且带 run_token：真实栈上 Milvus / PG 会累积
+            # 记忆，复用 user 会让引擎把新事实当重复跳过（抽取为空），也会让旧
+            # 记忆污染召回 —— 测量结果就不真实了。
+            user_id = f"semi-{case['name']}-{run_token}"
             try:
                 results.append(runner(case, namespace, real, user_id, shared_repository, run_token))
             except Exception as exc:  # noqa: BLE001 - 评测要记录失败而不是中断
