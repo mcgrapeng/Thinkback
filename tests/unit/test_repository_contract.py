@@ -909,3 +909,25 @@ def test_clear_summary_empties_text(repository) -> None:  # type: ignore[no-unty
     summary = repository.get_summary("user-1", "session-1")
     assert summary is not None
     assert summary.summary_text == ""
+
+
+def test_clear_summary_marks_dirty_and_bumps_row_version(repository) -> None:  # type: ignore[no-untyped-def]
+    """擦除用的 clear_summary 必须置 DIRTY 并递增版本。
+
+    在飞的 L2 刷新带着旧版本号写回：版本不变则乐观锁通过，已擦除的摘要
+    会回到 ACTIVE。
+    """
+    repository.upsert_summary_from_rounds(
+        "user-1", "session-1", [], summary_text="旧摘要", summary_kind="llm"
+    )
+    before = repository.get_summary("user-1", "session-1")
+    assert before is not None
+    # in-memory 仓储返回同一实例，版本号必须先取成 int 再比较。
+    version_before = before.row_version
+
+    repository.clear_summary("user-1", "session-1")
+
+    after = repository.get_summary("user-1", "session-1")
+    assert after is not None
+    assert after.summary_state is SummaryState.DIRTY
+    assert after.row_version > version_before

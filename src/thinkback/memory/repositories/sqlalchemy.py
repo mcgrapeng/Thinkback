@@ -987,6 +987,10 @@ class SqlAlchemyMemoryRepository(L1CacheMixin):
                 return
             record.summary_text = ""
             record.structured_sections = {}
+            # 置 DIRTY 并递增版本：在飞的 LLM 刷新带着旧版本号写不回来，
+            # 已擦除的内容不会回到 ACTIVE 摘要。
+            record.summary_state = SummaryState.DIRTY.value
+            record.row_version = record.row_version + 1
             await session.commit()
 
     async def _mark_memory_deleted(self, memory_id: str) -> MemoryIndexEntry | None:

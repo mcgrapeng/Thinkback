@@ -545,6 +545,16 @@ L2 更新 (缓存失效)
                 )
 
         restricted_or_unsafe = self._is_restricted_or_unsafe(request.messages)
+        if self._source_refs_excluded(
+            request.user_id,
+            l3_scope_id,
+            [{"session_id": request.session_id, "round_id": request.round_id}],
+        ):
+            # 这轮已被物理擦除（journal 行已不在）：重新写入会把原文带回来。
+            # 显式冲突，调用方要用新的 round_id。
+            raise ValueError(
+                "round_id conflict: source round was erased, use a new round_id"
+            )
         restrict_reason = self._restricted_reason(request.messages)
         l3_slot_reserved = False
         # 任务行可能还没建出来（get_task 就失败了），except 分支要能容忍 task 为 None。
@@ -758,6 +768,10 @@ L2 更新 (缓存失效)
         l3_scope_id: str,
     ) -> list[Any]:
         """apppend 后的本地状态发布；返回锁外待执行的 backend 写回调。"""
+        source_refs = [{"session_id": request.session_id, "round_id": request.round_id}]
+        if self._source_refs_excluded(request.user_id, l3_scope_id, source_refs):
+            # 这轮已被删除或擦除：不得再发布到 L1/L2，否则原文回到上下文。
+            return []
         self.repository.update_l1(entry)
         self._upsert_default_summary(request.user_id, session_scope_id)
         if self._l2_refresher is not None:
@@ -1856,6 +1870,10 @@ L2 更新 (缓存失效)
             affected_sessions = set(self._user_summary_scope_ids(request.user_id))
             round_ids_by_session = {scope_id: None for scope_id in affected_sessions}
 
+        source_refs = self._erase_source_refs(
+            request, targets, affected_sessions, round_ids_by_session
+        )
+
         return {
             "scope": request.scope.value,
             "namespace": l3_scope_id,
@@ -1867,7 +1885,78 @@ L2 更新 (缓存失效)
             ],
             "sessions": sorted(affected_sessions),
             "round_ids": round_ids_by_session,
+            "source_refs": source_refs,
         }
+
+    def _erase_source_refs(
+        self,
+        request: DeleteMemoryRequest,
+        targets: list[Any],
+        affected_sessions: set[str],
+        round_ids_by_session: dict[str, Any],
+    ) -> list[dict[str, str]]:
+        """擦除会清掉的来源轮次：屏障要挡住的就是这些轮次。"""
+        if request.scope is DeleteScope.MEMORY:
+            refs: list[dict[str, str]] = []
+            for memory in targets:
+                for ref in memory.source_refs:
+                    if ref.get("session_id") and ref.get("round_id"):
+                        refs.append(
+                            {
+                                "session_id": str(ref["session_id"]),
+                                "round_id": str(ref["round_id"]),
+                            }
+                        )
+            return refs
+
+        refs = []
+        for scope_id in sorted(affected_sessions):
+            for entry in self.repository.list_rounds(
+                request.user_id, scope_id, None, include_pending=True
+            ):
+                refs.append(
+                    {"session_id": entry.session_id, "round_id": entry.round_id}
+                )
+        return refs
+
+    def _add_erase_tombstone(
+        self,
+        *,
+        user_id: str,
+        memory_scope_id: str,
+        source_refs: list[dict[str, str]],
+        operation_id: str,
+    ) -> None:
+        """内容无关的擦除屏障。
+
+        被擦除的来源轮次写进这条墓碑：后续 append（无论新写还是在飞）与
+        外部历史 rebuild 都会命中排除集，不得把内容写回来。墓碑本身不含
+        原文，也不参与召回。
+        """
+        for memory in self.repository.list_memories(user_id, memory_scope_id):
+            metadata = getattr(memory, "metadata", {}) or {}
+            if isinstance(metadata, dict) and metadata.get("erase_tombstone") == True:  # noqa: E712
+                if metadata.get("operation_id") == operation_id:
+                    return
+        deleted_before = datetime.now(UTC)
+        raw = "|".join((user_id, memory_scope_id, operation_id, deleted_before.isoformat()))
+        digest = sha256(raw.encode("utf-8")).hexdigest()[:32]
+        tombstone = self.repository.add_memory_index(
+            backend_memory_id=f"erase-tombstone:{digest}",
+            user_id=user_id,
+            memory_scope_id=memory_scope_id,
+            source_refs=list(source_refs),
+            memory_text="erase tombstone",
+            source_type=SourceType.SYSTEM_MIGRATION.value,
+            data_classification=DataClassification.RESTRICTED.value,
+            memory_type=MemoryType.CONSTRAINT.value,
+            metadata={
+                "erase_tombstone": True,
+                "deleted_before": deleted_before.isoformat(),
+                "operation_id": operation_id,
+            },
+        )
+        self.repository.mark_memory_deleted(tombstone.memory_id)
 
     def _run_erase_stages(
         self, request: DeleteMemoryRequest, task: TaskEntry
@@ -1895,7 +1984,22 @@ L2 更新 (缓存失效)
             self._mutate_task_with_retry(task.task_id, mutate, strict=True)
 
         purged: dict[str, int] = dict(task.result.get("purged") or {})
+        source_refs = [
+            {"session_id": str(ref.get("session_id", "")), "round_id": str(ref.get("round_id", ""))}
+            for ref in (plan.get("source_refs") or [])
+        ]
         try:
+            if "barrier" not in done:
+                # 屏障先落：后面的删除动作即使失败，被擦除的轮次也不会被
+                # 在飞写入或外部历史重建写回来。
+                self._add_erase_tombstone(
+                    user_id=request.user_id,
+                    memory_scope_id=namespace,
+                    source_refs=source_refs,
+                    operation_id=request.operation_id,
+                )
+                mark_done("barrier")
+
             if "backend" not in done:
                 if scope_value == DeleteScope.ALL.value:
                     # ALL 必须覆盖本地没有索引行的后端记录（抽取后索引失败等
@@ -2852,6 +2956,7 @@ L2 更新 (缓存失效)
                 "source_ref_tombstone",
                 "delete_all_tombstone",
                 "session_delete_tombstone",
+                "erase_tombstone",
             )
         )
 
