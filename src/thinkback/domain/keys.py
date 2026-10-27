@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
@@ -21,17 +22,43 @@ def scope_key(user_id: str, memory_scope_id: str) -> str:
     return f"{user_id}:{memory_scope_id}"
 
 
+# 影响执行行为的 metadata 键：同 round 但改这些键，不能当成同一次写入。
+BEHAVIORAL_METADATA_KEYS = (
+    "force_extract",
+    "memory_type",
+    "data_classification",
+    "source_type",
+    "backend_categories",
+)
+
+
+def _canonical(payload: Any) -> str:
+    return json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
 def fingerprint(messages: list[dict[str, Any]]) -> str:
-    """对话消息指纹。用于幂等性检查：两个指纹相同的回合被视为同一回合"""
-    raw = "|".join(f"{message['role']}:{message['content']}" for message in messages)
-    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+    """对话消息指纹。用 canonical JSON 而不是 `|` 拼接，避免内容里的分隔符
+    让两组不同消息撞成同一个 hash（幂等误判）。"""
+    payload = [{"role": message["role"], "content": message["content"]} for message in messages]
+    return hashlib.sha256(_canonical(payload).encode("utf-8")).hexdigest()
 
 
 def request_fingerprint(request: AppendMemoryRequest) -> str:
-    """请求级指纹，由消息指纹计算得出"""
-    return fingerprint(
-        [{"role": message.role.value, "content": message.content} for message in request.messages]
-    )
+    """请求级指纹：消息 + 影响行为的 metadata。
+
+    与 ``save_round`` 存库的 ``round_fingerprint`` 必须同源计算，重放才比得上。
+    """
+    payload = {
+        "messages": [
+            {"role": message.role.value, "content": message.content} for message in request.messages
+        ],
+        "behavior_metadata": {
+            key: request.metadata.get(key)
+            for key in BEHAVIORAL_METADATA_KEYS
+            if key in request.metadata
+        },
+    }
+    return hashlib.sha256(_canonical(payload).encode("utf-8")).hexdigest()
 
 
 def source_ref_key(source_ref: dict[str, str]) -> tuple[str | None, str | None]:

@@ -35,7 +35,7 @@ from thinkback.domain.enums import (
     TaskStatus,
 )
 from thinkback.domain.errors import TaskStaleWriteError
-from thinkback.domain.keys import fingerprint, source_ref_key
+from thinkback.domain.keys import request_fingerprint, source_ref_key
 from thinkback.domain.summarization import summarize_rounds
 from thinkback.infra.database.engine import SessionLocal
 from thinkback.infra.database.models import (
@@ -250,7 +250,7 @@ class SqlAlchemyMemoryRepository(L1CacheMixin):
             round_index=request.round_index,
             messages=messages,
             source_timestamp=request.source_timestamp,
-            round_fingerprint=fingerprint(messages),
+            round_fingerprint=request_fingerprint(request),
         )
 
     @staticmethod

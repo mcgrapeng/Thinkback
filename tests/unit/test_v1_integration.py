@@ -133,6 +133,52 @@ def test_v1_rejects_request_without_required_scope() -> None:
         assert "memory:append" in body["error"]["message"]
 
 
+def test_idempotency_key_does_not_cross_endpoints() -> None:
+    """同一把 key 用在不同端点：recall 不得领走 append 的缓存响应。"""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from thinkback.api.idempotency import IdempotencyMiddleware
+
+    app = FastAPI()
+    app.add_middleware(IdempotencyMiddleware)
+
+    @app.post("/v1/a")
+    async def route_a() -> dict[str, str]:
+        return {"route": "a"}
+
+    @app.post("/v1/b")
+    async def route_b() -> dict[str, str]:
+        return {"route": "b"}
+
+    with TestClient(app) as client:
+        headers = {"Idempotency-Key": "shared-endpoint-key"}
+        r_a = client.post("/v1/a", json={"x": 1}, headers=headers)
+        r_b = client.post("/v1/b", json={"x": 1}, headers=headers)
+        assert r_a.json() == {"route": "a"}
+        assert r_b.json() == {"route": "b"}
+
+
+def test_expired_idempotency_entry_does_not_conflict() -> None:
+    """过期条目必须连冲突索引一起清理，否则新 body 永远 409。"""
+    import time
+
+    from thinkback.api.idempotency import CACHE_TTL, CachedResponse, IdempotencyCache
+
+    cache = IdempotencyCache()
+    expired = CachedResponse(
+        body=b"old",
+        status_code=200,
+        content_type="application/json",
+        headers={},
+        timestamp=time.time() - CACHE_TTL - 1,
+    )
+    cache.put("tenant", "k", "POST", "/v1/a", "hash-old", expired)
+
+    assert cache.get_conflict("tenant", "k", "POST", "/v1/a", "hash-new") is False
+    assert cache.get("tenant", "k", "POST", "/v1/a", "hash-old") is None
+
+
 # ─── 幂等测试 ──────────────────────────────────────────────────────────
 
 

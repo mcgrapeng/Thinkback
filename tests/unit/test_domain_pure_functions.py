@@ -106,15 +106,27 @@ def test_local_index_memory_text_keeps_multi_fact_original() -> None:
 
 class TestFingerprint:
     def test_digest_is_stable_and_pinned(self) -> None:
-        """指纹算法/分隔符是持久化契约：改动会让已存幂等判断全部失配。"""
-        assert (
-            fingerprint([{"role": "user", "content": "a"}])
-            == "767321b3673f590fcc4b5b441afbaade7a8be6db95273f71c67df0366924f43b"
+        """指纹算法是 canonical JSON（sort_keys + 紧凑分隔符）。
+
+        旧的 `|` 拼接算法会让内容里的 `|` 参与编码，两组不同消息可能撞 hash；
+        改成 canonical JSON 后编码不含分隔符歧义。旧 hash 会失效（服务未上线，
+        无生产数据需要迁移）。
+        """
+        import hashlib
+        import json
+
+        def expected(messages: list[dict[str, str]]) -> str:
+            payload = json.dumps(
+                messages, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+            )
+            return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+        assert fingerprint([{"role": "user", "content": "a"}]) == expected(
+            [{"role": "user", "content": "a"}]
         )
-        assert (
-            fingerprint([{"role": "user", "content": "a"}, {"role": "assistant", "content": "b"}])
-            == "ec192370a912900b610b41e8b9462cbed52702d75c6709578c165b7d1e7f2984"
-        )
+        assert fingerprint(
+            [{"role": "user", "content": "a"}, {"role": "assistant", "content": "b"}]
+        ) == expected([{"role": "user", "content": "a"}, {"role": "assistant", "content": "b"}])
 
     def test_message_boundaries_and_content_sensitivity(self) -> None:
         one = fingerprint([{"role": "user", "content": "a"}])
@@ -201,3 +213,28 @@ class TestStructuredSummaryPrompt:
         prompt = build_structured_summary_user_prompt([_entry("r-1")], previous_summary=None)
         assert "上一版摘要" not in prompt
         assert "user: 内容-r-1" in prompt
+
+
+def test_request_fingerprint_distinguishes_embedded_separators() -> None:
+    """消息里含 | 的两组不同对话，指纹不得相同（否则幂等误判为同一轮）。"""
+    from thinkback.domain.keys import fingerprint
+
+    a = [
+        {"role": "user", "content": "a|assistant:b"},
+        {"role": "assistant", "content": "c"},
+    ]
+    b = [
+        {"role": "user", "content": "a"},
+        {"role": "assistant", "content": "b|assistant:c"},
+    ]
+    assert fingerprint(a) != fingerprint(b)
+
+
+def test_request_fingerprint_covers_behavior_changing_metadata() -> None:
+    """force_extract 会改变是否抽取，不能在同 round 下被当成同一次写入。"""
+    from tests.unit.test_memory_service import make_append
+    from thinkback.domain.keys import request_fingerprint
+
+    base = make_append(round_id="r-behavior")
+    forced = base.model_copy(update={"metadata": {"force_extract": True}})
+    assert request_fingerprint(base) != request_fingerprint(forced)
