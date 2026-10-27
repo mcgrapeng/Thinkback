@@ -481,10 +481,16 @@ class SqlAlchemyMemoryRepository(L1CacheMixin):
         *,
         limit: int | None = None,
         descending: bool = False,
+        include_pending: bool = False,
     ) -> list[JournalEntry]:
         return self._run(
             self._list_rounds(
-                user_id, memory_scope_id, session_id, limit=limit, descending=descending
+                user_id,
+                memory_scope_id,
+                session_id,
+                limit=limit,
+                descending=descending,
+                include_pending=include_pending,
             )
         )
 
@@ -496,11 +502,13 @@ class SqlAlchemyMemoryRepository(L1CacheMixin):
         *,
         limit: int | None = None,
         descending: bool = False,
+        include_pending: bool = False,
     ) -> list[JournalEntry]:
+        states = ("active", "pending_append") if include_pending else ("active",)
         filters = [
             SummaryRoundJournalRecord.user_id == user_id,
             SummaryRoundJournalRecord.memory_scope_id == memory_scope_id,
-            SummaryRoundJournalRecord.round_state == "active",
+            SummaryRoundJournalRecord.round_state.in_(states),
         ]
         if session_id is not None:
             filters.append(SummaryRoundJournalRecord.session_id == session_id)
@@ -526,10 +534,15 @@ class SqlAlchemyMemoryRepository(L1CacheMixin):
             records = (await session.scalars(stmt)).all()
             return [self._journal_from_record(record) for record in records]
 
-    def list_user_rounds(self, user_id: str) -> list[JournalEntry]:
-        return self._run(self._list_user_rounds(user_id))
+    def list_user_rounds(
+        self, user_id: str, *, include_pending: bool = False
+    ) -> list[JournalEntry]:
+        return self._run(self._list_user_rounds(user_id, include_pending=include_pending))
 
-    async def _list_user_rounds(self, user_id: str) -> list[JournalEntry]:
+    async def _list_user_rounds(
+        self, user_id: str, *, include_pending: bool = False
+    ) -> list[JournalEntry]:
+        states = ("active", "pending_append") if include_pending else ("active",)
         async with self.session_factory() as session:
             records = (
                 await session.scalars(
@@ -537,7 +550,7 @@ class SqlAlchemyMemoryRepository(L1CacheMixin):
                     .where(
                         and_(
                             SummaryRoundJournalRecord.user_id == user_id,
-                            SummaryRoundJournalRecord.round_state == "active",
+                            SummaryRoundJournalRecord.round_state.in_(states),
                         )
                     )
                     .order_by(

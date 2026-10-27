@@ -2094,6 +2094,75 @@ def test_async_l3_write_does_not_resurrect_deleted_source_memory() -> None:
     assert backend.memories == {}
 
 
+def test_async_delete_session_blocks_inflight_l3_write() -> None:
+    """删除与在飞抽取竞争：已删会话的在飞写入不得复活成 ACTIVE 记忆。
+
+    删除发生时这轮还没有本地 L3 记忆，因此删除路径拿不到它的 source_refs。
+    旧实现的 session 墓碑 source_refs=[]，排除集里没有这一轮，在飞写入
+    返回后两次排除检查都放行，记忆重新变成 ACTIVE 并可被召回。
+    """
+    repository = InMemoryMemoryRepository()
+    backend = BlockingAddBackend()
+    service = MemoryService(repository=repository, backend=backend, l3_write_mode="async")
+
+    service.append(make_append(round_id="round-inflight", content="I meditate daily"))
+    assert backend.started.wait(timeout=1)
+
+    service.delete(
+        DeleteMemoryRequest(
+            request_id="delete-session",
+            user_id="user-1",
+            scope=DeleteScope.SESSION,
+            operation_id="op-delete-inflight",
+            session_id="session-1",
+        )
+    )
+
+    backend.release.set()
+    service.drain_l3_background_tasks(timeout=2)
+
+    assert repository.active_memories("user-1", "thinkback") == []
+    assert backend.memories == {}
+    assert repository.get_round("round-inflight").round_state == "deleted_tombstone"
+
+
+def test_sync_delete_session_blocks_inflight_l3_write() -> None:
+    """sync 模式下在飞轮次是 pending_append，删除屏障必须把它也算进去。"""
+    repository = InMemoryMemoryRepository()
+    backend = BlockingAddBackend()
+    service = MemoryService(repository=repository, backend=backend, l3_write_mode="sync")
+    errors: list[BaseException] = []
+
+    def run_append() -> None:
+        try:
+            service.append(make_append(round_id="round-sync-inflight", content="I meditate daily"))
+        except BaseException as exc:  # pragma: no cover - 断言在下方
+            errors.append(exc)
+
+    thread = Thread(target=run_append)
+    thread.start()
+    assert backend.started.wait(timeout=2)
+
+    service.delete(
+        DeleteMemoryRequest(
+            request_id="delete-session",
+            user_id="user-1",
+            scope=DeleteScope.SESSION,
+            operation_id="op-delete-sync-inflight",
+            session_id="session-1",
+        )
+    )
+
+    backend.release.set()
+    thread.join(timeout=5)
+    assert not thread.is_alive()
+    assert errors == []
+
+    assert repository.active_memories("user-1", "thinkback") == []
+    assert backend.memories == {}
+    assert repository.get_round("round-sync-inflight").round_state == "deleted_tombstone"
+
+
 def test_recall_skips_dirty_summary_but_keeps_l3() -> None:
     service = MemoryService(repository=InMemoryMemoryRepository(), backend=FakeMemoryBackend())
     service.append(make_append())
