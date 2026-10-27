@@ -8801,6 +8801,76 @@ def test_erase_all_deletes_backend_only_memories() -> None:
     assert repository.active_memories("user-1", "thinkback") == []
 
 
+class _FailsOncePurgeBackend(FakeMemoryBackend):
+    """第一次 purge 失败（模拟 SQLite 锁），之后成功。"""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.purge_calls = 0
+        self.fail_next_purge = True
+
+    def purge_history(
+        self, *, user_id: str, memory_ids: list[str], scopes: list[str]
+    ) -> dict[str, int]:
+        self.purge_calls += 1
+        if self.fail_next_purge:
+            self.fail_next_purge = False
+            raise RuntimeError("simulated sqlite lock")
+        return {"history": 0, "messages": 0}
+
+
+def test_erase_retry_after_purge_failure_finishes_cleanup() -> None:
+    """擦除中途失败后，重试同一个 operation_id 必须把剩下的清理做完。"""
+    repository = InMemoryMemoryRepository()
+    backend = _FailsOncePurgeBackend()
+    service = MemoryService(repository=repository, backend=backend, l3_write_mode="sync")
+    service.append(make_append(round_id="r-erase-resume", content="我的门禁卡号是 C12345"))
+    memory = repository.active_memories("user-1", "thinkback")[0]
+    request = DeleteMemoryRequest(
+        request_id="req-erase-resume",
+        user_id="user-1",
+        scope=DeleteScope.MEMORY,
+        memory_id=memory.memory_id,
+        operation_id="op-erase-resume",
+    )
+
+    with pytest.raises(RuntimeError):
+        service.erase(request)
+
+    assert backend.purge_calls == 1
+
+    response = service.erase(request)
+
+    assert response.status == "completed"
+    assert backend.purge_calls == 2
+    assert repository.get_round("r-erase-resume") is None
+    summary = repository.get_summary("user-1", "session-1")
+    assert summary is None or summary.summary_text == ""
+
+
+def test_erase_task_id_is_queryable() -> None:
+    """擦除返回的 task_id 必须是真实任务行，调用方才能查询进度。"""
+    repository = InMemoryMemoryRepository()
+    service = MemoryService(
+        repository=repository, backend=FakeMemoryBackend(), l3_write_mode="sync"
+    )
+    service.append(make_append(round_id="r-erase-task", content="我负责 3nm 良率提升"))
+
+    response = service.erase(
+        DeleteMemoryRequest(
+            request_id="req-erase-task",
+            user_id="user-1",
+            scope=DeleteScope.SESSION,
+            session_id="session-1",
+            operation_id="op-erase-task",
+        )
+    )
+
+    task = repository.get_task(response.task_id)
+    assert task is not None
+    assert task.status is TaskStatus.COMPLETED
+
+
 def test_erase_purges_engine_history_with_backend_ids_and_scope() -> None:
     """erase 必须把被删的后端 ID 与作用域交给引擎侧清理（历史 + 原始消息）。"""
 
