@@ -19,6 +19,7 @@ futures 单独记账，``drain`` 由 ``MemoryService.drain_l3_background_tasks``
 from __future__ import annotations
 
 import time
+from collections import OrderedDict
 from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor, wait
 from contextvars import copy_context
@@ -53,6 +54,9 @@ class L2BackgroundRefresher:
         executor: ThreadPoolExecutor,
         refresh_interval_rounds: int = 5,
         on_refreshed: OnSummaryRefreshed | None = None,
+        reserve_capacity: Callable[[], None] | None = None,
+        release_capacity: Callable[[], None] | None = None,
+        max_tracked_scopes: int = 4096,
     ) -> None:
         if refresh_interval_rounds < 1:
             raise ValueError("refresh_interval_rounds must be >= 1")
@@ -61,14 +65,34 @@ class L2BackgroundRefresher:
         self._executor = executor
         self.refresh_interval_rounds = refresh_interval_rounds
         self._on_refreshed = on_refreshed
+        # 与 L3 共用同一个队列预算：L2 刷新必须排队，否则新会话突发会
+        # 绕过 max_pending_tasks 直接压到 LLM 上。
+        self._reserve_capacity = reserve_capacity
+        self._release_capacity = release_capacity
+        self._max_tracked_scopes = max(1, max_tracked_scopes)
         self._state_lock = Lock()
-        # 去抖：每个 (user, scope) 自上次提交以来的 append 计数
-        self._append_counters: dict[tuple[str, str], int] = {}
+        # 去抖：每个 (user, scope) 自上次提交以来的 append 计数（LRU 淘汰）
+        self._append_counters: OrderedDict[tuple[str, str], int] = OrderedDict()
         # 已完成过至少一次 llm 刷新的作用域（进程内视角；重启后首 append 会再触发一次，幂等无害）
-        self._llm_refreshed_scopes: set[tuple[str, str]] = set()
+        self._llm_refreshed_scopes: OrderedDict[tuple[str, str], None] = OrderedDict()
         # 提交去重 + futures 记账
         self._pending_scopes: set[tuple[str, str]] = set()
         self._futures: set[Future[None]] = set()
+
+    def _remember_scope(self, scope: tuple[str, str]) -> None:
+        """记住一个活跃 scope，并淘汰最久未用的（进程内状态必须有上界）。"""
+        self._append_counters.pop(scope, None)
+        self._append_counters[scope] = 0
+        self._llm_refreshed_scopes.pop(scope, None)
+        self._llm_refreshed_scopes[scope] = None
+        self._trim_scopes()
+
+    def _trim_scopes(self) -> None:
+        """按 LRU 淘汰超出上界的 scope 状态（调用方持有状态锁）。"""
+        while len(self._append_counters) > self._max_tracked_scopes:
+            self._append_counters.popitem(last=False)
+        while len(self._llm_refreshed_scopes) > self._max_tracked_scopes:
+            self._llm_refreshed_scopes.popitem(last=False)
 
     # ── 对外接口 ────────────────────────────────────────────────────
 
@@ -81,6 +105,8 @@ class L2BackgroundRefresher:
             # 这几轮永远等不到下一次刷新（trailing 刷新缺失）。
             counter = self._append_counters.get(scope, 0) + 1
             self._append_counters[scope] = counter
+            self._append_counters.move_to_end(scope)
+            self._trim_scopes()
             if scope in self._pending_scopes:
                 # 已有一次在飞的刷新，等它完成后计数自然对齐
                 return
@@ -88,6 +114,21 @@ class L2BackgroundRefresher:
             due = not has_llm_summary or counter >= self.refresh_interval_rounds
             if not due:
                 return
+
+        # 容量闸门：与 L3 共用队列预算，队列满时保留拼接摘要并延后，
+        # 不排队（否则新会话突发会绕过 max_pending_tasks 压垮 LLM）。
+        if self._reserve_capacity is not None:
+            try:
+                self._reserve_capacity()
+            except Exception as exc:  # noqa: BLE001 - 队列满只是延后
+                logger.bind(
+                    user_id=user_id,
+                    session_scope_id=session_scope_id,
+                    error_type=type(exc).__name__,
+                ).warning("memory l2 llm refresh deferred: background queue full")
+                return
+
+        with self._state_lock:
             self._append_counters[scope] = 0
             self._pending_scopes.add(scope)
 
@@ -99,6 +140,8 @@ class L2BackgroundRefresher:
         except Exception:
             with self._state_lock:
                 self._pending_scopes.discard(scope)
+            if self._release_capacity is not None:
+                self._release_capacity()
             logger.bind(user_id=user_id, session_scope_id=session_scope_id).warning(
                 "memory l2 llm refresh submit failed"
             )
@@ -145,6 +188,9 @@ class L2BackgroundRefresher:
             # 在飞期间累计的轮次达到阈值 → 补一次 trailing 刷新，
             # 否则这些轮次会被旧快照吞掉，直到再攒够 N 轮才更新。
             trailing_due = self._append_counters.get(scope, 0) >= self.refresh_interval_rounds
+        if self._release_capacity is not None:
+            # 归还队列槽位：L2 与 L3 共用同一个预算。
+            self._release_capacity()
         if future.done() and not future.cancelled() and future.exception() is not None:
             # _run_refresh 自身已捕获并落日志；这里只做记账清理。
             pass
@@ -194,7 +240,7 @@ class L2BackgroundRefresher:
                 ).warning("memory l2 llm refresh superseded by concurrent write")
                 return
             with self._state_lock:
-                self._llm_refreshed_scopes.add((user_id, session_scope_id))
+                self._remember_scope((user_id, session_scope_id))
             if self._on_refreshed is not None:
                 self._on_refreshed(user_id, session_scope_id)
             refresh_log.bind(

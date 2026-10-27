@@ -384,7 +384,6 @@ def _p0_cases() -> list[EvaluationCase]:
             "现在应该怎么称呼用户？",
             ["小鹏"],
             ["阿鹏"],
-            intent="preference",
         ),
         EvaluationCase("cat-current", "slot_conflict", "用户的猫叫什么？", ["麻薯"], ["团子"]),
         EvaluationCase(
@@ -407,7 +406,6 @@ def _p0_cases() -> list[EvaluationCase]:
             "用户希望你怎么给建议？",
             [["简洁直接", "concise", "direct"]],
             ["先安慰", "reassurance"],
-            intent="preference",
         ),
         EvaluationCase(
             "birthday-current",
@@ -422,7 +420,6 @@ def _p0_cases() -> list[EvaluationCase]:
             "用户现在喜欢喝什么？",
             [["茶", "tea"]],
             ["咖啡", "coffee"],
-            intent="preference",
         ),
         EvaluationCase(
             "food-current",
@@ -430,7 +427,6 @@ def _p0_cases() -> list[EvaluationCase]:
             "用户现在喜欢吃什么？",
             [["寿司", "sushi"]],
             ["汉堡", "hamburger", "burger"],
-            intent="preference",
         ),
         EvaluationCase(
             "dog-current", "slot_conflict", "用户的狗叫什么？", ["豆包"], ["麻薯", "团子"]
@@ -441,7 +437,6 @@ def _p0_cases() -> list[EvaluationCase]:
             "用户现在还讨厌被提醒睡觉吗？",
             [["温和", "gentle", "接受", "okay"]],
             ["讨厌", "dislikes"],
-            intent="preference",
         ),
         EvaluationCase(
             "negative-bird",

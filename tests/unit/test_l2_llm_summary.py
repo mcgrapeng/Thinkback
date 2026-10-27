@@ -353,6 +353,43 @@ def test_erase_stale_refresh_cannot_resurrect_erased_summary() -> None:
     assert "ERASED-SECRET" not in summary.summary_text
 
 
+def test_l2_respects_pending_task_limit() -> None:
+    """L2 刷新必须排在同一个队列预算里：队列满时延后，不得无限排队。"""
+
+    def _capacity_full() -> None:
+        raise RuntimeError("l3 background queue full: pending=1 max=1")
+
+    refresher = L2BackgroundRefresher(
+        repository=InMemoryMemoryRepository(),
+        composer=RecordingComposer("【主题】排队"),
+        executor=ThreadPoolExecutor(max_workers=1),
+        refresh_interval_rounds=1,
+        reserve_capacity=_capacity_full,
+        release_capacity=lambda: None,
+    )
+
+    refresher.maybe_submit("user-1", "session-1")
+
+    assert refresher.pending_count == 0
+
+
+def test_l2_scope_state_is_bounded() -> None:
+    """进程内 scope 状态必须有上界：长期运行不能按历史会话数无限增长。"""
+    refresher = L2BackgroundRefresher(
+        repository=InMemoryMemoryRepository(),
+        composer=RecordingComposer(),
+        executor=ThreadPoolExecutor(max_workers=1),
+        refresh_interval_rounds=1,
+        max_tracked_scopes=4,
+    )
+    for index in range(20):
+        refresher.maybe_submit(f"user-{index}", "session-1")
+        refresher.drain(timeout=1)
+
+    assert len(refresher._append_counters) <= 4
+    assert len(refresher._llm_refreshed_scopes) <= 4
+
+
 def test_refresh_in_flight_triggers_trailing_refresh() -> None:
     """在飞期间到达的轮次必须触发一次 trailing 刷新，不能被旧快照吞掉。"""
     started = Event()
