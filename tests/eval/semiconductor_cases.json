@@ -1,0 +1,232 @@
+{
+  "namespace": "semiconductor",
+  "description": "半导体垂类对话助手的记忆语料。四个业务场景（工艺咨询 / 设备选型 / 良率分析 / 客户支持）+ 垂类机制（namespace 隔离、类型准入、保留期、assistant 不成为事实）。",
+  "cases": [
+    {
+      "name": "case_semi_process_node_and_stage",
+      "category": "工艺咨询",
+      "kind": "recall",
+      "query": "用户负责的工艺节点和工序段是什么？",
+      "expected_terms": ["28nm", "CMP"],
+      "forbidden_terms": [],
+      "rounds": [
+        {
+          "user": "我负责 28nm 逻辑工艺的整合，主要做前道 CMP 段的优化。",
+          "assistant": "明白，前道 CMP 是良率敏感段。"
+        }
+      ]
+    },
+    {
+      "name": "case_semi_lithography_generation",
+      "category": "工艺咨询",
+      "kind": "recall",
+      "query": "用户产线用的光刻波长和对应工艺节点是什么？",
+      "expected_terms": ["193nm", "14nm"],
+      "forbidden_terms": [],
+      "rounds": [
+        {
+          "user": "我们这条线用 193nm 浸没式光刻做 14nm 逻辑。",
+          "assistant": "收到。"
+        }
+      ]
+    },
+    {
+      "name": "case_semi_device_architecture_preference",
+      "category": "工艺咨询",
+      "kind": "recall",
+      "query": "用户在先进节点上的器件架构倾向是什么？",
+      "expected_terms": ["GAA"],
+      "forbidden_terms": [],
+      "rounds": [
+        {
+          "user": "我们在评估 FinFET 和 GAA，倾向下一节点上 GAA。",
+          "assistant": "GAA 的栅极控制是重点。"
+        }
+      ]
+    },
+    {
+      "name": "case_semi_euv_tool_vendor",
+      "category": "设备选型",
+      "kind": "recall",
+      "query": "用户评估的 EUV 机台厂商和型号是什么？",
+      "expected_terms": ["ASML"],
+      "forbidden_terms": [],
+      "rounds": [
+        {
+          "user": "我们在评估 ASML 的 EUV 机台，型号倾向 NXE 3800E。",
+          "assistant": "了解。"
+        }
+      ]
+    },
+    {
+      "name": "case_semi_etch_and_metrology_vendors",
+      "category": "设备选型",
+      "kind": "recall",
+      "query": "用户用的刻蚀和量测设备厂商分别是什么？",
+      "expected_terms": ["TEL", "KLA"],
+      "forbidden_terms": [],
+      "rounds": [
+        {
+          "user": "刻蚀机台我们用 TEL 的 Divinity，量测用 KLA 的 2930。",
+          "assistant": "好的。"
+        }
+      ]
+    },
+    {
+      "name": "case_semi_tool_selection_constraint",
+      "category": "设备选型",
+      "kind": "recall",
+      "query": "用户选机时的硬约束是什么？",
+      "expected_terms": ["交付周期"],
+      "forbidden_terms": [],
+      "rounds": [
+        {
+          "user": "我们扩产要求交付周期不超过半年，这个是选机的硬约束。",
+          "assistant": "会按交期筛机型。"
+        }
+      ]
+    },
+    {
+      "name": "case_semi_yield_loss_defect_type",
+      "category": "良率分析",
+      "kind": "recall",
+      "query": "用户良率卡在哪个工序，缺陷类型是什么？",
+      "expected_terms": ["CMP", "缺陷密度"],
+      "forbidden_terms": [],
+      "rounds": [
+        {
+          "user": "3nm 良率卡在 CMP 段，缺陷密度偏高，主要是颗粒和针孔。",
+          "assistant": "颗粒和针孔可以分开看 SPC 趋势。"
+        }
+      ]
+    },
+    {
+      "name": "case_semi_spc_control_method",
+      "category": "良率分析",
+      "kind": "recall",
+      "query": "用户用什么方法管控关键尺寸？",
+      "expected_terms": ["SPC", "套刻"],
+      "forbidden_terms": [],
+      "rounds": [
+        {
+          "user": "我们用 SPC 控制关键尺寸，套刻精度要求是正负 1 纳米。",
+          "assistant": "套刻要跟着 overlay 一起看。"
+        }
+      ]
+    },
+    {
+      "name": "case_semi_yield_target_and_current",
+      "category": "良率分析",
+      "kind": "recall",
+      "query": "用户产线的良率目标和当前值是什么？",
+      "expected_terms": ["99.5%", "98.2%"],
+      "forbidden_terms": [],
+      "rounds": [
+        {
+          "user": "这条 7nm 线量产良率目标是 99.5%，现在 98.2%。",
+          "assistant": "差 1.3 个点。"
+        }
+      ]
+    },
+    {
+      "name": "case_semi_customer_reliability_requirement",
+      "category": "客户支持",
+      "kind": "recall",
+      "query": "用户的客户对可靠性有什么要求？",
+      "expected_terms": ["车规", "AEC-Q100"],
+      "forbidden_terms": [],
+      "rounds": [
+        {
+          "user": "客户是新能源车企，关心车规级可靠性和 AEC-Q100 认证。",
+          "assistant": "车规认证资料我来整理。"
+        }
+      ]
+    },
+    {
+      "name": "case_semi_customer_product_context",
+      "category": "客户支持",
+      "kind": "recall",
+      "query": "客户的产品节点和良率要求是什么？",
+      "expected_terms": ["7nm"],
+      "forbidden_terms": [],
+      "rounds": [
+        {
+          "user": "客户的 7nm MCU 产品良率要求是 99.5%，交付要按季度。",
+          "assistant": "按季度备料。"
+        }
+      ]
+    },
+    {
+      "name": "case_semi_support_escalation_issue",
+      "category": "客户支持",
+      "kind": "recall",
+      "query": "客户提出的问题和时限要求是什么？",
+      "expected_terms": ["批次一致性"],
+      "forbidden_terms": [],
+      "rounds": [
+        {
+          "user": "客户抱怨批次一致性差，要求我们两周内给改善方案。",
+          "assistant": "两周内先给临时管控。"
+        }
+      ]
+    },
+    {
+      "name": "case_semi_namespace_isolation",
+      "category": "垂类机制",
+      "kind": "namespace_isolation",
+      "query": "用户负责的工艺节点是什么？",
+      "expected_terms": ["28nm"],
+      "forbidden_terms": [],
+      "rounds": [
+        {
+          "user": "我负责 28nm 逻辑工艺的整合。",
+          "assistant": "收到。"
+        }
+      ]
+    },
+    {
+      "name": "case_semi_assistant_not_user_fact",
+      "category": "垂类机制",
+      "kind": "recall",
+      "query": "用户用什么光刻方案？",
+      "expected_terms": [],
+      "forbidden_terms": ["ArF"],
+      "rounds": [
+        {
+          "user": "我们做的是 193nm 浸没式光刻。",
+          "assistant": "建议你们改用 ArF 光刻，成本更低。"
+        }
+      ]
+    },
+    {
+      "name": "case_semi_procedure_type_requires_approval",
+      "category": "垂类机制",
+      "kind": "reject_type",
+      "query": "",
+      "expected_terms": [],
+      "forbidden_terms": [],
+      "memory_type": "procedure",
+      "rounds": [
+        {
+          "user": "以后所有变更必须先过工艺委员会评审。",
+          "assistant": "已记录。"
+        }
+      ]
+    },
+    {
+      "name": "case_semi_equipment_context_has_ttl",
+      "category": "垂类机制",
+      "kind": "ttl_expiration",
+      "query": "",
+      "expected_terms": [],
+      "forbidden_terms": [],
+      "memory_type": "equipment_context",
+      "rounds": [
+        {
+          "user": "我们量产线的量测设备用的是 KLA 2930。",
+          "assistant": "好的。"
+        }
+      ]
+    }
+  ]
+}
