@@ -351,6 +351,41 @@ class InMemoryMemoryRepository(L1CacheMixin):
             _stamp_invalidated(memory)
         return memory
 
+    def delete_memory_rows(self, memory_ids: list[str]) -> int:
+        """物理删除 L3 业务索引行（erase 语义）。"""
+        deleted = 0
+        for memory_id in memory_ids:
+            if self.memories.pop(memory_id, None) is not None:
+                deleted += 1
+        return deleted
+
+    def delete_rounds(
+        self,
+        user_id: str,
+        memory_scope_id: str,
+        session_id: str | None = None,
+        round_ids: list[str] | None = None,
+    ) -> int:
+        """物理删除 L1 轮次原文行（erase 语义）。"""
+        victims = [
+            round_id
+            for round_id, entry in self.journal_by_round.items()
+            if entry.user_id == user_id
+            and entry.memory_scope_id == memory_scope_id
+            and (session_id is None or entry.session_id == session_id)
+            and (round_ids is None or round_id in round_ids)
+        ]
+        for round_id in victims:
+            del self.journal_by_round[round_id]
+        return len(victims)
+
+    def clear_summary(self, user_id: str, memory_scope_id: str) -> None:
+        """清空 L2 会话摘要正文（erase 语义）。"""
+        summary = self.summaries.get(scope_key(user_id, memory_scope_id))
+        if summary is not None:
+            summary.summary_text = ""
+            summary.structured_sections = {}
+
     def mark_memory_superseded(self, memory_id: str) -> MemoryIndexEntry | None:
         memory = self.memories.get(memory_id)
         if memory:

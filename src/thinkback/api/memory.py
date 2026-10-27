@@ -457,6 +457,54 @@ async def delete_memory(
     return await _run_write_memory_call(service.delete, request)
 
 
+@router.post(
+    "/suppress",
+    response_model=DeleteMemoryResponse,
+    summary="逻辑下架记忆（不可召回，保留原文与墓碑）",
+    operation_id="memory_suppress",
+    description=(
+        "按单条 memory、session 或用户全局范围下架记忆：内容不再进入召回，"
+        "但原文与墓碑保留以供审计。与 /memory/erase 的区别是 erase 会物理删除原文。"
+    ),
+)
+async def suppress_memory(
+    request: DeleteMemoryRequest,
+    service: MemoryService = Depends(get_memory_service),
+) -> DeleteMemoryResponse:
+    logger.bind(
+        user_id=request.user_id,
+        session_id=request.session_id,
+        scope=request.scope.value,
+        operation_id=request.operation_id,
+        has_memory_id=request.memory_id is not None,
+    ).debug("memory suppress request received")
+    return await _run_write_memory_call(service.suppress_memory, request)
+
+
+@router.post(
+    "/erase",
+    response_model=DeleteMemoryResponse,
+    summary="物理擦除记忆（删除各层原文）",
+    operation_id="memory_erase",
+    description=(
+        "物理删除 L1 轮次原文、L2 摘要正文、L3 业务索引行与后端向量记录。"
+        "Mem0 本地 history 无公开清理接口，可能仍残留抽取历史，审计中如实记录。"
+    ),
+)
+async def erase_memory(
+    request: DeleteMemoryRequest,
+    service: MemoryService = Depends(get_memory_service),
+) -> DeleteMemoryResponse:
+    logger.bind(
+        user_id=request.user_id,
+        session_id=request.session_id,
+        scope=request.scope.value,
+        operation_id=request.operation_id,
+        has_memory_id=request.memory_id is not None,
+    ).debug("memory erase request received")
+    return await _run_write_memory_call(service.erase, request)
+
+
 @router.get(
     "/items",
     response_model=ListMemoriesResponse,

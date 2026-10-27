@@ -1754,6 +1754,137 @@ L2 更新 (缓存失效)
             )
         return None
 
+    def suppress_memory(self, request: DeleteMemoryRequest) -> DeleteMemoryResponse:
+        """逻辑下架（不可召回，保留记录与墓碑）。
+
+        与 :meth:`erase` 的区别：suppress 保留原文供审计，erase 物理删除。
+        """
+        return self.delete(request)
+
+    def erase(self, request: DeleteMemoryRequest) -> DeleteMemoryResponse:
+        """物理擦除：把原文从各层存储里删掉。
+
+        suppress（现 delete 语义）只让内容不可召回并保留墓碑；erase 会删除
+        L1 轮次原文、L2 摘要正文、L3 业务索引行与后端向量记录。
+
+        已知残留：Mem0 的本地 history 表记录了每次抽取的新旧值，2.2.1 没有公开的
+        清理接口，那一层可能仍留有原文。审计里如实记录，不宣称已彻底擦除。
+        """
+        l3_scope_id = self._long_term_scope_id(request)
+        session_scope_id = self._session_scope_id(request)
+        self._validate_delete_required_identifiers(request)
+
+        if request.scope is DeleteScope.MEMORY:
+            targets = self._erase_targets_one(request, l3_scope_id)
+            affected_sessions = {
+                str(ref["session_id"])
+                for memory in targets
+                for ref in memory.source_refs
+                if ref.get("session_id")
+            }
+            round_ids_by_session = {
+                str(ref["session_id"]): {
+                    str(ref["round_id"]) for ref in memory.source_refs if ref.get("round_id")
+                }
+                for memory in targets
+                for ref in memory.source_refs
+                if ref.get("session_id")
+            }
+        elif request.scope is DeleteScope.SESSION:
+            targets = self._erase_targets_session(request, l3_scope_id)
+            affected_sessions = {session_scope_id}
+            round_ids_by_session = {}
+        else:
+            targets = self._erase_targets_all(request, l3_scope_id)
+            affected_sessions = set(self._user_summary_scope_ids(request.user_id))
+            round_ids_by_session = {}
+
+        if not targets:
+            return DeleteMemoryResponse(
+                status="completed",
+                task_id=f"memory-erase:{request.operation_id}",
+                affected_memories=0,
+                summary_state=SummaryState.DIRTY,
+            )
+
+        # 后端向量记录先删：失败要让调用方知道（不吞）。
+        backend_ids = [
+            memory.backend_memory_id
+            for memory in targets
+            if self._is_backend_managed_memory_id(memory.backend_memory_id)
+        ]
+        if backend_ids:
+            self.backend.delete_many(backend_ids)
+
+        # 本地业务索引行物理删除
+        self.repository.delete_memory_rows([memory.memory_id for memory in targets])
+
+        # L1 轮次原文 + L2 摘要正文
+        for scope_id in affected_sessions:
+            self.repository.delete_rounds(
+                request.user_id,
+                scope_id,
+                round_ids=(
+                    sorted(round_ids_by_session[scope_id])
+                    if scope_id in round_ids_by_session
+                    else None
+                ),
+            )
+            self.repository.clear_summary(request.user_id, scope_id)
+            self.repository.clear_l1(request.user_id, scope_id, scope_id)
+
+        self._record_erase_audit(request, targets, backend_ids)
+        return DeleteMemoryResponse(
+            status="completed",
+            task_id=f"memory-erase:{request.operation_id}",
+            affected_memories=len(targets),
+            summary_state=SummaryState.DIRTY,
+        )
+
+    def _erase_targets_one(self, request: DeleteMemoryRequest, l3_scope_id: str) -> list[Any]:
+        if not request.memory_id:
+            raise ValueError("memory_id is required for memory deletion")
+        return [
+            memory
+            for memory in self.repository.list_memories(request.user_id, l3_scope_id)
+            if memory.memory_id == request.memory_id
+            and memory.memory_status is not MemoryStatus.DELETED
+        ]
+
+    def _erase_targets_session(self, request: DeleteMemoryRequest, l3_scope_id: str) -> list[Any]:
+        if not request.session_id:
+            raise ValueError("session_id is required for session deletion")
+        return [
+            memory
+            for memory in self.repository.active_memories(request.user_id, l3_scope_id)
+            if any(ref.get("session_id") == request.session_id for ref in memory.source_refs)
+        ]
+
+    def _erase_targets_all(self, request: DeleteMemoryRequest, l3_scope_id: str) -> list[Any]:
+        return list(self.repository.active_memories(request.user_id, l3_scope_id))
+
+    def _record_erase_audit(
+        self, request: DeleteMemoryRequest, targets: list[Any], backend_ids: list[str]
+    ) -> None:
+        """审计只留范围与数量，不留原文；如实标注 Mem0 history 的残留。"""
+        from thinkback.domain.entities import AdminAuditEntry
+
+        self.repository.save_admin_audit(
+            AdminAuditEntry(
+                audit_id=f"audit-erase-{request.operation_id}",
+                created_at=datetime.now(UTC),
+                operator=request.user_id,
+                action="memory.erase",
+                target=f"{request.user_id}/{request.scope.value}",
+                detail={
+                    "affected_memories": len(targets),
+                    "backend_records_deleted": len(backend_ids),
+                    "mem0_history_purged": False,
+                    "note": "Mem0 本地 history 无公开清理接口，可能仍残留原文",
+                },
+            )
+        )
+
     def list_memory_items(
         self, *, user_id: str, include_deleted: bool = False, namespace: str = LONG_TERM_SCOPE_ID
     ) -> ListMemoriesResponse:

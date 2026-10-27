@@ -142,6 +142,28 @@ class MemoryRepository(Protocol):
 
     def mark_memory_deleted(self, memory_id: str) -> MemoryIndexEntry | None: ...
 
+    def delete_memory_rows(self, memory_ids: list[str]) -> int:
+        """物理删除 L3 业务索引行（erase 语义）。返回删除行数。"""
+        ...
+
+    def delete_rounds(
+        self,
+        user_id: str,
+        memory_scope_id: str,
+        session_id: str | None = None,
+        round_ids: list[str] | None = None,
+    ) -> int:
+        """物理删除 L1 轮次原文行（erase 语义）。返回删除行数。
+
+        ``round_ids`` 非空时只删这些轮次（单条记忆擦除时用）；否则删该
+        scope 下的全部轮次。
+        """
+        ...
+
+    def clear_summary(self, user_id: str, memory_scope_id: str) -> None:
+        """清空 L2 会话摘要正文（erase 语义）。"""
+        ...
+
     def mark_memory_suppressed(self, memory_id: str) -> MemoryIndexEntry | None:
         """P2#7 decay：置 SUPPRESSED（不可达而非删除）并幂等落失效时刻。"""
         ...
