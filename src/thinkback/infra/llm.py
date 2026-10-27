@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from typing import Any
 
+import httpx
 from loguru import logger
 
 
@@ -37,10 +38,12 @@ class OpenAICompatibleLLMClient:
             return self._client
         from openai import OpenAI
 
+        # trust_env=False：内部网关不该被环境里的 HTTP/SOCKS 代理劫持。
         self._client = OpenAI(
             api_key=self.api_key,
             base_url=self.base_url,
             timeout=self.timeout_seconds,
+            http_client=httpx.Client(trust_env=False, timeout=self.timeout_seconds),
         )
         return self._client
 
