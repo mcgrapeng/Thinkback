@@ -14,7 +14,7 @@ from contextvars import copy_context
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from hashlib import sha256
-from threading import RLock
+from threading import Event, RLock, Thread
 from typing import Any, Literal
 
 from loguru import logger
@@ -244,6 +244,7 @@ class MemoryService:
         l2_summary_composer: SummaryComposer | None = None,
         l2_refresh_interval_rounds: int = 5,
         decay_sweeper: MemoryDecaySweeper | None = None,
+        task_heartbeat_seconds: float = 60.0,
     ) -> None:
         """初始化记忆服务的核心依赖与运行边界。
 
@@ -279,6 +280,9 @@ class MemoryService:
         # 不放服务层。
         self.mem0_infer_facts = mem0_infer_facts
         self.l3_write_mode = l3_write_mode
+        # 后台写入期间刷新任务行的间隔：必须显著小于孤儿回收阈值，
+        # 否则健康的长任务会被误判成孤儿。
+        self.task_heartbeat_seconds = task_heartbeat_seconds
         self.l3_executor_workers = l3_executor_workers
         self.l3_max_pending_tasks = l3_max_pending_tasks
         self.l3_queue_wait_seconds = l3_queue_wait_seconds
@@ -552,9 +556,7 @@ L2 更新 (缓存失效)
         ):
             # 这轮已被物理擦除（journal 行已不在）：重新写入会把原文带回来。
             # 显式冲突，调用方要用新的 round_id。
-            raise ValueError(
-                "round_id conflict: source round was erased, use a new round_id"
-            )
+            raise ValueError("round_id conflict: source round was erased, use a new round_id")
         restrict_reason = self._restricted_reason(request.messages)
         l3_slot_reserved = False
         # 任务行可能还没建出来（get_task 就失败了），except 分支要能容忍 task 为 None。
@@ -623,9 +625,7 @@ L2 更新 (缓存失效)
                 prefetched_events = self._prefetch_backend_events(
                     user_id=request.user_id,
                     memory_scope_id=l3_scope_id,
-                    source_refs=[
-                        {"session_id": request.session_id, "round_id": request.round_id}
-                    ],
+                    source_refs=[{"session_id": request.session_id, "round_id": request.round_id}],
                 )
             entry = existing or self.repository.save_round(request)
             entry.memory_scope_id = session_scope_id
@@ -687,7 +687,7 @@ L2 更新 (缓存失效)
                         mode="async",
                     )
                     return AppendMemoryResponse(
-                        status="completed",
+                        status="accepted",
                         task_id=task.task_id,
                         round_id=request.round_id,
                         l3_events=l3_events,
@@ -1132,14 +1132,18 @@ L2 更新 (缓存失效)
             metadata_keys=self._metadata_key_summary(request_metadata),
         )
         async_log.info("memory l3 async write started")
+        attempt = self._begin_task_attempt(task_id)
         try:
-            l3_events = self._run_l3_write(
-                messages=messages,
-                user_id=user_id,
-                memory_scope_id=memory_scope_id,
-                source_refs=source_refs,
-                request_metadata=request_metadata,
-                prefetched_events=prefetched_events,
+            l3_events = self._run_with_task_heartbeat(
+                task_id,
+                lambda: self._run_l3_write(
+                    messages=messages,
+                    user_id=user_id,
+                    memory_scope_id=memory_scope_id,
+                    source_refs=source_refs,
+                    request_metadata=request_metadata,
+                    prefetched_events=prefetched_events,
+                ),
             )
         except Exception as exc:
             # 关机竞态下 repository 可能已关闭：终态写丢失不能让回调抛异常
@@ -1147,6 +1151,8 @@ L2 更新 (缓存失效)
             captured_exc = exc
 
             def mark_async_failed(t: TaskEntry) -> None:
+                if not self._task_is_current_attempt(t, attempt):
+                    return
                 t.status = TaskStatus.FAILED
                 t.last_error = str(captured_exc)
 
@@ -1169,9 +1175,14 @@ L2 更新 (缓存失效)
         try:
 
             def mark_async_completed(t: TaskEntry) -> None:
+                if not self._task_is_current_attempt(t, attempt):
+                    # 任务已被回收并重新发起：旧 attempt 不得写终态，
+                    # 否则会出现 RUNNING → FAILED → COMPLETED 的状态翻转。
+                    return
                 t.status = TaskStatus.COMPLETED
                 t.last_error = None
                 t.result = {
+                    **t.result,
                     "round_id": source_refs[0].get("round_id") if source_refs else None,
                     "l3_events": [self._redact_event(event) for event in l3_events],
                 }
@@ -1217,9 +1228,7 @@ L2 更新 (缓存失效)
         这些记录，避免重复抽取、重复计费和产生两条冲突事实。
         """
         try:
-            rows = self.backend.get_all(
-                user_id=user_id, memory_scope_id=memory_scope_id, limit=200
-            )
+            rows = self.backend.get_all(user_id=user_id, memory_scope_id=memory_scope_id, limit=200)
         except Exception as exc:  # noqa: BLE001 - 对账失败不该挡住重试
             logger.bind(
                 user_id=user_id,
@@ -1234,9 +1243,7 @@ L2 更新 (缓存失效)
             if not isinstance(metadata, dict):
                 continue
             refs = metadata.get("source_refs") or []
-            row_refs = {
-                source_ref_key(ref) for ref in refs if isinstance(ref, dict)
-            }
+            row_refs = {source_ref_key(ref) for ref in refs if isinstance(ref, dict)}
             if not (wanted & row_refs):
                 continue
             events.append(
@@ -1248,6 +1255,133 @@ L2 更新 (缓存失效)
                 }
             )
         return events
+
+    def _begin_task_attempt(self, task_id: str) -> int:
+        """登记一次执行尝试：回收后重试会拿到新的 attempt 号。
+
+        旧 attempt 的终态写会被 attempt 号挡住（见 ``_task_is_current_attempt``），
+        不会出现「RUNNING → FAILED → COMPLETED」这种状态翻转。
+        登记失败不阻断写入：没有 attempt 号时退回到旧行为。
+        """
+        holder: dict[str, int] = {}
+
+        def mutate(task: TaskEntry) -> None:
+            attempt = int(task.result.get("attempt", 0) or 0) + 1
+            task.result = {**task.result, "attempt": attempt}
+            holder["attempt"] = attempt
+
+        try:
+            self._mutate_task_with_retry(task_id, mutate)
+        except Exception as exc:  # noqa: BLE001 - 登记失败不该阻断写入
+            logger.bind(task_id=task_id, error_type=type(exc).__name__).warning(
+                "memory task attempt registration failed"
+            )
+            return 0
+        return holder.get("attempt", 0)
+
+    @staticmethod
+    def _task_is_current_attempt(task: TaskEntry, attempt: int) -> bool:
+        if attempt == 0:
+            # 没登记上 attempt：退回到旧行为，不阻断终态写。
+            return True
+        return int(task.result.get("attempt", 0) or 0) == attempt
+
+    def _run_with_task_heartbeat(self, task_id: str, action: Callable[[], Any]) -> Any:
+        """执行期间刷新任务行（心跳）。
+
+        孤儿回收按「任务行多久没更新」判定：健康的慢任务只要还在刷新，就
+        不会被误判成孤儿，也不会被标成 failed。
+        """
+        stop = Event()
+        interval = max(0.01, self.task_heartbeat_seconds)
+
+        def _beat() -> None:
+            while not stop.wait(interval):
+
+                def touch(task: TaskEntry) -> None:
+                    task.result = {
+                        **task.result,
+                        "heartbeat_at": datetime.now(UTC).isoformat(),
+                    }
+
+                try:
+                    self._mutate_task_with_retry(task_id, touch)
+                except Exception:  # noqa: BLE001 - 心跳失败不该影响主流程
+                    return
+
+        thread = Thread(target=_beat, daemon=True, name=f"task-heartbeat-{task_id}")
+        thread.start()
+        try:
+            return action()
+        finally:
+            stop.set()
+            thread.join(timeout=1.0)
+
+    def recover_pending_writes(self) -> int:
+        """启动时重放未完成的 L3 写入。
+
+        async append 已经返回 accepted，调用方认为「写进去了」。进程崩溃或
+        SIGKILL 之后，如果只把任务标成 failed 就结束，那条长期记忆就永远
+        缺失。这里按 journal 重放抽取：journal 里有原始轮次，重放是幂等的
+        （后端已有记录时复用，不重复抽取）。
+        """
+        if self.l3_write_mode != "async":
+            return 0
+        recovered = 0
+        for task in self.repository.list_tasks(
+            statuses=[TaskStatus.RUNNING.value, TaskStatus.PENDING.value], limit=200
+        ):
+            if task.op_type is not OperationType.WRITE_ROUND:
+                continue
+            scope = task.scope or {}
+            round_id = scope.get("round_id")
+            user_id = scope.get("user_id")
+            namespace = scope.get("long_term_scope_id") or self.LONG_TERM_SCOPE_ID
+            if not round_id or not user_id:
+                continue
+            entry = self.repository.get_round(str(round_id))
+            if entry is None:
+                # 轮次已被擦除：不重放。
+                continue
+            source_refs = [{"session_id": entry.session_id, "round_id": entry.round_id}]
+            try:
+                prefetched = self._prefetch_backend_events(
+                    user_id=str(user_id),
+                    memory_scope_id=str(namespace),
+                    source_refs=source_refs,
+                )
+                self._run_l3_write(
+                    messages=[
+                        {
+                            "role": str(message.get("role", "user")),
+                            "content": str(message.get("content", "")),
+                        }
+                        for message in entry.messages
+                    ],
+                    user_id=str(user_id),
+                    memory_scope_id=str(namespace),
+                    source_refs=source_refs,
+                    request_metadata={},
+                    prefetched_events=prefetched,
+                )
+            except Exception as exc:  # noqa: BLE001 - 单条失败不影响其它恢复
+                logger.bind(
+                    task_id=task.task_id,
+                    round_id=round_id,
+                    error_type=type(exc).__name__,
+                ).warning("memory pending write recovery failed")
+                continue
+
+            def finalize(current: TaskEntry) -> None:
+                if is_finalized(current.status):
+                    return
+                current.status = TaskStatus.COMPLETED
+
+            self._mutate_task_with_retry(task.task_id, finalize)
+            recovered += 1
+        if recovered:
+            logger.bind(recovered_count=recovered).info("memory pending writes recovered")
+        return recovered
 
     def _run_l3_write(
         self,
@@ -1909,9 +2043,7 @@ L2 更新 (缓存失效)
         }
         existing_task = self.repository.get_task(task_id)
         if existing_task is not None:
-            self._assert_operation_scope_matches(
-                existing_task, task_scope, operation_name="erase"
-            )
+            self._assert_operation_scope_matches(existing_task, task_scope, operation_name="erase")
             if existing_task.status is TaskStatus.COMPLETED:
                 return self._existing_erase_response(existing_task)
             return self._run_erase_stages(request, existing_task)
@@ -1972,11 +2104,9 @@ L2 更新 (缓存失效)
         else:
             targets = self._erase_targets_all(request, l3_scope_id)
             affected_sessions = set(self._user_summary_scope_ids(request.user_id))
-            round_ids_by_session = {scope_id: None for scope_id in affected_sessions}
+            round_ids_by_session = dict.fromkeys(affected_sessions)
 
-        source_refs = self._erase_source_refs(
-            request, targets, affected_sessions, round_ids_by_session
-        )
+        source_refs = self._erase_source_refs(request, targets, affected_sessions)
 
         return {
             "scope": request.scope.value,
@@ -1997,7 +2127,6 @@ L2 更新 (缓存失效)
         request: DeleteMemoryRequest,
         targets: list[Any],
         affected_sessions: set[str],
-        round_ids_by_session: dict[str, Any],
     ) -> list[dict[str, str]]:
         """擦除会清掉的来源轮次：屏障要挡住的就是这些轮次。"""
         if request.scope is DeleteScope.MEMORY:
@@ -2018,9 +2147,7 @@ L2 更新 (缓存失效)
             for entry in self.repository.list_rounds(
                 request.user_id, scope_id, None, include_pending=True
             ):
-                refs.append(
-                    {"session_id": entry.session_id, "round_id": entry.round_id}
-                )
+                refs.append({"session_id": entry.session_id, "round_id": entry.round_id})
         return refs
 
     def _add_erase_tombstone(
@@ -2039,9 +2166,12 @@ L2 更新 (缓存失效)
         """
         for memory in self.repository.list_memories(user_id, memory_scope_id):
             metadata = getattr(memory, "metadata", {}) or {}
-            if isinstance(metadata, dict) and metadata.get("erase_tombstone") == True:  # noqa: E712
-                if metadata.get("operation_id") == operation_id:
-                    return
+            if (
+                isinstance(metadata, dict)
+                and metadata.get("erase_tombstone") is True
+                and metadata.get("operation_id") == operation_id
+            ):
+                return
         deleted_before = datetime.now(UTC)
         raw = "|".join((user_id, memory_scope_id, operation_id, deleted_before.isoformat()))
         digest = sha256(raw.encode("utf-8")).hexdigest()[:32]
@@ -2108,9 +2238,7 @@ L2 更新 (缓存失效)
                 if scope_value == DeleteScope.ALL.value:
                     # ALL 必须覆盖本地没有索引行的后端记录（抽取后索引失败等
                     # 暗数据），只按本地索引逐条删会留下不可管理的残留。
-                    self.backend.delete_all(
-                        user_id=request.user_id, memory_scope_id=namespace
-                    )
+                    self.backend.delete_all(user_id=request.user_id, memory_scope_id=namespace)
                 elif backend_ids:
                     self.backend.delete_many(backend_ids)
                 mark_done("backend")
@@ -2160,9 +2288,11 @@ L2 更新 (缓存失效)
 
             self._mutate_task_with_retry(task.task_id, finalize, strict=True)
         except Exception as exc:
+            error_text = str(exc)[:500]
+
             def mark_failed(current: TaskEntry) -> None:
                 current.status = TaskStatus.FAILED
-                current.last_error = str(exc)[:500]
+                current.last_error = error_text
 
             self._mutate_task_with_retry(task.task_id, mark_failed)
             raise
@@ -2188,8 +2318,7 @@ L2 更新 (缓存失效)
         return [
             memory
             for memory in self.repository.list_memories(request.user_id, l3_scope_id)
-            if memory.memory_id == request.memory_id
-            and self._is_erasable_memory(memory)
+            if memory.memory_id == request.memory_id and self._is_erasable_memory(memory)
         ]
 
     def _erase_targets_session(self, request: DeleteMemoryRequest, l3_scope_id: str) -> list[Any]:

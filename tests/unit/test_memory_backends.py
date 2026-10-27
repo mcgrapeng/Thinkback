@@ -391,6 +391,78 @@ def test_mem0_library_backend_maps_add_search_update_delete_and_scoped_delete_al
     ]
 
 
+@pytest.mark.parametrize("first_result", ["skipped", "failed"])
+def test_mem0_library_backend_retries_collection_consistency_until_succeeded(
+    monkeypatch: pytest.MonkeyPatch,
+    first_result: str,
+) -> None:
+    """集合还没建好/改级失败时不能记为已完成：下一次写入必须再试一次。
+
+    记成完成会让集合永远停在 Bounded —— 写后立刻读不到刚写的向量。
+    """
+    from thinkback.memory.backends import Mem0LibraryMemoryBackend
+
+    results = [first_result, "Strong"]
+    calls: list[dict[str, Any]] = []
+
+    def fake_ensure(**kwargs: Any) -> str:
+        calls.append(kwargs)
+        return results[min(len(calls) - 1, len(results) - 1)]
+
+    monkeypatch.setattr("thinkback.infra.milvus.ensure_milvus_collection_consistency", fake_ensure)
+
+    class FakeMemoryClient:
+        def add(self, messages, **kwargs):  # type: ignore[no-untyped-def]
+            _ = messages
+            _ = kwargs
+            return {"results": [{"id": "m1", "memory": "用户喜欢猫", "event": "ADD"}]}
+
+    backend = Mem0LibraryMemoryBackend(
+        config={
+            "history_db_path": ".mem0/history.db",
+            "vector_store": {
+                "config": {
+                    "collection_name": "thinkback_memories",
+                    "url": "http://milvus:19530",
+                    "db_name": "thinkback",
+                    "token": "",
+                }
+            },
+        },
+        memory_client=FakeMemoryClient(),
+    )
+
+    backend.add(
+        [{"role": "user", "content": "我喜欢猫"}],
+        user_id="user-1",
+        memory_scope_id="thinkback",
+    )
+
+    assert len(calls) == 1
+    assert calls[0]["collection_name"] == "thinkback_memories"
+    assert calls[0]["milvus_database"] == "thinkback"
+    assert calls[0]["level"] == "Strong"
+    assert backend._consistency_ensured is False
+
+    backend.add(
+        [{"role": "user", "content": "我喜欢猫"}],
+        user_id="user-1",
+        memory_scope_id="thinkback",
+    )
+
+    assert len(calls) == 2
+    assert backend._consistency_ensured is True
+
+    # 提到 Strong 之后不再重复调用。
+    backend.add(
+        [{"role": "user", "content": "我喜欢猫"}],
+        user_id="user-1",
+        memory_scope_id="thinkback",
+    )
+
+    assert len(calls) == 2
+
+
 def test_mem0_library_backend_delete_ignores_missing_milvus_vector() -> None:
     from thinkback.memory.backends import Mem0LibraryMemoryBackend
 

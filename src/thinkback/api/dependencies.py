@@ -200,6 +200,9 @@ def get_memory_service() -> MemoryService:
                     l2_summary_composer=get_l2_summary_composer(settings),
                     l2_refresh_interval_rounds=settings.memory_l2_refresh_interval_rounds,
                     decay_sweeper=build_decay_sweeper(settings, repository),
+                    # 心跳必须显著快于孤儿回收阈值：否则健康的长任务会被
+                    # 误判成孤儿并被标成 failed。
+                    task_heartbeat_seconds=max(5.0, settings.task_orphan_running_seconds / 3.0),
                 )
                 service_log.info("memory service initialized")
     return _memory_service

@@ -446,10 +446,12 @@ class AppendMemoryResponse(BaseModel):
     """写入响应
 
     同步模式下 ``status`` 反映 L3 真实落盘结果（completed / already_done）；
-    异步模式下 ``status`` 始终为 completed，由后台写入线程异步处理失败。
+    异步模式下返回 ``accepted``：写入已受理并在后台执行，完成状态要查任务。
     """
 
-    status: str = Field(description="写入结果状态，例如 completed 或 already_done。")
+    status: str = Field(
+        description="写入结果状态：completed（同步落盘完成）/accepted（异步已受理）/already_done/running/failed。"
+    )
     task_id: str = Field(description="对应的记忆写入任务 ID。")
     round_id: str = Field(description="本次写入的对话轮次 ID。")
     l3_events: list[dict[str, Any]] = Field(default_factory=list, description="L3 写入事件摘要。")

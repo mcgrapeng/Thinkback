@@ -186,7 +186,7 @@ class Mem0LibraryMemoryBackend:
         self._memory_client_lock = RLock()
         self.max_concurrent_calls = max_concurrent_calls
         self._call_capacity = BoundedSemaphore(max_concurrent_calls)
-        # 集合一致性级别只需提升一次（进程级）。
+        # 集合一致性级别只需提升一次（进程级；提到 Strong 后才记完成）。
         self._consistency_ensured = False
 
     def add(
@@ -477,9 +477,7 @@ class Mem0LibraryMemoryBackend:
         """列出该 user+scope 的后端记忆（含 metadata），用于重试对账。"""
         result = self._call(
             "get_all",
-            **self._scope_kwargs(
-                "get_all", user_id=user_id, memory_scope_id=memory_scope_id
-            ),
+            **self._scope_kwargs("get_all", user_id=user_id, memory_scope_id=memory_scope_id),
             **self._limit_kwargs("get_all", limit),
         )
         return self._results(result)
@@ -555,14 +553,17 @@ class Mem0LibraryMemoryBackend:
         return deleted
 
     def _ensure_collection_consistency(self) -> None:
-        """把 Milvus 集合的一致性级别提到 Strong（每个进程只做一次）。
+        """把 Milvus 集合的一致性级别提到 Strong（提到后才算完成）。
 
         Bounded 一致性下，写入后立刻用同一连接查可能查不到刚写的向量 ——
         对「刚说过的话马上问」的记忆服务是硬伤。
+
+        只有真正提到 Strong 才记为已完成：集合尚未创建（"skipped"）或改级失败
+        （"failed"）时保持未完成，下一次写入再试 —— 否则集合会永远停在 Bounded，
+        写后立刻读不到刚写的向量。
         """
         if self._consistency_ensured:
             return
-        self._consistency_ensured = True
         collection_name = (
             self.config.get("vector_store", {}).get("config", {}).get("collection_name")
         )
@@ -570,16 +571,21 @@ class Mem0LibraryMemoryBackend:
             return
         from thinkback.infra.milvus import ensure_milvus_collection_consistency
 
-        ensure_milvus_collection_consistency(
+        desired_level = "Strong"
+        result = ensure_milvus_collection_consistency(
             milvus_url=str(self.config.get("vector_store", {}).get("config", {}).get("url", "")),
             milvus_database=str(
                 self.config.get("vector_store", {}).get("config", {}).get("db_name", "")
             ),
             collection_name=collection_name,
+            level=desired_level,
             milvus_token=str(
                 self.config.get("vector_store", {}).get("config", {}).get("token", "")
             ),
         )
+        if result.lower() != desired_level.lower():
+            return
+        self._consistency_ensured = True
 
     def purge_history(
         self, *, user_id: str, memory_ids: list[str], scopes: list[str]

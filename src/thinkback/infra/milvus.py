@@ -91,7 +91,20 @@ def ensure_milvus_collection_consistency(
         collection=collection_name,
         level=level,
     )
-    client = MilvusClient(uri=milvus_url, token=milvus_token or None)
+    try:
+        # db_name 必须显式传：milvus_database 不是 default 库时，不传就是连到
+        # default 库去改同名集合 —— 被改的不是 mem0 真正写入的那个集合。
+        client = MilvusClient(
+            uri=milvus_url,
+            token=milvus_token or None,
+            db_name=milvus_database,
+        )
+    except Exception as exc:
+        # 连不上也算失败：异常不能从这里逃出去打断已经成功的记忆写入。
+        consistency_log.bind(error_type=type(exc).__name__, error=str(exc)).warning(
+            "milvus collection consistency connection failed"
+        )
+        return "failed"
     try:
         if not client.has_collection(collection_name):
             consistency_log.info("milvus collection not created yet, consistency level skipped")
