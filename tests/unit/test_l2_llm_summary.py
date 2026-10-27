@@ -306,6 +306,53 @@ def test_stale_refresh_cannot_resurrect_deleted_summary() -> None:
     assert "【主题】" not in summary.summary_text
 
 
+def test_erase_stale_refresh_cannot_resurrect_erased_summary() -> None:
+    """物理擦除之后，在飞中的旧 LLM 刷新不得把摘要写回。
+
+    clear_summary 只清空正文、不改状态也不递增版本，旧刷新的乐观锁因此
+    仍然通过，已擦除内容会回到 ACTIVE 摘要里。
+    """
+    started = Event()
+    release = Event()
+
+    def blocking_composer(
+        rounds: list[Any], previous_summary: str | None
+    ) -> tuple[str, dict[str, str]]:
+        started.set()
+        if not release.wait(timeout=10):
+            raise RuntimeError("test release timeout")
+        text = "【主题】ERASED-SECRET"
+        return text, {"主题": text}
+
+    repository = InMemoryMemoryRepository()
+    service = MemoryService(
+        repository=repository,
+        backend=FakeMemoryBackend(),
+        l3_write_mode="sync",
+        l2_summary_composer=blocking_composer,
+        l2_refresh_interval_rounds=5,
+    )
+    service.append(make_append("r1", "ERASED-SECRET"))
+    assert started.wait(timeout=5)
+
+    service.erase(
+        DeleteMemoryRequest(
+            request_id="req-erase",
+            user_id="user-1",
+            scope=DeleteScope.SESSION,
+            operation_id="op-erase",
+            session_id="session-1",
+        )
+    )
+    release.set()
+    service.drain_l3_background_tasks(timeout=10)
+
+    summary = repository.get_summary("user-1", "session-1")
+    assert summary is not None
+    assert summary.summary_state is SummaryState.DIRTY
+    assert "ERASED-SECRET" not in summary.summary_text
+
+
 def test_refresh_in_flight_triggers_trailing_refresh() -> None:
     """在飞期间到达的轮次必须触发一次 trailing 刷新，不能被旧快照吞掉。"""
     started = Event()

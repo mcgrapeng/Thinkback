@@ -5899,6 +5899,115 @@ def test_user_rebuild_uses_external_history_even_when_local_journal_is_empty() -
     ]
 
 
+class _BlockingAddBackend(FakeMemoryBackend):
+    """add 阻塞到 release 被调用：制造「擦除期间在飞写入」的时序。"""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.entered = Event()
+        self.release = Event()
+
+    def add(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+        self.entered.set()
+        assert self.release.wait(timeout=10), "add 等待超时"
+        return super().add(*args, **kwargs)
+
+
+def test_erase_blocks_inflight_l3_append() -> None:
+    """擦除期间在飞的 L3 写入不得把内容写回（本地索引与 L1 原文）。"""
+    repository = InMemoryMemoryRepository()
+    backend = _BlockingAddBackend()
+    service = MemoryService(repository=repository, backend=backend, l3_write_mode="sync")
+    errors: list[BaseException] = []
+
+    def _append() -> None:
+        try:
+            service.append(
+                make_append(round_id="r-erase-inflight", content="我的工号是 E-7788")
+            )
+        except BaseException as exc:  # pragma: no cover - 失败时由断言暴露
+            errors.append(exc)
+
+    worker = Thread(target=_append)
+    worker.start()
+    assert backend.entered.wait(timeout=10)
+
+    service.erase(
+        DeleteMemoryRequest(
+            request_id="req-erase-inflight",
+            user_id="user-1",
+            scope=DeleteScope.SESSION,
+            session_id="session-1",
+            operation_id="op-erase-inflight",
+        )
+    )
+
+    backend.release.set()
+    worker.join(timeout=10)
+
+    assert not errors
+    assert repository.active_memories("user-1", "thinkback") == []
+    assert repository.get_round("r-erase-inflight") is None
+
+
+def test_erase_leaves_source_tombstone_so_external_history_rebuild_cannot_restore_it() -> (
+    None
+):
+    """物理擦除也要留下内容无关的来源墓碑：外部历史重建不得把事实抽回来。"""
+    repository = InMemoryMemoryRepository()
+    backend = FakeMemoryBackend()
+    session_1_round = repository.save_round(
+        make_append(
+            round_id="round-erase-1",
+            session_id="session-1",
+            content="我养了一只猫，名字叫团子。",
+        )
+    )
+    repository.update_l1(session_1_round)
+    memory = repository.add_memory_index(
+        backend_memory_id="erase-cat-memory",
+        user_id="user-1",
+        memory_scope_id="thinkback",
+        source_refs=[{"session_id": "session-1", "round_id": "round-erase-1"}],
+        memory_text="User has a cat named 团子",
+    )
+    backend.memories[memory.backend_memory_id] = {
+        "id": memory.backend_memory_id,
+        "memory": memory.memory_text,
+        "event": "ADD",
+        "user_id": "user-1",
+        "agent_id": "thinkback",
+        "metadata": {},
+        "score": 1.0,
+    }
+    service = MemoryService(
+        repository=repository,
+        backend=backend,
+        history_source=StaticHistorySource([session_1_round]),
+    )
+
+    service.erase(
+        DeleteMemoryRequest(
+            request_id="erase-session-1",
+            user_id="user-1",
+            scope=DeleteScope.SESSION,
+            session_id="session-1",
+            operation_id="op-erase-session-1",
+        )
+    )
+    service.rebuild(
+        RebuildMemoryRequest(
+            request_id="rebuild-session-1",
+            user_id="user-1",
+            operation_id="op-rebuild-session-1",
+            session_id="session-1",
+        )
+    )
+
+    assert repository.active_memories("user-1", "thinkback") == []
+    assert backend.memories == {}
+
+
 def test_session_delete_leaves_source_tombstone_so_external_history_rebuild_cannot_restore_it() -> (
     None
 ):

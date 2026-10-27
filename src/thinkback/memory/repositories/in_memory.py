@@ -380,11 +380,17 @@ class InMemoryMemoryRepository(L1CacheMixin):
         return len(victims)
 
     def clear_summary(self, user_id: str, memory_scope_id: str) -> None:
-        """清空 L2 会话摘要正文（erase 语义）。"""
+        """清空 L2 会话摘要正文（erase 语义）。
+
+        同时置 DIRTY 并递增版本：在飞的 LLM 刷新带着旧版本号写不回来，
+        已擦除的内容不会回到 ACTIVE 摘要。
+        """
         summary = self.summaries.get(scope_key(user_id, memory_scope_id))
         if summary is not None:
             summary.summary_text = ""
             summary.structured_sections = {}
+            summary.summary_state = SummaryState.DIRTY
+            summary.row_version += 1
 
     def mark_memory_superseded(self, memory_id: str) -> MemoryIndexEntry | None:
         memory = self.memories.get(memory_id)
