@@ -69,7 +69,9 @@ def check(report_path: Path, baseline_path: Path) -> list[str]:
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--report", type=Path, default=None, help="评测报告 JSON（缺省取最新）")
-    parser.add_argument("--report-dir", type=Path, default=REPORT_DIR, help="报告目录（缺省最新一份）")
+    parser.add_argument(
+        "--report-dir", type=Path, default=REPORT_DIR, help="报告目录（缺省最新一份）"
+    )
     parser.add_argument("--baseline", type=Path, default=DEFAULT_BASELINE)
     args = parser.parse_args(argv[1:])
 
