@@ -1,9 +1,7 @@
 """限流中间件 — Token Bucket 算法。
 
-协议详见 docs/specs/2026-10-08-thinkback-integration-protocol-v1.md
-
-每个 API key 独立 bucket,按 plan 配置 rpm/burst。
-超限返回 429 TB-1007 + Retry-After 头。
+内网部署（方案二）：业务面免鉴权，因此不再按 API key 分桶，而是按客户端 IP
+分桶，防止失控重试与脚本打爆记忆服务。超限返回 429 TB-1007 + Retry-After 头。
 """
 
 from __future__ import annotations
@@ -18,7 +16,9 @@ from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoin
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp
 
-from thinkback.api.auth import _parse_api_key, get_api_key
+# 内网默认限流：单客户端 600 请求/分钟、突发 50。替代原先按 API key plan 的配额。
+_RATE_LIMIT_PER_MINUTE = 600
+_RATE_LIMIT_BURST = 50
 
 
 @dataclass
@@ -79,31 +79,19 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
         path = request.url.path
-        # 只限流 /v1/* 业务系统接入路径
-        if not path.startswith("/v1/"):
+        # 只限流业务记忆路径；admin/health/docs 走各自通道。
+        if not path.startswith("/memory/"):
             return await call_next(request)
         if path in self.exclude_paths:
             return await call_next(request)
 
-        # 解析 API key
-        auth_header = request.headers.get("authorization", "")
-        parsed = _parse_api_key(auth_header)
-        if not parsed:
-            return await call_next(request)
-
-        key_id, _ = parsed
-        record = get_api_key(key_id)
-        if not record or not record.is_active:
-            # 已吊销的 key 不该占桶（否则吊销反而把额度留着给别人用）。
-            # 认证本身由 require_auth 负责，这里只是不替别人消耗额度。
-            return await call_next(request)
-
-        bucket = self._get_bucket(key_id, record.rate_limit_per_minute, record.rate_limit_burst)
+        client_id = request.client.host if request.client and request.client.host else "unknown"
+        bucket = self._get_bucket(client_id, _RATE_LIMIT_PER_MINUTE, _RATE_LIMIT_BURST)
         ok, wait = bucket.consume(1)
 
         if not ok:
             retry_after = max(1, int(wait) + 1)
-            logger.warning(f"rate_limit.hit key_id={key_id} wait={wait:.1f}s")
+            logger.warning(f"rate_limit.hit client={client_id} wait={wait:.1f}s")
             return JSONResponse(
                 status_code=429,
                 content={
@@ -115,7 +103,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                 },
                 headers={
                     "Retry-After": str(retry_after),
-                    "X-RateLimit-Limit": str(record.rate_limit_per_minute),
+                    "X-RateLimit-Limit": str(_RATE_LIMIT_PER_MINUTE),
                     "X-RateLimit-Remaining": "0",
                     "X-RateLimit-Reset": str(int(time.time()) + retry_after),
                 },
@@ -123,7 +111,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
         response: Response = await call_next(request)
         remaining = int(bucket.tokens)
-        response.headers["X-RateLimit-Limit"] = str(record.rate_limit_per_minute)
+        response.headers["X-RateLimit-Limit"] = str(_RATE_LIMIT_PER_MINUTE)
         response.headers["X-RateLimit-Remaining"] = str(max(0, remaining))
         response.headers["X-RateLimit-Reset"] = str(int(time.time()) + 60)
         return response

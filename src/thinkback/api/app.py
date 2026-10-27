@@ -221,7 +221,8 @@ def create_app() -> FastAPI:
     )
     _register_request_middleware(app)
 
-    # 接入协议:限流(仅 v1 路径)+ 幂等(仅 v1 路径)+ 标准化错误
+    # 接入协议:限流(按客户端 IP)+ 幂等(写操作)+ 标准化错误。
+    # 内网部署（方案二）：业务面免鉴权，不再注册 v1 与密钥管理路由。
     from thinkback.api.errors_standard import register_exception_handlers
     from thinkback.api.idempotency import IdempotencyMiddleware
     from thinkback.api.ratelimit import RateLimitMiddleware
@@ -230,23 +231,9 @@ def create_app() -> FastAPI:
     app.add_middleware(IdempotencyMiddleware)
     app.add_middleware(RateLimitMiddleware)
 
-    # 开发环境注册默认 API key
-    if settings.debug:
-        from thinkback.api.auth import init_default_keys
-
-        init_default_keys()
     app.include_router(health_router)
     app.include_router(memory_router)
 
-    # v1 业务系统接入 API(认证 + 限流)
-    from thinkback.api.v1_memory import router as v1_memory_router
-
-    app.include_router(v1_memory_router)
-
-    # 集成管理(API Key 管理)给治理台 console 用
-    from thinkback.api.integration_admin import router as integration_admin_router
-
-    app.include_router(integration_admin_router)
     # 治理台 M1：只读聚合端点（Bearer 可选鉴权），见 docs/管理后台设计方案。
     from thinkback.api.admin import router as admin_router
 
