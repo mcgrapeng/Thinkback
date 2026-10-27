@@ -66,6 +66,9 @@ def _handle_error(exc: Exception, context: grpc.ServicerContext) -> None:
     elif isinstance(exc, RuntimeError):
         if "dead_letter" in detail or "stale write" in detail:
             context.abort(grpc.StatusCode.ABORTED, detail)
+        elif "optimistic lock contention exhausted" in detail:
+            # 终态写没落库：调用方必须看到失败并重试，不能当成功。
+            context.abort(grpc.StatusCode.ABORTED, detail)
         elif "queue full" in detail or "timed out" in detail:
             context.abort(grpc.StatusCode.UNAVAILABLE, detail)
         elif "mem0 library" in detail or "memory backend" in detail:

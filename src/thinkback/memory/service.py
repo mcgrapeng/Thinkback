@@ -1706,15 +1706,66 @@ L2 更新 (缓存失效)
         """
 
         with self._index_mutation_lock:
-            response, pending_backend_writes = self._update_memory_locked(request)
-        # 锁外执行 backend.update 回调（失败仅记日志）
-        if pending_backend_writes:
-            self._run_backend_writes(pending_backend_writes)
-        return response
+            response, pending_backend_writes, executed = self._update_memory_locked(request)
+        if not executed:
+            # 幂等重放：already_done / running / dead_letter 的结果原样返回，
+            # 不能再走一次后端写和终态写，更不能把状态覆盖成 completed。
+            return response
+        # 锁外执行 backend 写。失败必须让调用方知道：后端没写成却返回
+        # completed，等于告诉治理方「已改」而实际 L3 还是旧内容。
+        failures: list[str] = []
+        for write_op in pending_backend_writes:
+            try:
+                write_op()
+            except Exception as exc:  # noqa: BLE001
+                failures.append(f"{type(exc).__name__}: {exc}")
+        if failures:
+            error_text = "; ".join(failures)[:500]
+
+            def mark_failed(task: TaskEntry) -> None:
+                task.status = TaskStatus.FAILED
+                task.last_error = error_text
+
+            self._mutate_task_with_retry(
+                response.task_id, mark_failed, log_context={"stage": "update_backend_failed"}
+            )
+            logger.bind(task_id=response.task_id, error=error_text).warning(
+                "memory update backend write failed"
+            )
+            return response.model_copy(update={"status": "failed"})
+
+        content_fingerprint = sha256(request.content.encode("utf-8")).hexdigest()
+
+        def finalize_update(t: TaskEntry) -> None:
+            t.status = TaskStatus.COMPLETED
+            t.result = {
+                "memory_id": response.memory.memory_id,
+                "content_fingerprint": content_fingerprint,
+                # 记录的是更新后记忆的真实类型，而不是请求里可能缺省的类型字段；
+                # 幂等重放要拿它跟当前记忆比对，写 None 会误判成冲突。
+                "memory_type": (
+                    response.memory.memory_type.value if response.memory.memory_type else None
+                ),
+                "summary_state": SummaryState.DIRTY.value,
+            }
+
+        # 终态写用 strict：CAS 重试耗尽时抛错，不返回 completed
+        # （task 行还停在 RUNNING，不一致会被固化）。
+        self._mutate_task_with_retry(
+            response.task_id,
+            finalize_update,
+            log_context={"stage": "update_final"},
+            strict=True,
+        )
+        return response.model_copy(update={"status": "completed"})
 
     def _update_memory_locked(
         self, request: UpdateMemoryRequest
-    ) -> tuple[UpdateMemoryResponse, list[Any]]:
+    ) -> tuple[UpdateMemoryResponse, list[Any], bool]:
+        """返回 (响应, 待执行的后端写, 是否真正执行了更新)。
+
+        幂等重放时第三个值为 False：调用方应原样返回响应，不能覆盖状态。
+        """
         l3_scope_id = self._long_term_scope_id(request)
         content_fingerprint = sha256(request.content.encode("utf-8")).hexdigest()
         task_scope = {
@@ -1745,7 +1796,7 @@ L2 更新 (缓存失效)
                 content_fingerprint=content_fingerprint,
             )
             if existing_response is not None:
-                return existing_response, []
+                return existing_response, [], False
         if self._text_is_restricted_or_unsafe(request.content):
             raise ValueError("memory update content is restricted_or_unsafe (fail-closed)")
         memory = self._find_manageable_memory(
@@ -1779,7 +1830,7 @@ L2 更新 (缓存失效)
                     content_fingerprint=content_fingerprint,
                 )
                 if existing_response is not None:
-                    return existing_response, []  # H-3: 已完成/重复路径无 pending 写
+                    return existing_response, [], False  # H-3: 已完成/重复路径无 pending 写
         was_retrying_failed_task = is_retryable(task.status)
         task.request_id = request.request_id
         task.op_type = OperationType.UPDATE_MEMORY
@@ -1813,30 +1864,22 @@ L2 更新 (缓存失效)
             )
             raise
 
-        # S3-P2: update 终态写走 _mutate_task_with_retry，跨副本 CAS 冲突时
-        # 重读快照重放。status=COMPLETED 是幂等转换。
-        def finalize_update(t: TaskEntry) -> None:
-            t.status = TaskStatus.COMPLETED
-            t.result = {
-                "memory_id": updated_memory.memory_id,
-                "content_fingerprint": content_fingerprint,
-                "memory_type": updated_memory.memory_type,
-                "summary_state": SummaryState.DIRTY.value,
-            }
-
-        self._mutate_task_with_retry(
-            task.task_id, finalize_update, log_context={"stage": "update_final"}
-        )
         item = self._managed_memory_item(updated_memory)
         update_log.bind(task_id=task.task_id, status=task.status.value).info(
-            "memory update completed"
+            "memory update local index written, awaiting backend write"
         )
-        return UpdateMemoryResponse(
-            status="completed",
-            task_id=task.task_id,
-            memory=item,
-            summary_state=SummaryState.DIRTY,
-        ), pending_backend_writes
+        # 终态不在这里写：backend 写还没发生。真正的终态由 update_memory
+        # 在 backend 写成功后才落 —— 否则后端没写成也会显示 completed。
+        return (
+            UpdateMemoryResponse(
+                status="running",
+                task_id=task.task_id,
+                memory=item,
+                summary_state=SummaryState.DIRTY,
+            ),
+            pending_backend_writes,
+            True,
+        )
 
     def _existing_update_response(
         self,

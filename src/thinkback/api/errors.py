@@ -29,6 +29,9 @@ def service_error_to_http(exc: Exception) -> HTTPException | None:
         detail = str(exc)
         if "dead_letter" in detail or "stale write" in detail:
             return HTTPException(status_code=409, detail=detail)
+        if "optimistic lock contention exhausted" in detail:
+            # 终态写没落库：调用方必须看到失败并重试，不能当成功。
+            return HTTPException(status_code=409, detail=detail)
         if "l3 background queue full" in detail:
             return HTTPException(status_code=503, detail=detail)
         if "repository operation timed out" in detail:

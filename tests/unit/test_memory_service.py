@@ -1182,13 +1182,15 @@ def test_update_memory_supersedes_conflict_even_when_backend_cleanup_fails() -> 
     active = repository.active_memories("user-1", "thinkback")
     task = repository.get_task(response.task_id)
 
-    assert response.status == "completed"
+    # 本地索引仍生效（新内容已写、冲突已 SUPERSEDED），但旧记忆的后端清理
+    # 没完成，操作不能算 completed：调用方需要知道并可用同一 operation_id 重试。
+    assert response.status == "failed"
     assert [memory.memory_id for memory in active] == [target.memory_id]
     assert repository.memories[target.memory_id].memory_text == "User has a cat named 麻薯"
     assert repository.memories[conflict.memory_id].memory_status is MemoryStatus.SUPERSEDED
     assert conflict.backend_memory_id in backend.memories
     assert task is not None
-    assert task.status is TaskStatus.COMPLETED
+    assert task.status is TaskStatus.FAILED
 
 
 def test_update_memory_rejects_local_p0_content_that_would_not_be_recallable() -> None:
@@ -7621,6 +7623,8 @@ def test_backend_update_failure_does_not_corrupt_index() -> None:
     """N-6: backend.update 失败时，本地索引不应被回滚（与 _apply_memory_update
     在 index_updated=True 后异常路径一致——本地索引先于 backend 写入已成功，失败
     只影响 backend 端的 L3 真实数据，repo 仍反映已提交版本）。
+
+    但**不得**再返回 completed：后端没写成，调用方必须知道。
     """
     repository = InMemoryMemoryRepository()
     backend = _CallWrappingBackend()
@@ -7630,7 +7634,6 @@ def test_backend_update_failure_does_not_corrupt_index() -> None:
     original_text = memory.memory_text
     backend.raise_runtime_error = True  # 注入 backend 失败
 
-    # 即使 backend 失败，update_memory 仍应完成（_run_backend_writes 吞异常）
     response = service.update_memory(
         UpdateMemoryRequest(
             request_id="update-req",
@@ -7649,8 +7652,40 @@ def test_backend_update_failure_does_not_corrupt_index() -> None:
     )
     assert current.memory_text == "用户改名了"
     assert current.memory_text != original_text
-    # 任务仍标记 completed（backend 失败只记日志，不影响业务任务状态）
-    assert response.status == "completed"
+    # 后端没写成：任务标 failed，响应不是 completed（客户端可用同一 operation_id 重试）
+    assert response.status == "failed"
+    task = repository.get_task("memory-update:update-op")
+    assert task is not None
+    assert task.status is TaskStatus.FAILED
+    assert task.last_error
+
+
+def test_update_backend_failure_can_be_retried_with_same_operation_id() -> None:
+    """同一 operation_id 重试：后端恢复后应能收敛到 completed。"""
+    repository = InMemoryMemoryRepository()
+    backend = _CallWrappingBackend()
+    service = MemoryService(repository=repository, backend=backend)
+    service.append(make_append(round_id="round-update-retry", content="我养了一只猫叫团子"))
+    memory = next(memory for memory in repository.active_memories("user-1", "thinkback"))
+    backend.raise_runtime_error = True
+
+    request = UpdateMemoryRequest(
+        request_id="update-req-retry",
+        user_id="user-1",
+        operation_id="update-op-retry",
+        memory_id=memory.memory_id,
+        content="用户改名了",
+    )
+    failed = service.update_memory(request)
+    assert failed.status == "failed"
+
+    backend.raise_runtime_error = False
+    retried = service.update_memory(request)
+
+    assert retried.status == "completed"
+    task = repository.get_task("memory-update:update-op-retry")
+    assert task is not None
+    assert task.status is TaskStatus.COMPLETED
 
 
 # ---------------------------------------------------------------------------
