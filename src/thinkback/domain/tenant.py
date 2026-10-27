@@ -25,7 +25,12 @@ def scoped_user_id(tenant_id: str, user_id: str) -> str:
     'tenant_a:alice'
     >>> scoped_user_id("", "alice")
     'alice'
+
+    tenant 里不允许出现分隔符：否则 ``acme:prod + alice`` 与 ``acme + prod:alice``
+    会拼出同一个主体，造成跨租户读写。
     """
+    if TENANT_USER_SEPARATOR in tenant_id:
+        raise ValueError(f"tenant_id must not contain {TENANT_USER_SEPARATOR!r}")
     if not tenant_id:
         return user_id
     if not user_id:

@@ -92,7 +92,15 @@ def generate_api_key(
     plan: str = "free",
     env: str = "live",
 ) -> tuple[str, ApiKey]:
-    """生成 API key,返回 (明文 key, 存储记录)。明文只在生成时显示一次。"""
+    """生成 API key,返回 (明文 key, 存储记录)。明文只在生成时显示一次。
+
+    tenant 里不允许出现命名空间分隔符：它与 user_id 拼接时会产生
+    跨租户主体碰撞，签发阶段就拒绝，而不是等读到别人的数据才发现。
+    """
+    from thinkback.domain.tenant import TENANT_USER_SEPARATOR
+
+    if TENANT_USER_SEPARATOR in tenant_id:
+        raise ValueError(f"tenant_id must not contain {TENANT_USER_SEPARATOR!r}")
     key_id = secrets.token_hex(16)
     secret = secrets.token_hex(32)
     plaintext = f"tbk_{env}_{key_id}_{secret}"

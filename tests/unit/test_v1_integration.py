@@ -344,3 +344,11 @@ def test_v1_tenant_id_mismatch_returns_403() -> None:
             },
         )
         assert r.status_code == 403
+
+
+def test_generate_api_key_rejects_tenant_with_separator() -> None:
+    """tenant 含冒号的 key 在签发阶段就被拒绝，而不是等跨租户读取才发现。"""
+    from thinkback.api.auth import Scope, generate_api_key
+
+    with pytest.raises(ValueError, match="must not contain"):
+        generate_api_key("acme:prod", {Scope.MEMORY_READ})
