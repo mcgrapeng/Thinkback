@@ -8701,6 +8701,106 @@ def test_erase_records_audit_without_content() -> None:
     assert "SECRET-TOKEN" not in str(audit.detail)
 
 
+class _NoFactBackend(FakeMemoryBackend):
+    """不产生任何 L3 事实的后端：模拟抽取关闭或抽取失败。"""
+
+    def add(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+        return []
+
+
+def test_erase_session_without_l3_removes_round_and_summary() -> None:
+    """只有 L1/L2、没有 L3 索引时，erase 仍要清掉轮次原文与摘要正文。"""
+    repository = InMemoryMemoryRepository()
+    service = MemoryService(
+        repository=repository, backend=_NoFactBackend(), l3_write_mode="sync"
+    )
+    service.append(make_append(round_id="r-erase-no-l3", content="今天没有长期事实"))
+
+    assert repository.get_round("r-erase-no-l3") is not None
+    summary_before = repository.get_summary("user-1", "session-1")
+    assert summary_before is not None
+    assert summary_before.summary_text
+
+    response = service.erase(
+        DeleteMemoryRequest(
+            request_id="req-erase-no-l3",
+            user_id="user-1",
+            session_id="session-1",
+            scope=DeleteScope.SESSION,
+            operation_id="op-erase-no-l3",
+        )
+    )
+
+    assert response.status == "completed"
+    assert repository.get_round("r-erase-no-l3") is None
+    summary_after = repository.get_summary("user-1", "session-1")
+    assert summary_after is None or summary_after.summary_text == ""
+
+
+def test_erase_after_suppress_removes_retained_plaintext() -> None:
+    """先 suppress 再 erase：suppress 保留的原文也要被物理擦除。"""
+    repository = InMemoryMemoryRepository()
+    backend = FakeMemoryBackend()
+    service = MemoryService(repository=repository, backend=backend, l3_write_mode="sync")
+    service.append(make_append(round_id="r-erase-after-suppress", content="我的护照号是 E12345678"))
+    memory = repository.active_memories("user-1", "thinkback")[0]
+
+    service.suppress_memory(
+        DeleteMemoryRequest(
+            request_id="req-suppress-then-erase",
+            user_id="user-1",
+            scope=DeleteScope.MEMORY,
+            operation_id="op-suppress-then-erase",
+            memory_id=memory.memory_id,
+        )
+    )
+    assert repository.get_memory_index(memory.memory_id) is not None
+
+    service.erase(
+        DeleteMemoryRequest(
+            request_id="req-erase-after-suppress",
+            user_id="user-1",
+            scope=DeleteScope.MEMORY,
+            operation_id="op-erase-after-suppress",
+            memory_id=memory.memory_id,
+        )
+    )
+
+    assert repository.get_memory_index(memory.memory_id) is None
+    assert repository.get_round("r-erase-after-suppress") is None
+    summary = repository.get_summary("user-1", "session-1")
+    assert summary is None or summary.summary_text == ""
+
+
+def test_erase_all_deletes_backend_only_memories() -> None:
+    """ALL 擦除要覆盖本地没有索引行的后端记录（暗数据）。"""
+    repository = InMemoryMemoryRepository()
+    backend = FakeMemoryBackend()
+    service = MemoryService(repository=repository, backend=backend, l3_write_mode="sync")
+    service.append(make_append(round_id="r-erase-orphan", content="我负责 3nm 良率提升"))
+    backend.memories["orphan-no-index"] = {
+        "id": "orphan-no-index",
+        "memory": "orphan",
+        "user_id": "user-1",
+        "agent_id": "thinkback",
+        "metadata": {},
+        "score": 1.0,
+    }
+
+    response = service.erase(
+        DeleteMemoryRequest(
+            request_id="req-erase-orphan",
+            user_id="user-1",
+            scope=DeleteScope.ALL,
+            operation_id="op-erase-orphan",
+        )
+    )
+
+    assert response.status == "completed"
+    assert backend.memories == {}
+    assert repository.active_memories("user-1", "thinkback") == []
+
+
 def test_erase_purges_engine_history_with_backend_ids_and_scope() -> None:
     """erase 必须把被删的后端 ID 与作用域交给引擎侧清理（历史 + 原始消息）。"""
 
