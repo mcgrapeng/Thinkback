@@ -122,9 +122,17 @@ class InMemoryMemoryRepository(L1CacheMixin):
         summary_kind: str = "concat",
         structured_sections: dict[str, str] | None = None,
         preserve_llm: bool = False,
+        expected_row_version: int | None = None,
     ) -> SummaryEntry:
         composed_text, latest = summarize_rounds(rounds)
         existing = self.summaries.get(scope_key(user_id, memory_scope_id))
+        # 乐观锁：版本已经变了（删除、状态变更、别人写过）就不写。
+        if (
+            existing is not None
+            and expected_row_version is not None
+            and existing.row_version != expected_row_version
+        ):
+            return existing
         if (
             preserve_llm
             and summary_kind == "concat"
@@ -143,6 +151,7 @@ class InMemoryMemoryRepository(L1CacheMixin):
             summary_state=SummaryState.ACTIVE,
             summary_kind=summary_kind,
             structured_sections=dict(structured_sections) if structured_sections else {},
+            row_version=(existing.row_version + 1) if existing else 0,
         )
         self.summaries[scope_key(user_id, memory_scope_id)] = summary
         return summary
@@ -154,6 +163,8 @@ class InMemoryMemoryRepository(L1CacheMixin):
         summary = self.get_summary(user_id, memory_scope_id)
         if summary:
             summary.summary_state = state
+            # 状态变更也要 +1：让基于旧快照的在飞刷新写不进来。
+            summary.row_version += 1
 
     def list_rounds(
         self,

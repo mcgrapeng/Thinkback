@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+from threading import Event
 from typing import Any
 
 import pytest
@@ -28,6 +29,7 @@ from thinkback.memory.schemas import (
     DeleteMemoryRequest,
     DeleteScope,
     RecallMemoryRequest,
+    SummaryState,
 )
 from thinkback.memory.service import MemoryService
 
@@ -252,6 +254,91 @@ def test_pending_scope_not_resubmitted_while_in_flight() -> None:
 
 
 # ── 仓储持久化 ────────────────────────────────────────────────────────
+
+
+def test_stale_refresh_cannot_resurrect_deleted_summary() -> None:
+    """删除之后，在飞中的旧 LLM 刷新不得把摘要写回 ACTIVE。
+
+    删除只把摘要置 DIRTY；旧刷新持有删除前的快照，完成后无条件写回
+    （内容、状态一起回到 ACTIVE），已删内容因此复活。
+    """
+    started = Event()
+    release = Event()
+
+    def blocking_composer(
+        rounds: list[Any], previous_summary: str | None
+    ) -> tuple[str, dict[str, str]]:
+        started.set()
+        if not release.wait(timeout=10):
+            raise RuntimeError("test release timeout")
+        text = "【主题】SECRET-MARKER"
+        return text, {"主题": text}
+
+    repository = InMemoryMemoryRepository()
+    service = MemoryService(
+        repository=repository,
+        backend=FakeMemoryBackend(),
+        l3_write_mode="sync",
+        l2_summary_composer=blocking_composer,
+        l2_refresh_interval_rounds=5,
+    )
+    service.append(make_append("r1", "SECRET-MARKER"))
+    assert started.wait(timeout=5)
+
+    service.delete(
+        DeleteMemoryRequest(
+            request_id="req-del",
+            user_id="user-1",
+            scope=DeleteScope.SESSION,
+            operation_id="op-del",
+            session_id="session-1",
+        )
+    )
+    release.set()
+    service.drain_l3_background_tasks(timeout=10)
+
+    summary = repository.get_summary("user-1", "session-1")
+    assert summary is not None
+    # 保证一：状态不被旧刷新改回 ACTIVE（DIRTY 会被召回路径跳过）。
+    assert summary.summary_state is SummaryState.DIRTY
+    # 保证二：旧刷新的 llm 摘要没有落进来（kind 仍是删除前的 concat 版）。
+    assert summary.summary_kind != "llm"
+    assert "【主题】" not in summary.summary_text
+
+
+def test_refresh_in_flight_triggers_trailing_refresh() -> None:
+    """在飞期间到达的轮次必须触发一次 trailing 刷新，不能被旧快照吞掉。"""
+    started = Event()
+    release = Event()
+    calls: list[int] = []
+
+    def composer(rounds: list[Any], previous_summary: str | None) -> tuple[str, dict[str, str]]:
+        calls.append(len(rounds))
+        if len(calls) == 1:
+            started.set()
+            if not release.wait(timeout=10):
+                raise RuntimeError("test release timeout")
+        text = f"【主题】刷新{len(calls)}"
+        return text, {"主题": text}
+
+    repository = InMemoryMemoryRepository()
+    service = MemoryService(
+        repository=repository,
+        backend=FakeMemoryBackend(),
+        l3_write_mode="sync",
+        l2_summary_composer=composer,
+        l2_refresh_interval_rounds=2,
+    )
+    service.append(make_append("r1", "第一轮"))
+    assert started.wait(timeout=5)
+
+    service.append(make_append("r2", "第二轮", index=2))
+    service.append(make_append("r3", "第三轮", index=3))
+    release.set()
+    service.drain_l3_background_tasks(timeout=10)
+
+    assert len(calls) >= 2
+    assert calls[-1] >= 3
 
 
 def test_upsert_summary_kind_roundtrip_in_memory_repo() -> None:

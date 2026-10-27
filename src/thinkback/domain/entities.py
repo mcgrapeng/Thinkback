@@ -89,6 +89,9 @@ class SummaryEntry:
     summary_state: SummaryState = SummaryState.ACTIVE
     summary_kind: str = "concat"
     structured_sections: dict[str, str] = field(default_factory=dict)
+    # 乐观锁版本：每次成功写入 +1。删除、状态变更同样 +1，
+    # 于是基于旧快照的在飞刷新写不进来（避免旧快照覆盖删除结果）。
+    row_version: int = 0
 
 
 @dataclass

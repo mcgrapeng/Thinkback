@@ -43,6 +43,9 @@ class CurrentSummaryRecord(Base):
     # G4 schema 化 4 段画像：主题/进行中事项/行为偏好/近期状态。
     # llm 综合版本填；concat 降级版本保持空 dict。读路径可机器消费各段。
     structured_sections: Mapped[dict[str, str]] = mapped_column(JSON, default=dict)
+    # 乐观锁版本：任何写入（摘要刷新、删除置脏、状态变更）都 +1，
+    # 基于旧版本的在飞刷新写不进来。
+    row_version: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()

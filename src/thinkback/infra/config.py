@@ -123,6 +123,7 @@ class Settings(BaseSettings):
 
     # ── API 网关 ──────────────────────────────────────────────────────
     memory_api_worker_limit: int = 8
+    # 读写路径的等待预算（各自独立的信号量与线程池，这里只是统一的超时值）。
     memory_api_worker_wait_seconds: float = 5.0
     readiness_timeout_seconds: float = 3.0
     # 启动回收阈值：running 任务超过该秒数无任何更新（updated_at 停滞），

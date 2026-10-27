@@ -314,6 +314,7 @@ class SqlAlchemyMemoryRepository(L1CacheMixin):
         summary_kind: str = "concat",
         structured_sections: dict[str, str] | None = None,
         preserve_llm: bool = False,
+        expected_row_version: int | None = None,
     ) -> SummaryEntry:
         composed_text, latest = summarize_rounds(rounds)
         return self._run(
@@ -325,6 +326,7 @@ class SqlAlchemyMemoryRepository(L1CacheMixin):
                 summary_kind=summary_kind,
                 structured_sections=structured_sections,
                 preserve_llm=preserve_llm,
+                expected_row_version=expected_row_version,
             )
         )
 
@@ -338,6 +340,7 @@ class SqlAlchemyMemoryRepository(L1CacheMixin):
         summary_kind: str = "concat",
         structured_sections: dict[str, str] | None = None,
         preserve_llm: bool = False,
+        expected_row_version: int | None = None,
     ) -> SummaryEntry:
         async with self.session_factory() as session:
             # 单条条件 UPDATE —— 判据与写在一起，不给并发留窗口。
@@ -348,7 +351,7 @@ class SqlAlchemyMemoryRepository(L1CacheMixin):
             # _previous_llm_summary 会把这段拼接文本当「上一版 LLM 摘要」
             # 喂进下一轮刷新，污染自我强化。
             guard = not (preserve_llm and summary_kind == "concat")  # True = 允许覆盖
-            result = await session.execute(
+            stmt = (
                 update(CurrentSummaryRecord)
                 .where(
                     and_(
@@ -363,7 +366,13 @@ class SqlAlchemyMemoryRepository(L1CacheMixin):
                         literal(guard),
                     )
                 )
-                .values(
+            )
+            if expected_row_version is not None:
+                # 乐观锁：删除、状态变更都会让 row_version +1，
+                # 于是基于旧快照的在飞刷新写不进来（不会把 DIRTY 改回 ACTIVE）。
+                stmt = stmt.where(CurrentSummaryRecord.row_version == expected_row_version)
+            result = await session.execute(
+                stmt.values(
                     summary_text=summary_text,
                     summary_cursor_round=latest.round_id if latest else None,
                     latest_source_round_id=latest.round_id if latest else None,
@@ -373,10 +382,12 @@ class SqlAlchemyMemoryRepository(L1CacheMixin):
                     structured_sections=(
                         dict(structured_sections) if structured_sections is not None else {}
                     ),
+                    row_version=CurrentSummaryRecord.row_version + 1,
                 )
             )
             if int(getattr(result, "rowcount", 0) or 0) == 0:
-                # 两种可能：行不存在（要 INSERT），或保护生效（不覆盖 LLM 摘要）。
+                # 两种可能：行不存在（要 INSERT），或保护生效（不覆盖 LLM 摘要），
+                # 或版本不匹配（调用方的快照过期）。
                 record = await session.scalar(
                     select(CurrentSummaryRecord).where(
                         and_(
@@ -398,6 +409,7 @@ class SqlAlchemyMemoryRepository(L1CacheMixin):
                     latest_source_timestamp=None,
                     summary_state=SummaryState.ACTIVE.value,
                     structured_sections=dict(structured_sections) if structured_sections else {},
+                    row_version=0,
                 )
                 session.add(record)
                 record.summary_text = summary_text
@@ -471,6 +483,8 @@ class SqlAlchemyMemoryRepository(L1CacheMixin):
             )
             if record:
                 record.summary_state = state.value
+                # 状态变更也要 +1：让基于旧快照的在飞刷新写不进来。
+                record.row_version = record.row_version + 1
                 await session.commit()
 
     def list_rounds(
@@ -1498,6 +1512,7 @@ class SqlAlchemyMemoryRepository(L1CacheMixin):
             summary_state=SummaryState(record.summary_state),
             summary_kind=getattr(record, "summary_kind", "concat") or "concat",
             structured_sections=dict(getattr(record, "structured_sections", {}) or {}),
+            row_version=int(getattr(record, "row_version", 0) or 0),
         )
 
     @staticmethod
