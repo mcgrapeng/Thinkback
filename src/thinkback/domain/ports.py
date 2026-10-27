@@ -339,7 +339,9 @@ class MemoryBackend(Protocol):
         """批量删除，返回实际尝试删除的条数（不含空 ID）。"""
         ...
 
-    def get_all(self, *, user_id: str, memory_scope_id: str, limit: int = 200) -> list[dict]:
+    def get_all(
+        self, *, user_id: str, memory_scope_id: str, limit: int = 200
+    ) -> list[dict[str, Any]]:
         """列出该 user+scope 下的后端记忆（含 metadata）。
 
         重试对账用：上一次写入可能已经把事实写进后端、只是本地索引失败，

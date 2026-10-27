@@ -93,6 +93,14 @@ async def _lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: ARG001
     # 避免 GetTask 客户端永远轮询。内部已按阈值做条件回收并吞掉失败。
     from thinkback.api.dependencies import get_memory_service
 
+    # 已接受（async 返回 accepted）但没写完的 L3 写入：按 journal 重放，
+    # 否则进程崩溃后那条长期记忆会永久缺失。必须在孤儿回收之前跑：
+    # 回收会把超龄 RUNNING 标成 failed，回收后就认不出「待重放」的工作了。
+    recovered_writes = get_memory_service().recover_pending_writes()
+    if recovered_writes:
+        logger.bind(recovered_count=recovered_writes).warning(
+            "memory pending writes recovered on startup"
+        )
     reclaimed_tasks = get_memory_service().reclaim_orphan_running_tasks()
     if reclaimed_tasks:
         logger.bind(reclaimed_count=len(reclaimed_tasks)).warning(

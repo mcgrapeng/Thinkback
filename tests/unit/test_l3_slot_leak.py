@@ -91,5 +91,5 @@ def test_l3_capacity_is_usable_again_after_failures() -> None:
 
     repository.explode = False
     response = service.append(_request("r-after-recovery"))
-    assert response.status in {"completed", "already_done"}
+    assert response.status in {"accepted", "already_done"}
     service.shutdown_l3_executor()

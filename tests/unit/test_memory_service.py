@@ -1419,7 +1419,7 @@ def test_append_duplicate_round_does_not_resubmit_while_async_l3_write_is_runnin
     assert backend.started.wait(timeout=1)
     second = service.append(make_append(round_id="round-dog", content="我养了一只狗，名字叫豆包。"))
 
-    assert first.status == "completed"
+    assert first.status == "accepted"
     assert second.status == "already_done"
     task = repository.get_task(first.task_id)
     assert task is not None
@@ -1485,7 +1485,7 @@ def test_async_append_returns_after_local_p0_backfill_before_mem0_add_finishes()
     elapsed = time.perf_counter() - started_at
 
     assert elapsed < 2.0
-    assert response.status == "completed"
+    assert response.status == "accepted"
     assert response.l3_events == [{"event": "DEFERRED", "reason": "l3_background_write"}]
     assert backend.started.wait(timeout=1)
 
@@ -1631,7 +1631,7 @@ def test_async_append_does_not_wait_for_backend_delete_when_superseding_p0_slot(
     elapsed = time.perf_counter() - started_at
 
     assert elapsed < 4.0
-    assert response.status == "completed"
+    assert response.status == "accepted"
     assert backend.started.wait(timeout=1)
     active = repository.active_memories("user-1", "thinkback")
     assert [memory.memory_text for memory in active] == ["User has a cat named 麻薯"]
@@ -5922,9 +5922,7 @@ def test_erase_blocks_inflight_l3_append() -> None:
 
     def _append() -> None:
         try:
-            service.append(
-                make_append(round_id="r-erase-inflight", content="我的工号是 E-7788")
-            )
+            service.append(make_append(round_id="r-erase-inflight", content="我的工号是 E-7788"))
         except BaseException as exc:  # pragma: no cover - 失败时由断言暴露
             errors.append(exc)
 
@@ -5950,9 +5948,7 @@ def test_erase_blocks_inflight_l3_append() -> None:
     assert repository.get_round("r-erase-inflight") is None
 
 
-def test_erase_leaves_source_tombstone_so_external_history_rebuild_cannot_restore_it() -> (
-    None
-):
+def test_erase_leaves_source_tombstone_so_external_history_rebuild_cannot_restore_it() -> None:
     """物理擦除也要留下内容无关的来源墓碑：外部历史重建不得把事实抽回来。"""
     repository = InMemoryMemoryRepository()
     backend = FakeMemoryBackend()
@@ -7101,7 +7097,7 @@ def test_async_append_response_redacts_l3_events() -> None:
     )
     response = service.append(make_append(round_id="round-async-redact", content="我喜欢猫"))
 
-    assert response.status == "completed"
+    assert response.status == "accepted"
     assert response.l3_events == [{"event": "DEFERRED", "reason": "l3_background_write"}]
     # 异步模式脱敏只走 DEFERRED 占位；显式断言不携带 memory/content
     for event in response.l3_events:
@@ -8821,9 +8817,7 @@ class _NoFactBackend(FakeMemoryBackend):
 def test_erase_session_without_l3_removes_round_and_summary() -> None:
     """只有 L1/L2、没有 L3 索引时，erase 仍要清掉轮次原文与摘要正文。"""
     repository = InMemoryMemoryRepository()
-    service = MemoryService(
-        repository=repository, backend=_NoFactBackend(), l3_write_mode="sync"
-    )
+    service = MemoryService(repository=repository, backend=_NoFactBackend(), l3_write_mode="sync")
     service.append(make_append(round_id="r-erase-no-l3", content="今天没有长期事实"))
 
     assert repository.get_round("r-erase-no-l3") is not None
@@ -9117,6 +9111,87 @@ def test_append_retry_after_index_failure_reuses_backend_result() -> None:
     service.append(request)
 
     assert backend.add_count == 1
+    assert len(repository.active_memories("user-1", "thinkback")) == 1
+
+
+def test_healthy_long_task_is_not_reclaimed_while_worker_alive(monkeypatch) -> None:
+    """健康的长任务（有心跳）不得被读路径当成孤儿回收成 failed。"""
+    from thinkback.infra.config import settings
+
+    monkeypatch.setattr(settings, "task_orphan_running_seconds", 0.1, raising=False)
+    repository = InMemoryMemoryRepository()
+    service = MemoryService(
+        repository=repository,
+        backend=FakeMemoryBackend(),
+        l3_write_mode="async",
+        l3_executor_workers=1,
+        task_heartbeat_seconds=0.02,
+    )
+    started = Event()
+    release = Event()
+
+    class _SlowBackend(FakeMemoryBackend):
+        def add(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+            started.set()
+            assert release.wait(timeout=10), "add 等待超时"
+            return super().add(*args, **kwargs)
+
+    service.backend = _SlowBackend()
+    service.append(make_append(round_id="r-heartbeat", content="我负责 3nm 良率提升"))
+    assert started.wait(timeout=5)
+
+    time.sleep(0.4)  # 超过孤儿阈值，但心跳仍在刷新任务行
+
+    task = service.get_task("memory-extract:r-heartbeat")
+    assert task is not None
+    assert task.status is TaskStatus.RUNNING
+
+    release.set()
+    service.drain_l3_background_tasks(timeout=5)
+
+
+def test_async_append_returns_accepted_until_task_finishes() -> None:
+    """async 写入在任务落定前必须返回 accepted，不能声称 completed。"""
+    repository = InMemoryMemoryRepository()
+    service = MemoryService(
+        repository=repository, backend=FakeMemoryBackend(), l3_write_mode="async"
+    )
+    response = service.append(make_append(round_id="r-accepted", content="我负责 3nm 良率提升"))
+
+    assert response.status == "accepted"
+    service.drain_l3_background_tasks(timeout=5)
+
+
+def test_startup_replays_accepted_write_tasks() -> None:
+    """进程重启后，未完成的 L3 写入按 journal 重放，不丢事实。
+
+    崩溃现场：journal 已落库、任务被 claim 成 RUNNING，但后台抽取还没开始
+    （进程死了）。重启后必须能按 journal 重放，把这条长期记忆补上。
+    """
+    repository = InMemoryMemoryRepository()
+    backend = FakeMemoryBackend()
+    service = MemoryService(repository=repository, backend=backend, l3_write_mode="async")
+    entry = repository.save_round(make_append(round_id="r-recover", content="我负责 3nm 良率提升"))
+    repository.update_l1(entry)
+    repository.save_task(
+        TaskEntry(
+            task_id="memory-extract:r-recover",
+            request_id="req-r-recover",
+            op_type=OperationType.WRITE_ROUND,
+            scope={
+                "user_id": "user-1",
+                "session_id": "session-1",
+                "session_scope_id": "session-1",
+                "long_term_scope_id": "thinkback",
+                "round_id": "r-recover",
+            },
+            status=TaskStatus.RUNNING,
+        )
+    )
+
+    recovered = service.recover_pending_writes()
+
+    assert recovered == 1
     assert len(repository.active_memories("user-1", "thinkback")) == 1
 
 

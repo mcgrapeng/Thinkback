@@ -88,3 +88,50 @@ def test_returns_failed_without_raising(monkeypatch: Any) -> None:
     )
 
     assert result == "failed"
+
+
+def test_passes_configured_database_to_client(monkeypatch: Any) -> None:
+    """必须显式传 db_name：不传就是在 default 库里找集合。
+
+    mem0 写入用的是配置里的 ``db_name``；一致性钩子若连的是 default 库，
+    改的集合根本不是 mem0 在写的那一个，Strong 永远落不下去。
+    """
+    observed: dict[str, Any] = {}
+
+    def fake_client(**kwargs: Any) -> _FakeClient:
+        observed.update(kwargs)
+        return _FakeClient(has=True, level="Bounded")
+
+    import pymilvus
+
+    monkeypatch.setattr(pymilvus, "MilvusClient", fake_client)
+
+    result = milvus_infra.ensure_milvus_collection_consistency(
+        milvus_url="http://milvus:19530",
+        milvus_database="thinkback",
+        collection_name="agent_semantic_memory_v1",
+    )
+
+    assert result == "Strong"
+    assert observed["db_name"] == "thinkback"
+    assert observed["uri"] == "http://milvus:19530"
+
+
+def test_returns_failed_when_client_construction_fails(monkeypatch: Any) -> None:
+    """构造客户端失败也算失败：异常不能从一致性钩子里逃出去打断写入。"""
+
+    def boom(**kwargs: Any) -> Any:
+        _ = kwargs
+        raise RuntimeError("connect refused")
+
+    import pymilvus
+
+    monkeypatch.setattr(pymilvus, "MilvusClient", boom)
+
+    result = milvus_infra.ensure_milvus_collection_consistency(
+        milvus_url="http://milvus:19530",
+        milvus_database="thinkback",
+        collection_name="agent_semantic_memory_v1",
+    )
+
+    assert result == "failed"
