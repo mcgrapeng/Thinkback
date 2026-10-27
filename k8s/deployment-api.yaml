@@ -6,16 +6,28 @@ metadata:
     app: thinkback
     component: api
 spec:
-  # 单副本：进程内状态（API Key 表、幂等缓存、限流桶、L1 缓存）没有跨副本共享。
+  # 单副本：进程内状态（幂等缓存、限流桶、L1 缓存、Mem0 history.db）没有跨副本共享。
   # 多副本下同一用户换个 Pod 就换一份记忆（L1 缓存无跨副本失效，已加 TTL 兜底），
-  # pod A 签发的 key 在 pod B 上查不到、限流额度实际翻倍。
+  # 幂等 key 在另一个 Pod 上查不到、限流额度实际翻倍。
   # 要扩副本先把进程内状态挪到共享存储（Redis/PG），再改这里。
   replicas: 1
+  # 必须用 Recreate，不能用 RollingUpdate + maxSurge。
+  # maxSurge=1 会先拉起新 Pod 并让它 Ready，旧 Pod 还在正常服务 —— 两个进程同时
+  # 承接流量，而下面这些状态全是进程内的，两边各一份：
+  #   - 幂等缓存（api/idempotency.py 的全局 IdempotencyCache）
+  #   - 限流桶（api/ratelimit.py 的 TokenBucket，按客户端 IP 分桶）
+  #   - L1 短期记忆缓存（memory/repositories/_l1_cache.py，TTL 30s）
+  #   - Mem0 history.db（进程内 SQLite，infra/config.py 的 mem0_history_db_path）
+  # 状态一分为二的后果：同一个 Idempotency-Key 在两个 Pod 上会被执行两次；
+  # 已删除的记忆可能被旧 Pod 的 L1 缓存重新召回（复活）。
+  # Recreate 先把旧 Pod 标记删除（退出 Service endpoints、SIGTERM 后不再接新请求），
+  # 再起新 Pod；任何时刻不会有两个 Pod 同时对外服务（旧进程可能在终止窗口里
+  # 继续排空在途请求，但不再承接新流量）。
+  # 代价：每次发布有短暂不可用（单副本本来就无法零停机滚动），换来状态不分裂。
+  # 什么时候可以改回 RollingUpdate：把幂等、限流、L1/L2 缓存、Mem0 history.db
+  # 全部挪到共享存储（Redis / PostgreSQL）之后再改，见 k8s/README.md。
   strategy:
-    type: RollingUpdate
-    rollingUpdate:
-      maxUnavailable: 0
-      maxSurge: 1
+    type: Recreate
   selector:
     matchLabels:
       app: thinkback
