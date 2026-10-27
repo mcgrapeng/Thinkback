@@ -124,7 +124,7 @@ class FakeMemoryBackend:
     def purge_history(
         self, *, user_id: str, memory_ids: list[str], scopes: list[str]
     ) -> dict[str, int]:
-        """fake 后端没有引擎侧历史表，返回零计数。"""
+        """fake 后端没有引擎侧历史表，返回零计数并声明不支持。"""
 
         _ = (user_id, memory_ids, scopes)
-        return {"history": 0, "messages": 0}
+        return {"history": 0, "messages": 0, "supported": False}

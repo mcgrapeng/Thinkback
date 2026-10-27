@@ -587,10 +587,11 @@ class Mem0LibraryMemoryBackend:
         已知边界：``history.db`` 是进程本地文件，多副本部署时每个副本各有一份，
         一次擦除只清到当前副本（与本适配器里记录的既有边界一致）。
         """
-        counts = {"history": 0, "messages": 0}
+        counts = {"history": 0, "messages": 0, "supported": False}
         history_db_path = self.config.get("history_db_path")
         if not isinstance(history_db_path, str) or not history_db_path:
             return counts
+        counts["supported"] = True
         connection = sqlite3.connect(history_db_path, timeout=10.0)
         try:
             tables = {

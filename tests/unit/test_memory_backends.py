@@ -1115,7 +1115,7 @@ def test_mem0_library_backend_purge_history_removes_history_and_messages(
     backend = Mem0LibraryMemoryBackend(config={"history_db_path": str(db_path)})
     counts = backend.purge_history(user_id="u1", memory_ids=["m1"], scopes=["thinkback"])
 
-    assert counts == {"history": 1, "messages": 1}
+    assert counts == {"history": 1, "messages": 1, "supported": True}
 
     connection = sqlite3.connect(db_path)
     try:
@@ -1128,12 +1128,69 @@ def test_mem0_library_backend_purge_history_removes_history_and_messages(
     assert message_ids == ["msg2"]
 
 
+def test_mem0_library_backend_purge_history_without_scopes_keeps_namespace_messages(
+    tmp_path: Path,
+) -> None:
+    """不带 scope 清理时，同一 user+namespace 的原始消息必须保留。
+
+    Mem0 的 session scope 只含 user+agent，没有 Thinkback 的 session/round，
+    所以按 scope 删消息会连别的会话一起删。
+    """
+    import sqlite3
+
+    from thinkback.memory.backends import Mem0LibraryMemoryBackend
+
+    db_path = tmp_path / "history.db"
+    connection = sqlite3.connect(db_path)
+    connection.execute(
+        """
+        CREATE TABLE history (
+            id TEXT PRIMARY KEY, memory_id TEXT, old_memory TEXT, new_memory TEXT,
+            event TEXT, created_at DATETIME, updated_at DATETIME,
+            is_deleted INTEGER, actor_id TEXT, role TEXT
+        )
+        """
+    )
+    connection.execute(
+        """
+        CREATE TABLE messages (
+            id TEXT PRIMARY KEY, session_scope TEXT, role TEXT,
+            content TEXT, name TEXT, created_at DATETIME
+        )
+        """
+    )
+    connection.execute(
+        "INSERT INTO history (id, memory_id, old_memory, new_memory, event)"
+        " VALUES ('h1', 'm1', '旧事实 SECRET', '新事实', 'UPDATE')"
+    )
+    connection.execute(
+        "INSERT INTO messages (id, session_scope, role, content)"
+        " VALUES ('msg1', 'agent_id=thinkback&user_id=u1', 'user', '别的会话的对话')"
+    )
+    connection.commit()
+    connection.close()
+
+    backend = Mem0LibraryMemoryBackend(config={"history_db_path": str(db_path)})
+    counts = backend.purge_history(user_id="u1", memory_ids=["m1"], scopes=[])
+
+    assert counts["history"] == 1
+    assert counts["messages"] == 0
+
+    connection = sqlite3.connect(db_path)
+    try:
+        message_ids = [row[0] for row in connection.execute("SELECT id FROM messages")]
+    finally:
+        connection.close()
+    assert message_ids == ["msg1"]
+
+
 def test_mem0_library_backend_purge_history_without_history_db_is_noop() -> None:
-    """没有配置 history_db_path 时不报错，返回零计数。"""
+    """没有配置 history_db_path 时不报错，返回零计数并声明不支持。"""
     from thinkback.memory.backends import Mem0LibraryMemoryBackend
 
     backend = Mem0LibraryMemoryBackend(config={})
     assert backend.purge_history(user_id="u1", memory_ids=["m1"], scopes=["thinkback"]) == {
         "history": 0,
         "messages": 0,
+        "supported": False,
     }
