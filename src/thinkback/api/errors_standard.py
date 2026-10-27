@@ -76,14 +76,30 @@ def error_response(
     return JSONResponse(status_code=status_code, content=body)
 
 
+def _safe_validation_errors(exc: RequestValidationError) -> list[dict[str, Any]]:
+    """只保留定位与原因。
+
+    Pydantic 的 ``input`` 与 ``ctx`` 会带上被拒绝的请求体（可能含对话正文或
+    凭据），日志与响应都不得回显它们。
+    """
+    return [
+        {
+            "loc": [str(part) for part in error.get("loc", ())],
+            "type": str(error.get("type", "")),
+            "msg": str(error.get("msg", "")),
+        }
+        for error in exc.errors()
+    ]
+
+
 def register_exception_handlers(app: FastAPI) -> None:
     """注册标准化异常处理器。"""
 
     @app.exception_handler(RequestValidationError)
     async def validation_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
         rid = _get_request_id(request)
-        logger.warning(f"validation_error rid={rid} errors={exc.errors()}")
-        # 用 jsonable_encoder 安全序列化(Pydantic 错误可能含 ValueError 等不可 JSON 化对象)
+        errors = _safe_validation_errors(exc)
+        logger.warning(f"validation_error rid={rid} errors={errors}")
         return JSONResponse(
             status_code=422,
             content={
@@ -92,7 +108,7 @@ def register_exception_handlers(app: FastAPI) -> None:
                     "message": "Request validation failed",
                     "request_id": rid,
                 },
-                "detail": jsonable_encoder(exc.errors()),
+                "detail": errors,
             },
         )
 
