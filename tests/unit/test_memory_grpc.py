@@ -142,6 +142,36 @@ def test_get_memory_not_found(stub: memory_pb2_grpc.MemoryServiceStub) -> None:
     assert exc_info.value.code() == grpc.StatusCode.NOT_FOUND
 
 
+def test_namespace_isolates_memories_over_grpc(stub: memory_pb2_grpc.MemoryServiceStub) -> None:
+    """gRPC 侧 namespace 生效：不同作用域的记忆互不可见。"""
+    request = _append_request("round-ns-semi")
+    request.request_id = "req-ns-semi"
+    request.namespace = "semiconductor"
+    stub.Append(request)
+
+    scoped = stub.ListMemories(pb.ListMemoriesRequest(user_id="u1", namespace="semiconductor"))
+    assert scoped.items
+
+    other = stub.ListMemories(pb.ListMemoriesRequest(user_id="u1", namespace="hr"))
+    assert not other.items
+
+
+def test_empty_namespace_falls_back_to_default(stub: memory_pb2_grpc.MemoryServiceStub) -> None:
+    """proto3 标量没有 presence：空串按「没传」处理，走默认作用域。"""
+    resp = stub.ListMemories(pb.ListMemoriesRequest(user_id="u1"))
+    assert resp.status == "ok"
+
+
+def test_invalid_namespace_rejected_over_grpc(stub: memory_pb2_grpc.MemoryServiceStub) -> None:
+    """非法 namespace 明确报错（INVALID_ARGUMENT），不静默归一化。"""
+    request = _append_request("round-ns-bad")
+    request.request_id = "req-ns-bad"
+    request.namespace = "a:b"
+    with pytest.raises(grpc.RpcError) as exc_info:
+        stub.Append(request)
+    assert exc_info.value.code() == grpc.StatusCode.INVALID_ARGUMENT
+
+
 def test_get_task_not_found(stub: memory_pb2_grpc.MemoryServiceStub) -> None:
     with pytest.raises(grpc.RpcError) as exc_info:
         stub.GetTask(pb.GetTaskRequest(task_id="no-such-task"))

@@ -8,7 +8,9 @@ K8S_DIR ?= k8s
 .PHONY: fmt format-check lint typecheck test test-fast coverage check test-ui test-e2e test-fuzz eval audit load-smoke mutation-audit hooks-install hooks-run dev dev-up dev-down image-build k8s-apply k8s-delete proto-gen migration-up migration-downgrade-1 migration-status migration-history migration-revision
 
 proto-gen:
-	uv run --group dev python -m grpc_tools.protoc \
+	# 固定生成器版本：不固定时 grpcio-tools 升级会产出大量无关 diff。
+	# 生成后跑 ruff format —— 仓库里的生成代码是格式化过的。
+	uv run --with "grpcio-tools==1.69.0" python -m grpc_tools.protoc \
 		-I proto \
 		--python_out=src/thinkback/rpc \
 		--grpc_python_out=src/thinkback/rpc \
@@ -16,6 +18,7 @@ proto-gen:
 		proto/memory.proto
 	sed -i '' 's/^import memory_pb2 as memory__pb2$$/from thinkback.rpc import memory_pb2 as memory__pb2/' \
 		src/thinkback/rpc/memory_pb2_grpc.py
+	uv run --group dev ruff format src/thinkback/rpc/
 
 fmt:
 	uv run --group dev ruff format .

@@ -12,6 +12,7 @@ import json
 from typing import Any
 
 from thinkback.memory.schemas import (
+    DEFAULT_NAMESPACE,
     AppendMemoryRequest,
     DataClassification,
     DeleteMemoryRequest,
@@ -159,6 +160,11 @@ _SUMMARY_STATE_TO_PB = {
 # ── request converters ───────────────────────────────────────────────────────
 
 
+def _namespace(value: str) -> str:
+    """proto3 标量没有 presence：空串按「没传」处理，取默认作用域。"""
+    return value or DEFAULT_NAMESPACE
+
+
 def to_append_request(req: pb.AppendRequest) -> AppendMemoryRequest:
     from datetime import datetime
 
@@ -180,6 +186,7 @@ def to_append_request(req: pb.AppendRequest) -> AppendMemoryRequest:
         source_timestamp=datetime.fromisoformat(req.source_timestamp),
         round_index=req.round_index if req.HasField("round_index") else None,
         metadata=dict(req.metadata),
+        namespace=_namespace(req.namespace),
     )
 
 
@@ -196,6 +203,7 @@ def to_recall_request(req: pb.RecallRequest) -> RecallMemoryRequest:
         l3_limit=resolve_l3_limit(req.l3_limit),
         l3_score_threshold=resolve_l3_score_threshold(req.l3_score_threshold),
         token_budget=resolve_token_budget(req.token_budget),
+        namespace=_namespace(req.namespace),
     )
 
 
@@ -207,6 +215,7 @@ def to_delete_request(req: pb.DeleteRequest) -> DeleteMemoryRequest:
         operation_id=req.operation_id,
         memory_id=req.memory_id if req.HasField("memory_id") else None,
         session_id=req.session_id if req.HasField("session_id") else None,
+        namespace=_namespace(req.namespace),
     )
 
 
@@ -219,6 +228,7 @@ def to_update_request(req: pb.UpdateMemoryRequest) -> UpdateMemoryRequest:
         memory_id=req.memory_id,
         content=req.content,
         memory_type=memory_type,
+        namespace=_namespace(req.namespace),
     )
 
 
@@ -231,6 +241,7 @@ def to_rebuild_request(req: pb.RebuildRequest) -> RebuildMemoryRequest:
         history_version=req.history_version if req.HasField("history_version") else None,
         rebuild_l2=req.rebuild_l2,
         rebuild_l3=req.rebuild_l3,
+        namespace=_namespace(req.namespace),
     )
 
 

@@ -96,6 +96,7 @@ message AppendRequest {
   string source_timestamp = 6;  // ISO 8601
   optional int32 round_index = 7;
   map<string, string> metadata = 8;
+  string namespace = 9;  // 记忆作用域标签；空值按 "thinkback" 处理
 }
 
 message AppendResponse {
@@ -113,6 +114,7 @@ message RecallRequest {
   int32 l3_limit = 5;
   float l3_score_threshold = 6;
   int32 token_budget = 7;
+  string namespace = 8;  // 记忆作用域标签；空值按 "thinkback" 处理
 }
 
 message MemoryItem {
@@ -138,6 +140,7 @@ message DeleteRequest {
   string operation_id = 4;
   optional string memory_id = 5;
   optional string session_id = 6;
+  string namespace = 7;  // 记忆作用域标签；空值按 "thinkback" 处理
 }
 
 message DeleteResponse {
@@ -150,6 +153,7 @@ message DeleteResponse {
 message ListMemoriesRequest {
   string user_id = 1;
   bool include_deleted = 2;
+  string namespace = 3;  // 记忆作用域标签；空值按 "thinkback" 处理
 }
 
 message ManagedMemoryItem {
@@ -170,6 +174,7 @@ message ListMemoriesResponse {
 message GetMemoryRequest {
   string memory_id = 1;
   string user_id = 2;
+  string namespace = 3;  // 记忆作用域标签；空值按 "thinkback" 处理
 }
 
 message GetMemoryResponse {
@@ -184,6 +189,7 @@ message UpdateMemoryRequest {
   string memory_id = 4;
   string content = 5;
   optional MemoryType memory_type = 6;
+  string namespace = 7;  // 记忆作用域标签；空值按 "thinkback" 处理
 }
 
 message UpdateMemoryResponse {
@@ -201,6 +207,7 @@ message RebuildRequest {
   optional string history_version = 5;
   bool rebuild_l2 = 6;
   bool rebuild_l3 = 7;
+  string namespace = 8;  // 记忆作用域标签；空值按 "thinkback" 处理
 }
 
 message RebuildResponse {
