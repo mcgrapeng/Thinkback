@@ -106,14 +106,12 @@ omit = [
 # service.py（1500+ 行）全量变异留给 CI 夜间任务。
 source_paths = ["src"]
 only_mutate = [
-    "src/thinkback/api/auth.py",
     "src/thinkback/domain/keys.py",
     "src/thinkback/domain/summarization.py",
     "src/thinkback/memory/decay.py",
     "src/thinkback/memory/repositories/_l1_cache.py",
 ]
 pytest_add_cli_args_test_selection = [
-    "tests/unit/test_api_key_auth.py",
     "tests/unit/test_memory_decay.py",
     "tests/unit/test_memory_repositories.py",
     "tests/unit/test_repository_contract.py",

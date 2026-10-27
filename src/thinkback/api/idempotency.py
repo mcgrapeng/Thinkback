@@ -21,8 +21,6 @@ from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoin
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp
 
-from thinkback.api.auth import _parse_api_key, get_api_key
-
 CACHE_TTL = 24 * 3600  # 24h
 MAX_CACHE_SIZE = 10000
 
@@ -138,8 +136,8 @@ class IdempotencyMiddleware(BaseHTTPMiddleware):
         self.cache = _idempotency_cache
 
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
-        # 只处理 /v1/* 路径
-        if not request.url.path.startswith("/v1/"):
+        # 只处理业务记忆路径的写操作（内网免鉴权，/memory/* 为唯一业务面）
+        if not request.url.path.startswith("/memory/"):
             return await call_next(request)
 
         # 只处理写操作
@@ -233,9 +231,5 @@ class IdempotencyMiddleware(BaseHTTPMiddleware):
         解析不到（无 key / key 不存在）时用空串域：认证本身由 require_auth 负责，
         这里只需要保证「不同租户不共享缓存条目」。
         """
-        parsed = _parse_api_key(request.headers.get("authorization", ""))
-        if not parsed:
-            return ""
-        key_id, _ = parsed
-        record = get_api_key(key_id)
-        return record.tenant_id if record else ""
+        # 内网免鉴权：以客户端地址作为幂等隔离域（不再有租户/API key 概念）。
+        return request.client.host if request.client and request.client.host else ""
