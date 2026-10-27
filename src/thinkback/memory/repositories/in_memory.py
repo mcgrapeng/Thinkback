@@ -163,13 +163,15 @@ class InMemoryMemoryRepository(L1CacheMixin):
         *,
         limit: int | None = None,
         descending: bool = False,
+        include_pending: bool = False,
     ) -> list[JournalEntry]:
+        states = ("active", "pending_append") if include_pending else ("active",)
         rounds = [
             entry
             for entry in self.journal_by_round.values()
             if entry.user_id == user_id
             and entry.memory_scope_id == memory_scope_id
-            and entry.round_state == "active"
+            and entry.round_state in states
             and (session_id is None or entry.session_id == session_id)
         ]
         ordered = sorted(rounds, key=round_sort_key, reverse=descending)
@@ -177,11 +179,14 @@ class InMemoryMemoryRepository(L1CacheMixin):
             ordered = ordered[:limit]
         return ordered
 
-    def list_user_rounds(self, user_id: str) -> list[JournalEntry]:
+    def list_user_rounds(
+        self, user_id: str, *, include_pending: bool = False
+    ) -> list[JournalEntry]:
+        states = ("active", "pending_append") if include_pending else ("active",)
         rounds = [
             entry
             for entry in self.journal_by_round.values()
-            if entry.user_id == user_id and entry.round_state == "active"
+            if entry.user_id == user_id and entry.round_state in states
         ]
         return sorted(rounds, key=round_sort_key)
 

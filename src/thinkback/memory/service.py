@@ -587,14 +587,25 @@ L2 更新 (缓存失效)
                     source_refs=[{"session_id": request.session_id, "round_id": request.round_id}],
                     request_metadata=request.metadata,
                 )
-                entry.round_state = "active"
-                self.repository.mark_round_active(request.round_id)
-                append_pending_backend_writes = self._publish_append_round_locally(
-                    entry=entry,
-                    request=request,
-                    session_scope_id=session_scope_id,
-                    l3_scope_id=l3_scope_id,
+                current_round = self.repository.get_round(request.round_id)
+                round_deleted = (
+                    current_round is not None and current_round.round_state == "deleted_tombstone"
                 )
+                append_pending_backend_writes = []
+                if round_deleted:
+                    # 删除与本次写入竞争：轮次已被删除，不得改回 active，
+                    # 也不再发布 L1/L2（发布等于把已删内容放回上下文）。
+                    l3_events = [{"event": "SKIP", "reason": "source_ref_excluded"}]
+                    entry.round_state = "deleted_tombstone"
+                else:
+                    entry.round_state = "active"
+                    self.repository.mark_round_active(request.round_id)
+                    append_pending_backend_writes = self._publish_append_round_locally(
+                        entry=entry,
+                        request=request,
+                        session_scope_id=session_scope_id,
+                        l3_scope_id=l3_scope_id,
+                    )
         except Exception as exc:
             if l3_slot_reserved:
                 self._l3.release_write_slot()
@@ -2780,6 +2791,18 @@ L2 更新 (缓存失效)
                     )
                 affected.append(memory.memory_id)
         self.repository.clear_l1(request.user_id, session_scope_id, request.session_id)
+        # 删除屏障的来源集合：必须在 mark_rounds_deleted 之前取，且要带上
+        # pending_append（在飞抽取）的轮次 —— 否则删除返回后，在飞写入仍能
+        # 把这轮写回 ACTIVE。
+        deleted_round_refs = [
+            {"session_id": entry.session_id, "round_id": entry.round_id}
+            for entry in self.repository.list_rounds(
+                request.user_id,
+                session_scope_id,
+                request.session_id,
+                include_pending=True,
+            )
+        ]
         self.repository.mark_rounds_deleted(
             request.user_id,
             session_scope_id,
@@ -2790,6 +2813,7 @@ L2 更新 (缓存失效)
             memory_scope_id=l3_scope_id,
             session_id=request.session_id,
             operation_id=request.operation_id,
+            source_refs=deleted_round_refs,
         )
         self._add_deleted_source_ref_tombstones_for_history(
             user_id=request.user_id,
@@ -2921,6 +2945,7 @@ L2 更新 (缓存失效)
         user_id: str,
         memory_scope_id: str,
         operation_id: str,
+        source_refs: list[dict[str, str]] | None = None,
     ) -> datetime:
         existing_cutoff = self._delete_tombstone_cutoff(
             user_id=user_id,
@@ -2937,7 +2962,7 @@ L2 更新 (缓存失效)
             backend_memory_id=f"delete-all:{digest}",
             user_id=user_id,
             memory_scope_id=memory_scope_id,
-            source_refs=[],
+            source_refs=list(source_refs or []),
             memory_text="delete_all tombstone",
             source_type=SourceType.SYSTEM_MIGRATION.value,
             data_classification=DataClassification.RESTRICTED.value,
@@ -2958,6 +2983,7 @@ L2 更新 (缓存失效)
         memory_scope_id: str,
         session_id: str,
         operation_id: str,
+        source_refs: list[dict[str, str]] | None = None,
     ) -> datetime:
         existing_cutoff = self._delete_tombstone_cutoff(
             user_id=user_id,
@@ -2976,7 +3002,7 @@ L2 更新 (缓存失效)
             backend_memory_id=f"delete-session:{digest}",
             user_id=user_id,
             memory_scope_id=memory_scope_id,
-            source_refs=[],
+            source_refs=list(source_refs or []),
             memory_text="delete_session tombstone",
             source_type=SourceType.SYSTEM_MIGRATION.value,
             data_classification=DataClassification.RESTRICTED.value,
@@ -3037,6 +3063,10 @@ L2 更新 (缓存失效)
             user_id=request.user_id,
             memory_scope_id=l3_scope_id,
             operation_id=request.operation_id,
+            source_refs=[
+                {"session_id": entry.session_id, "round_id": entry.round_id}
+                for entry in self.repository.list_user_rounds(request.user_id, include_pending=True)
+            ],
         )
         for summary_scope_id in self._user_summary_scope_ids(request.user_id):
             self.repository.clear_l1(request.user_id, summary_scope_id)

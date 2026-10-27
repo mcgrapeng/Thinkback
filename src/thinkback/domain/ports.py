@@ -72,9 +72,20 @@ class MemoryRepository(Protocol):
         *,
         limit: int | None = None,
         descending: bool = False,
-    ) -> list[JournalEntry]: ...
+        include_pending: bool = False,
+    ) -> list[JournalEntry]:
+        """列出轮次。``include_pending=True`` 时同时返回 ``pending_append`` 的轮次。
 
-    def list_user_rounds(self, user_id: str) -> list[JournalEntry]: ...
+        删除屏障要用到在飞轮次（sync 模式下它们是 ``pending_append``，
+        默认的 active 过滤会漏掉），所以这个维度必须可显式打开。
+        """
+        ...
+
+    def list_user_rounds(
+        self, user_id: str, *, include_pending: bool = False
+    ) -> list[JournalEntry]:
+        """列出该用户的全部轮次；``include_pending`` 语义同 :meth:`list_rounds`。"""
+        ...
 
     def mark_rounds_deleted(
         self, user_id: str, memory_scope_id: str, session_id: str | None = None

@@ -188,6 +188,33 @@ def test_list_user_rounds_spans_sessions(repository) -> None:  # type: ignore[no
     assert repository.list_user_rounds("user-missing") == []
 
 
+def test_list_rounds_can_include_pending(repository) -> None:  # type: ignore[no-untyped-def]
+    """删除屏障要能看到在飞轮次：sync 模式下它们是 pending_append。"""
+    repository.save_round(make_append(round_id="r-pending"))
+    repository.mark_round_pending_append("r-pending")
+
+    assert repository.list_rounds("user-1", "session-1") == []
+    pending = repository.list_rounds("user-1", "session-1", include_pending=True)
+    assert [entry.round_id for entry in pending] == ["r-pending"]
+    user_pending = repository.list_user_rounds("user-1", include_pending=True)
+    assert [entry.round_id for entry in user_pending] == ["r-pending"]
+
+
+def test_excluded_source_refs_include_tombstoned_rounds(repository) -> None:  # type: ignore[no-untyped-def]
+    """墓碑行携带来源轮次后，排除集必须包含它们（删除屏障的来源集合）。"""
+    tombstone = repository.add_memory_index(
+        backend_memory_id="delete-session:tombstone-1",
+        user_id="user-1",
+        memory_scope_id="thinkback",
+        source_refs=[{"session_id": "s1", "round_id": "r1"}],
+        memory_text="delete_session tombstone",
+    )
+    repository.mark_memory_deleted(tombstone.memory_id)
+
+    assert ("s1", "r1") in repository.excluded_source_refs("user-1", "thinkback")
+    assert ("s1", "r1") in repository.excluded_source_refs_for_user("user-1")
+
+
 def test_mark_round_states_round_trip(repository) -> None:  # type: ignore[no-untyped-def]
     repository.save_round(make_append(round_id="r1"))
     assert repository.mark_round_deleted("r1") is True
