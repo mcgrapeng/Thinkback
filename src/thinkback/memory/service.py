@@ -314,6 +314,10 @@ class MemoryService:
                 executor=self._l3.executor,
                 refresh_interval_rounds=l2_refresh_interval_rounds,
                 on_refreshed=lambda _u, _s: None,  # V2.1：cache 已删，no-op
+                # L2 与 L3 共用同一个队列预算：否则新会话突发会绕过
+                # max_pending_tasks 直接压到 LLM 上。
+                reserve_capacity=self._l3.reserve_write_slot,
+                release_capacity=self._l3.release_write_slot,
             )
             if l2_summary_composer is not None
             else None
