@@ -18,6 +18,7 @@ from typing import Any, Literal
 
 from loguru import logger
 
+from thinkback.domain.classification import assert_storable, resolve_classification
 from thinkback.domain.errors import TaskLockExhaustedError, TaskStaleWriteError
 from thinkback.domain.ports import HistorySource, MemoryBackend, MemoryRepository
 from thinkback.domain.recall_policy import dedupe_and_clip
@@ -427,6 +428,9 @@ L2 更新 (缓存失效)
 """
         session_scope_id = self._session_scope_id(request)
         l3_scope_id = self._long_term_scope_id(request)
+        # 分类准入在最前面：SENSITIVE / RESTRICTED 连 L1 journal 都不落，
+        # 也不会进入后续 LLM / embedding / Mem0 调用。
+        assert_storable(resolve_classification(request.metadata))
         LOGGER_MEMORY.started(
             "append",
             user_id=request.user_id,
@@ -3392,15 +3396,24 @@ L2 更新 (缓存失效)
         )
         add_log.info("memory l3 add started")
         l3_metadata = self._l3_metadata(source_refs, request_metadata)
+        # 只有用户消息能成为「用户事实」的来源。assistant 的回答留在 L1 原文里，
+        # 但不能进 mem0 抽取输入，也不能拿去做 source_text 交叉校验 ——
+        # 否则助手的一次幻觉会被当成事实来源，长期自我强化。
+        trusted_messages = [
+            message for message in messages if message.get("role") == MessageRole.USER.value
+        ]
+        if not trusted_messages:
+            add_log.info("memory l3 add skipped: no trusted user source")
+            return []
         source_text = " ".join(
             message.get("content", "").strip()
-            for message in messages
+            for message in trusted_messages
             if message.get("content", "").strip()
         )
         if source_text:
             l3_metadata["source_text"] = source_text
         events = self.backend.add(
-            messages,
+            trusted_messages,
             user_id=user_id,
             memory_scope_id=memory_scope_id,
             metadata=l3_metadata,
