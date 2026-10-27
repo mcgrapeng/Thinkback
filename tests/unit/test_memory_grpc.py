@@ -283,9 +283,7 @@ class _ExplodingService:
         ("GetL3BackgroundStatus", pb.L3BackgroundStatusRequest()),
     ],
 )
-def test_servicer_error_paths_abort_then_unreachable(
-    rpc_call: str, pb_request: object
-) -> None:
+def test_servicer_error_paths_abort_then_unreachable(rpc_call: str, pb_request: object) -> None:
     """业务异常必须先经 _handle_error 映射 abort，再走 unreachable 兜底。"""
     from thinkback.rpc.servicer import MemoryServicer
 
