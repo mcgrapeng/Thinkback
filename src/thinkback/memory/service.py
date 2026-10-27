@@ -41,6 +41,7 @@ from thinkback.domain.slots import (
     p0_canonical_memories_from_source,
     p0_canonical_memory_for_source_slot,
     query_conflict_slot,
+    query_conflict_slots,
     query_is_broad_memory_request,
     round_order,
     should_extract_to_l3,
@@ -1296,10 +1297,12 @@ L2 更新 (缓存失效)
         for entry in self.repository.get_l1(request.user_id, session_scope_id, request.session_id):
             if (entry.session_id, entry.round_id) in excluded_refs:
                 continue
-            content = " ".join(
-                message["content"]
+            # 保留说话人：助手的话不能和用户的话混成一段，否则召回后无法区分
+            # 「用户说过」与「助手说过」。
+            content = "\n".join(
+                f"{message.get('role', 'user')}: {message.get('content', '')}"
                 for message in entry.messages
-                if not self._text_is_restricted_or_unsafe(message["content"])
+                if not self._text_is_restricted_or_unsafe(message.get("content", ""))
             )
             items.append(MemoryItem(layer="L1", content=content, source=entry.round_id))
 
@@ -1328,64 +1331,63 @@ L2 更新 (缓存失效)
         active_memory_by_backend_id = {
             memory.backend_memory_id: memory for memory in active_memories
         }
-        query_slot = self._query_conflict_slot(request.query)
-        if query_slot:
+        query_slots = query_conflict_slots(request.query)
+        primary_slot = query_slots[0] if query_slots else None
+        if primary_slot is not None:
             backfilled = self._backfill_matching_slot_memories(
                 items,
                 query=request.query,
                 active_memories=active_memories,
             )
             recalled_entries.extend(backfilled)
-        if not self._should_skip_backend_search(query_slot, items):
-            # N-7: mem0 网络/服务抖动时 backend.search 可能抛 RuntimeError
-            # （由 Mem0LibraryMemoryBackend._call 统一包装）。V1 设计要求
-            # 降级为只返回 L1/L2，不允许直接 502 让上游雪崩。这里只识别
-            # RuntimeError，其他异常（如 KeyboardInterrupt）继续向上抛。
-            try:
-                backend_items = self.backend.search(
-                    request.query,
-                    user_id=request.user_id,
-                    memory_scope_id=l3_scope_id,
-                    limit=request.l3_limit,
-                    threshold=request.l3_score_threshold,
+        # 语义检索始终执行：命中固定槽位只是「可能问到哪条事实」的提示，
+        # 不能当成跳过检索的理由 —— 复合提问（位置 + 饮食）会因此丢掉一半答案。
+        try:
+            backend_items = self.backend.search(
+                request.query,
+                user_id=request.user_id,
+                memory_scope_id=l3_scope_id,
+                limit=request.l3_limit,
+                threshold=request.l3_score_threshold,
+            )
+        except RuntimeError as exc:
+            recall_log.bind(
+                error_type=type(exc).__name__,
+                error_message=str(exc),
+            ).warning("memory recall degraded: l3 backend unreachable")
+            degradation_reasons.append("l3_backend_unreachable")
+            backend_items = []
+        for item in backend_items:
+            memory_id = str(item.get("id", ""))
+            indexed_memory = active_memory_by_backend_id.get(memory_id)
+            if indexed_memory is None:
+                continue
+            # P2#6 双时态兜底：失效时刻已定的记忆不再进入召回
+            # （状态过滤之外的第二道闸，覆盖多副本竞争/遗留行）。
+            if getattr(indexed_memory, "invalid_at", None) is not None:
+                continue
+            # 单槽位精确提问：只保留该槽位的事实（问猫名不该召回住址）。
+            # 复合提问（位置 + 饮食）命中多个槽位时放开，否则会丢掉一半答案。
+            if (
+                primary_slot is not None
+                and len(query_slots) == 1
+                and self._memory_conflict_slot(indexed_memory.memory_text) != primary_slot
+            ):
+                continue
+            items.append(
+                MemoryItem(
+                    layer="L3",
+                    content=indexed_memory.memory_text,
+                    source="mem0",
+                    memory_id=indexed_memory.memory_id,
+                    score=item.get("score"),
+                    metadata=self._recall_l3_metadata(item.get("metadata")),
+                    recall_count=getattr(indexed_memory, "recall_count", 0) or 0,
+                    last_recalled_at=getattr(indexed_memory, "last_recalled_at", None),
+                    valid_at=getattr(indexed_memory, "valid_at", None),
                 )
-            except RuntimeError as exc:
-                recall_log.bind(
-                    error_type=type(exc).__name__,
-                    error_message=str(exc),
-                ).warning("memory recall degraded: l3 backend unreachable")
-                degradation_reasons.append("l3_backend_unreachable")
-                backend_items = []
-            for item in backend_items:
-                memory_id = str(item.get("id", ""))
-                indexed_memory = active_memory_by_backend_id.get(memory_id)
-                if indexed_memory is None:
-                    continue
-                # P2#6 双时态兜底：失效时刻已定的记忆不再进入召回
-                # （状态过滤之外的第二道闸，覆盖多副本竞争/遗留行）。
-                if getattr(indexed_memory, "invalid_at", None) is not None:
-                    continue
-                if not self._memory_context_allowed(indexed_memory, request.query):
-                    continue
-                if (
-                    query_slot
-                    and self._memory_conflict_slot(indexed_memory.memory_text) != query_slot
-                ):
-                    continue
-                items.append(
-                    MemoryItem(
-                        layer="L3",
-                        content=indexed_memory.memory_text,
-                        source="mem0",
-                        memory_id=indexed_memory.memory_id,
-                        score=item.get("score"),
-                        metadata=self._recall_l3_metadata(item.get("metadata")),
-                        recall_count=getattr(indexed_memory, "recall_count", 0) or 0,
-                        last_recalled_at=getattr(indexed_memory, "last_recalled_at", None),
-                        valid_at=getattr(indexed_memory, "valid_at", None),
-                    )
-                )
-                recalled_entries.append(indexed_memory)
+            )
+            recalled_entries.append(indexed_memory)
 
         clipped_items = self._dedupe_and_clip(items, request.token_budget)
         # P2#7：被召回即强化（艾宾浩斯信号，debounce 限流写放大）。
@@ -3267,31 +3269,6 @@ L2 更新 (缓存失效)
         return [newest]
 
     @staticmethod
-    def _should_skip_backend_search(query_slot: str | None, items: list[MemoryItem]) -> bool:
-        """是否跳过 mem0 backend.search？
-
-        真值表（query_slot 是否命中 P0 槽位，items 中是否已含 L3 命中）：
-
-        +----------+-----------+--------------------------------+
-        |query_slot | has L3?   | 决策                            |
-        +==========+==========+================================+
-        | True     | True      | skip（slot 匹配已精确收敛）     |
-        +----------+-----------+--------------------------------+
-        | True     | False     | skip（slot 已知无业务匹配）     |
-        +----------+-----------+--------------------------------+
-        | False    | True      | search（语义召回继续补全）     |
-        +----------+-----------+--------------------------------+
-        | False    | False     | search（必须靠语义召回）       |
-        +----------+-----------+--------------------------------+
-
-        关键设计：query_slot 命中时**故意不**回退到 backend.search —— 已知
-        slot 的 active business index 没匹配意味着 slot 上没东西，再去 mem0
-        走语义检索反而引入"同主题无关事实"污染（参见
-        test_recall_does_not_search_backend_when_known_slot_has_no_active_business_index_match）。
-        """
-        _ = items  # 当前决策只依赖 query_slot；items 参数为可读性保留
-        return query_slot is not None
-
     @staticmethod
     def _query_conflict_slot(query: str) -> str | None:
         """查询侧槽位识别（引擎在 ``domain.slots``）。"""

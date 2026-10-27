@@ -9,26 +9,30 @@ from __future__ import annotations
 import re
 
 
-def query_conflict_slot(query: str) -> str | None:
-    """识别 query 命中的 P0 冲突槽位；未命中返回 None。
+def query_conflict_slots(query: str) -> list[str]:
+    """识别 query 命中的所有冲突槽位（按判定优先级排序）。
 
-    槽位语义见 `Thinkback记忆三层架构` §0：昵称、宠物名、地点、生日、
-    工作状态、沟通偏好、饮食偏好、睡眠提醒等高频事实。
+    复合提问（"根据我的位置和饮食偏好推荐晚餐"）会命中多个槽位。调用方
+    据此区分「单槽位精确提问」与「多槽位复合提问」：前者只保留该槽位的事实
+    以保精度，后者必须放开，否则会丢掉另一半答案。
     """
     normalized = query.lower()
     compact = normalized.strip(" ?？。,.，")
+    slots: list[str] = []
+
     asks_pet_name = any(
         marker in normalized for marker in ("叫什么", "名字", "叫啥", "name", "called", "named")
     )
     if asks_pet_name:
         if any(marker in normalized for marker in ("猫", "cat")):
-            return "pet_name:cat"
+            slots.append("pet_name:cat")
         if any(marker in normalized for marker in ("狗", "dog")):
-            return "pet_name:dog"
+            slots.append("pet_name:dog")
         if any(marker in normalized for marker in ("鸟", "鹦鹉", "bird", "parrot")):
-            return "pet_name:bird"
+            slots.append("pet_name:bird")
         if any(marker in normalized for marker in ("兔", "兔子", "rabbit", "bunny")):
-            return "pet_name:rabbit"
+            slots.append("pet_name:rabbit")
+
     # M-2 修复：要求第一人称自指（"我"/"我的"/"me"/"my"/"i"）共现。
     # "system nickname policy" / "how to address the user" 等元问题不应触发，
     # 因为它们没有自指主语（"user"/"them" 在元场景里是宾语/讨论对象）。
@@ -48,7 +52,8 @@ def query_conflict_slot(query: str) -> str | None:
         is not None
     )
     if asks_nickname:
-        return "preferred_nickname"
+        slots.append("preferred_nickname")
+
     asks_location = (
         any(marker in normalized for marker in ("住哪", "住在", "住哪里", "搬到", "搬去"))
         or "location" in normalized
@@ -57,22 +62,23 @@ def query_conflict_slot(query: str) -> str | None:
         or re.search(r"(?:现在|目前|current).{0,8}城市", normalized) is not None
     )
     if asks_location:
-        return "current_location"
+        slots.append("current_location")
+
     asks_work_status = (
         "工作状态" in normalized
         or "work status" in normalized
         or compact in {"换工作", "job status"}
         or re.search(r"(?:换工作|工作).{0,8}(?:状态|进展|情况)", normalized) is not None
         or re.search(
-            r"\b(?:current|what|what's|whats|how).{0,20}(?:job|offer|work).{0,12}status\b",
+            r"\b(?:current|what|what's|how).{0,20}(?:job|offer|work).{0,12}status\b",
             normalized,
         )
         is not None
     )
     if asks_work_status:
-        return "current_work_status"
-    # M-3 修复：要求第一人称自指（"我"/"我的"/"me"/"my"/"i"）共现，
-    # 避免 "how to communicate" / "怎么给建议" 等元问题误触发。
+        slots.append("current_work_status")
+
+    # M-3 修复：要求第一人称自指，避免 "how to communicate" 之类元问题误触发。
     _first_person_for_comm = (
         re.search(r"(?:我|我的|我们|\bme\b|\bmy\b|\bmyself\b|\bi\s|\bi\b)", normalized) is not None
     )
@@ -89,7 +95,8 @@ def query_conflict_slot(query: str) -> str | None:
         is not None
     )
     if asks_communication_preference:
-        return "communication_preference"
+        slots.append("communication_preference")
+
     asks_birthday = (
         "生日" in normalized
         and any(marker in normalized for marker in ("哪天", "什么时候", "几号", "日期", "是"))
@@ -102,7 +109,8 @@ def query_conflict_slot(query: str) -> str | None:
         is not None
     )
     if asks_birthday:
-        return "birthday"
+        slots.append("birthday")
+
     if any(
         marker in normalized
         for marker in (
@@ -115,17 +123,34 @@ def query_conflict_slot(query: str) -> str | None:
             "beverage preference",
         )
     ):
-        return "favorite:drink"
+        slots.append("favorite:drink")
     if any(
         marker in normalized for marker in ("喜欢吃", "食物", "favorite food", "food preference")
     ):
-        return "favorite:food"
+        slots.append("favorite:food")
     if any(
         marker in normalized
-        for marker in ("提醒睡觉", "催睡觉", "睡眠提醒", "睡觉偏好", "sleep reminder")
+        for marker in (
+            "提醒睡觉",
+            "催睡觉",
+            "睡眠提醒",
+            "睡觉偏好",
+            "sleep reminder",
+        )
     ):
-        return "sleep_reminder_preference"
-    return None
+        slots.append("sleep_reminder_preference")
+    return slots
+
+
+def query_conflict_slot(query: str) -> str | None:
+    """识别 query 命中的 P0 冲突槽位；未命中返回 None。
+
+    槽位语义见 `Thinkback记忆三层架构` §0：昵称、宠物名、地点、生日、
+    工作状态、沟通偏好、饮食偏好、睡眠提醒等高频事实。复合提问请用
+    :func:`query_conflict_slots`。
+    """
+    slots = query_conflict_slots(query)
+    return slots[0] if slots else None
 
 
 def memory_context_allowed(memory: object, query: str) -> bool:

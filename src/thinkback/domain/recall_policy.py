@@ -50,6 +50,13 @@ if TYPE_CHECKING:
 
 LAYER_PRIORITY = {"L3": 3, "L2": 2, "L1": 1}
 
+# 分层 token 预算：L1（当前对话）拿保底份额，摘要次之，长期事实占大头。
+# 单一层时不拆分（整份预算给这一层），多层时按份额切分并把没用完的额度
+# 重新分配给还需要的层。
+LAYER_BUDGET_SHARES = {"L1": 0.3, "L2": 0.2, "L3": 0.5}
+# 输出顺序：层优先级（L3 > L2 > L1），层内保持各自顺序。
+_LAYER_OUTPUT_ORDER = ("L3", "L2", "L1")
+
 # ponytail: half_life=72h is conservative; tune if eval shows over-penalization of recent items.
 _STRENGTH_HALF_LIFE_HOURS = 72.0
 
@@ -187,29 +194,96 @@ def dedupe_and_clip(
                     deduped[key] = item
 
     deduped = _resolve_slot_conflicts(deduped, now)
+    ordered = _order_items(list(deduped.values()), now)
+    return _clip_by_layer(ordered, token_budget)
 
-    clipped: list[MemoryItem] = []
-    used = 0
-    ordered_items = sorted(
-        deduped.values(),
-        key=lambda item: (
-            -LAYER_PRIORITY.get(item.layer, 0),
-            -_quality(item),
-            -_strength(item, now),
-        ),
+
+def _order_items(items: list[MemoryItem], now: datetime | None = None) -> list[MemoryItem]:
+    """层内排序：L3 用引擎相关度（score）主导，摘要与对话保持传入顺序。
+
+    L3 的事实排序交给引擎（mem0 2.2.x 的 semantic + BM25 + entity 融合分），
+    Thinkback 只在同分时用内容质量与强度做仲裁，不再自己重排事实。
+    L1（对话轮次）按传入的时间顺序输出，不按内容质量重排。
+    """
+    l3 = sorted(
+        (item for item in items if item.layer == "L3"),
+        key=lambda item: (-(item.score or 0.0), -_quality(item), -_strength(item, now)),
     )
-    for item in ordered_items:
-        normalized = item.content.strip()
-        cost = estimate_tokens(normalized)
-        if used + cost > token_budget:
-            # 停止裁剪而不是跳过这一条继续试后面的：排序键已经定好优先级，
-            # 预算裁剪应当取「排名前缀」—— 跳过后面的便宜条目会得到一个
-            # 「高质量的被砍掉、低质量的挤进来」的集合，注入的上下文与
-            # 排序结论自相矛盾。宁可少注入，也不要注入错的。
+    by_layer: dict[str, list[MemoryItem]] = {}
+    for item in items:
+        if item.layer != "L3":
+            by_layer.setdefault(item.layer, []).append(item)
+    ordered = list(l3)
+    for layer in ("L2", "L1"):
+        ordered.extend(by_layer.get(layer, []))
+    return ordered
+
+
+def _allocate_by_layer(needs: dict[str, int], budget: int) -> dict[str, int]:
+    """按份额切预算，没用完的额度按剩余需求重新分配。"""
+    allocation = dict.fromkeys(needs, 0)
+    remaining = budget
+    for layer, share in LAYER_BUDGET_SHARES.items():
+        if layer not in needs:
+            continue
+        want = min(needs[layer], int(budget * share))
+        allocation[layer] = want
+        remaining -= want
+    for _ in range(len(needs) + 1):
+        pending = {
+            layer: needs[layer] - allocation[layer]
+            for layer in needs
+            if needs[layer] > allocation[layer]
+        }
+        if remaining <= 0 or not pending:
             break
-        used += cost
-        clipped.append(item)
-    return clipped
+        total_pending = sum(pending.values())
+        for layer, gap in pending.items():
+            extra = min(gap, int(remaining * gap / total_pending))
+            allocation[layer] += extra
+            remaining -= extra
+    return allocation
+
+
+def _clip_by_layer(ordered: list[MemoryItem], token_budget: int) -> list[MemoryItem]:
+    """按层切预算：L1 保底、L3 为主，层内取排名前缀。
+
+    L1（当前对话）从最近的轮次开始挑 —— 预算紧时保留最新对话，而不是最旧。
+    """
+    groups: dict[str, list[MemoryItem]] = {}
+    for item in ordered:
+        groups.setdefault(item.layer, []).append(item)
+    needs = {
+        layer: sum(estimate_tokens(item.content.strip()) for item in group)
+        for layer, group in groups.items()
+    }
+    if len(groups) <= 1:
+        limits = dict.fromkeys(groups, token_budget)
+    else:
+        limits = _allocate_by_layer(needs, token_budget)
+
+    kept: list[MemoryItem] = []
+    for layer in _LAYER_OUTPUT_ORDER:
+        group = groups.get(layer)
+        if not group:
+            continue
+        limit = limits.get(layer, 0)
+        candidates = list(reversed(group)) if layer == "L1" else group
+        selected: list[MemoryItem] = []
+        used = 0
+        for item in candidates:
+            cost = estimate_tokens(item.content.strip())
+            if used + cost > limit:
+                # 跳过装不下的这一条，继续看后面装得下的：一条超长内容
+                # 不该把整层清空（否则上下文直接空包）。引擎已按相关度排好序，
+                # 后面的条目同样相关，只是更短。
+                continue
+            used += cost
+            selected.append(item)
+        if layer == "L1":
+            selected.reverse()  # 输出仍按时间顺序
+        kept.extend(selected)
+    return kept
 
 
 def _resolve_slot_conflicts(
