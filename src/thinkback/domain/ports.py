@@ -279,11 +279,15 @@ class MemoryBackend(Protocol):
         memory_scope_id: str,
         metadata: dict[str, Any] | None = None,
         infer: bool = True,
+        expiration_date: str | None = None,
     ) -> list[dict[str, Any]]:
         """写入若干条消息并返回抽取出的事件摘要列表。
 
         ``infer=False`` 跳过 LLM 事实抽取：raw message 落地为一条记忆，
         适用于 LLM endpoint 不可用 / 故意退化的场景。
+
+        ``expiration_date``（YYYY-MM-DD）交给引擎做 TTL：过期记忆由 Mem0 在
+        检索时隐藏（show_expired=False），Thinkback 不自己实现过期。
 
         返回列表的元素通常形如 ``{"id": ..., "memory": ..., "event": "ADD|UPDATE"}``。
         """

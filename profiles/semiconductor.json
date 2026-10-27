@@ -1,0 +1,75 @@
+{
+  "namespace": "semiconductor",
+  "types": {
+    "profile": {
+      "extractor": "profile",
+      "source_roles": ["user"],
+      "conflict": "overwrite",
+      "retention": "forever",
+      "classification": "personal",
+      "description": "用户画像：角色、负责的产线与工艺段"
+    },
+    "preference": {
+      "extractor": "mem0",
+      "source_roles": ["user"],
+      "conflict": "overwrite",
+      "retention": "forever",
+      "classification": "personal",
+      "description": "偏好与习惯（如常用 EDA 工具、报表口径）"
+    },
+    "process_preference": {
+      "extractor": "mem0",
+      "source_roles": ["user"],
+      "conflict": "overwrite",
+      "retention": "forever",
+      "classification": "personal",
+      "entity_vocabulary": ["3nm", "5nm", "7nm", "14nm", "28nm", "FinFET", "GAA", "CMP", "光刻", "刻蚀", "薄膜沉积", "量测"],
+      "description": "工艺与设备相关的事实：制程节点偏好、常用机台、良率敏感点"
+    },
+    "equipment_context": {
+      "extractor": "mem0",
+      "source_roles": ["user", "tool"],
+      "conflict": "append",
+      "retention": "ttl",
+      "ttl_days": 180,
+      "classification": "personal",
+      "entity_vocabulary": ["ASML", "AMAT", "TEL", "量测设备", "缺陷密度", "关键尺寸", "套刻精度"],
+      "description": "设备与量测上下文，时效性强"
+    },
+    "event": {
+      "extractor": "mem0",
+      "source_roles": ["user", "tool"],
+      "conflict": "append",
+      "retention": "forever",
+      "classification": "personal",
+      "description": "已发生的事件：流片、异常、验收、交付节点"
+    },
+    "state": {
+      "extractor": "mem0",
+      "source_roles": ["user", "tool"],
+      "conflict": "overwrite",
+      "retention": "ttl",
+      "ttl_days": 90,
+      "classification": "personal",
+      "description": "会过期的状态：当前批次良率、在手工单"
+    },
+    "commitment": {
+      "extractor": "mem0",
+      "source_roles": ["user", "tool"],
+      "conflict": "append",
+      "retention": "ttl",
+      "ttl_days": 30,
+      "classification": "personal",
+      "description": "承诺与待办：什么时候回复、什么时候复测"
+    },
+    "procedure": {
+      "extractor": "none",
+      "source_roles": ["admin"],
+      "conflict": "none",
+      "retention": "forever",
+      "classification": "restricted",
+      "review_required": true,
+      "description": "程序性规则：只允许管理员写入且需审批，召回时按提示词装配"
+    }
+  }
+}

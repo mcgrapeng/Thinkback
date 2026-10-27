@@ -9,12 +9,20 @@
 ``shutdown_l3_executor`` / ``repository.close()`` 释放线程资源。
 """
 
+import json
 import threading
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 from typing import Any
 
 from loguru import logger
 
+from thinkback.domain.memory_types import (
+    MemoryTypeRegistry,
+    default_registry,
+    load_registry,
+)
 from thinkback.domain.summarization import SummaryComposer
 from thinkback.infra.config import Settings, settings
 from thinkback.infra.llm import OpenAICompatibleLLMClient
@@ -132,6 +140,30 @@ def get_memory_backend(config: Settings | None = None) -> MemoryBackend:
     return backend
 
 
+def build_registry_provider(
+    config: Settings | None = None,
+) -> Callable[[str], MemoryTypeRegistry]:
+    """按 namespace 加载记忆类型注册表。
+
+    profile 目录约定：``<dir>/<namespace>.json``；文件缺失或解析失败时回落到
+    内置默认注册表（当前行为），不因配置缺失而拒绝服务启动。
+    """
+    current_settings = config or settings
+    profile_dir = Path(current_settings.memory_type_profile_dir)
+
+    def provider(namespace: str) -> MemoryTypeRegistry:
+        try:
+            return load_registry(profile_dir, namespace)
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            logger.bind(namespace=namespace, profile_dir=str(profile_dir)).warning(
+                "memory type profile load failed, using default registry"
+            )
+            _ = exc
+            return default_registry()
+
+    return provider
+
+
 def get_memory_service() -> MemoryService:
     """懒加载 ``MemoryService`` 单例。
 
@@ -160,6 +192,7 @@ def get_memory_service() -> MemoryService:
                     repository=repository,
                     backend=backend,
                     mem0_infer_facts=settings.memory_infer_facts,
+                    registry_provider=build_registry_provider(settings),
                     l3_write_mode=settings.memory_l3_write_mode,
                     l3_executor_workers=settings.memory_l3_executor_workers,
                     l3_max_pending_tasks=settings.memory_l3_max_pending_tasks,

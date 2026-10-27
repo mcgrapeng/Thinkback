@@ -1,6 +1,7 @@
 import time
 from concurrent.futures import Future
 from contextlib import suppress
+from datetime import date
 from threading import Barrier, BrokenBarrierError, Event, Lock, Thread
 from typing import Any
 
@@ -8214,7 +8215,16 @@ def test_assistant_assertion_does_not_become_user_fact() -> None:
             super().__init__()
             self.received: list[list[dict[str, str]]] = []
 
-        def add(self, messages, *, user_id, memory_scope_id, metadata=None, infer=True):  # type: ignore[no-untyped-def]
+        def add(
+            self,
+            messages,
+            *,
+            user_id,
+            memory_scope_id,
+            metadata=None,
+            infer=True,
+            expiration_date=None,
+        ):  # type: ignore[no-untyped-def]
             self.received.append(messages)
             return super().add(
                 messages,
@@ -8222,6 +8232,7 @@ def test_assistant_assertion_does_not_become_user_fact() -> None:
                 memory_scope_id=memory_scope_id,
                 metadata=metadata,
                 infer=infer,
+                expiration_date=expiration_date,
             )
 
     repository = InMemoryMemoryRepository()
@@ -8327,7 +8338,9 @@ class _CountingSearchBackend(FakeMemoryBackend):
         self.search_calls = 0
         self.fixed_memory = fixed_memory
 
-    def add(self, messages, *, user_id, memory_scope_id, metadata=None, infer=True):  # type: ignore[no-untyped-def]
+    def add(
+        self, messages, *, user_id, memory_scope_id, metadata=None, infer=True, expiration_date=None
+    ):  # type: ignore[no-untyped-def]
         if self.fixed_memory is None:
             return super().add(
                 messages,
@@ -8335,6 +8348,7 @@ class _CountingSearchBackend(FakeMemoryBackend):
                 memory_scope_id=memory_scope_id,
                 metadata=metadata,
                 infer=infer,
+                expiration_date=expiration_date,
             )
         memory_id = "fixed-fact-1"
         self.memories[memory_id] = {
@@ -8452,3 +8466,151 @@ def test_recall_l1_preserves_speaker_roles() -> None:
     assert l1_items
     assert "user:" in l1_items[0].content
     assert "assistant:" in l1_items[0].content
+
+
+def test_same_user_two_namespaces_do_not_mix_memories() -> None:
+    """同一 user 在不同 namespace 下的长期记忆互不可见。"""
+    repository = InMemoryMemoryRepository()
+    backend = FakeMemoryBackend()
+    service = MemoryService(repository=repository, backend=backend, l3_write_mode="sync")
+
+    def append_with(round_id: str, content: str, namespace: str) -> None:
+        base = make_append(round_id=round_id, content=content)
+        service.append(base.model_copy(update={"namespace": namespace}))
+
+    append_with("round-semi", "我负责 3nm 工艺的良率提升", "semiconductor")
+    append_with("round-hr", "我负责年度绩效评估", "hr")
+
+    semi = repository.list_memories("user-1", "semiconductor")
+    assert [m.memory_text for m in semi] == ["我负责 3nm 工艺的良率提升"]
+
+    listed = service.list_memory_items(user_id="user-1", namespace="semiconductor")
+    assert [item.content for item in listed.items] == ["我负责 3nm 工艺的良率提升"]
+
+    # 另一个 namespace 只能看到自己的记忆
+    hr = service.list_memory_items(user_id="user-1", namespace="hr")
+    assert [item.content for item in hr.items] == ["我负责年度绩效评估"]
+
+
+def test_invalid_namespace_is_rejected() -> None:
+    """namespace 含分隔符或超长必须明确拒绝，不静默归一化。"""
+    from pydantic import ValidationError
+
+    payload = make_append(round_id="r-bad-ns").model_dump()
+    with pytest.raises(ValidationError):
+        AppendMemoryRequest(**{**payload, "namespace": "a:b"})
+    with pytest.raises(ValidationError):
+        AppendMemoryRequest(**{**payload, "namespace": "x" * 65})
+
+
+def test_namespace_defaults_to_thinkback() -> None:
+    """默认 namespace 保持原行为，不影响既有调用方。"""
+    request = make_append(round_id="r-default-ns")
+    assert request.namespace == "thinkback"
+
+
+class _CapturingAddBackend(FakeMemoryBackend):
+    """记录 add 调用参数（含 expiration_date）。"""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.add_calls: list[dict[str, Any]] = []
+
+    def add(  # type: ignore[no-untyped-def]
+        self,
+        messages,
+        *,
+        user_id,
+        memory_scope_id,
+        metadata=None,
+        infer=True,
+        expiration_date=None,
+    ):
+        self.add_calls.append(
+            {
+                "messages": messages,
+                "metadata": dict(metadata or {}),
+                "expiration_date": expiration_date,
+            }
+        )
+        return super().add(
+            messages,
+            user_id=user_id,
+            memory_scope_id=memory_scope_id,
+            metadata=metadata,
+            infer=infer,
+            expiration_date=expiration_date,
+        )
+
+
+def test_unregistered_memory_type_is_rejected() -> None:
+    """未注册的类型明确报错，不静默写成别的类型。"""
+    service = MemoryService(
+        repository=InMemoryMemoryRepository(), backend=FakeMemoryBackend(), l3_write_mode="sync"
+    )
+
+    with pytest.raises(ValueError, match="not registered"):
+        service.append(make_append(round_id="r-unknown-type", metadata={"memory_type": "nope"}))
+
+
+def test_review_required_type_is_rejected_without_approval_path() -> None:
+    """需要审批的类型（程序性规则）没有审批通道时明确拒绝。"""
+    service = MemoryService(
+        repository=InMemoryMemoryRepository(), backend=FakeMemoryBackend(), l3_write_mode="sync"
+    )
+
+    with pytest.raises(ValueError, match="requires review"):
+        service.append(make_append(round_id="r-procedure", metadata={"memory_type": "procedure"}))
+
+
+def test_ttl_type_passes_expiration_to_engine() -> None:
+    """TTL 类型把过期日期交给引擎（Mem0 expiration_date），不自己实现过期。"""
+    backend = _CapturingAddBackend()
+    service = MemoryService(
+        repository=InMemoryMemoryRepository(), backend=backend, l3_write_mode="sync"
+    )
+
+    service.append(make_append(round_id="r-state", metadata={"memory_type": "state"}))
+
+    assert backend.add_calls
+    expiration = backend.add_calls[0]["expiration_date"]
+    assert expiration is not None
+    # 默认 state 类型保留 90 天
+    assert expiration >= date.today().isoformat()
+
+
+def test_type_registration_drives_source_roles_and_classification() -> None:
+    """类型注册表决定准入角色与分类默认值。"""
+    from thinkback.domain.memory_types import MemoryTypeRegistry, MemoryTypeSpec
+
+    registry = MemoryTypeRegistry(
+        namespace="semiconductor",
+        types={
+            "process_preference": MemoryTypeSpec(
+                name="process_preference",
+                extractor="mem0",
+                source_roles=("user",),
+                classification="personal",
+            )
+        },
+    )
+    backend = _CapturingAddBackend()
+    service = MemoryService(
+        repository=InMemoryMemoryRepository(),
+        backend=backend,
+        l3_write_mode="sync",
+        registry_provider=lambda namespace: registry,
+    )
+
+    service.append(
+        make_append(
+            round_id="r-semi",
+            content="我们主要做 3nm 的工艺",
+            metadata={"memory_type": "process_preference"},
+        )
+    )
+
+    assert backend.add_calls
+    stored = backend.add_calls[0]["metadata"]
+    assert stored["memory_type"] == "process_preference"
+    assert stored["data_classification"] == "personal"
