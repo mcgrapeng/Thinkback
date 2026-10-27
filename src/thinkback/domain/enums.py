@@ -80,6 +80,7 @@ class OperationType(StrEnum):
     DELETE_MEMORY = "delete_memory"  # 删除单条记忆
     DELETE_SESSION = "delete_session"  # 删除整个会话的记忆
     DELETE_ALL = "delete_all"  # 删除用户全部记忆
+    ERASE = "erase"  # 物理擦除（原文不可恢复）
     REBUILD_L2 = "rebuild_l2"  # 重建 L2 摘要
     REBUILD_L3 = "rebuild_l3"  # 重建 L3 索引
 

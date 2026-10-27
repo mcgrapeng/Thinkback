@@ -1768,6 +1768,10 @@ L2 更新 (缓存失效)
         L1 轮次原文、L2 摘要正文、L3 业务索引行、后端向量记录，以及引擎侧
         残留（Mem0 本地 SQLite 的事实抽取历史与原始消息）。
 
+        擦除是可续跑的多阶段操作：目标计划先落任务行，各阶段幂等；中途失败
+        后用同一个 operation_id 重试会按计划接着做完，不会因为本地索引已经
+        删掉就误报完成。返回的 task_id 是真实任务行，可被查询。
+
         已知残留：Mem0 的 history.db 是进程本地文件，多副本部署时每个副本各
         有一份，一次擦除只清到当前副本；向量库删除是逻辑删除，物理回收要靠
         compaction。审计里如实记录这两点。
@@ -1776,6 +1780,54 @@ L2 更新 (缓存失效)
         session_scope_id = self._session_scope_id(request)
         self._validate_delete_required_identifiers(request)
 
+        task_id = f"memory-erase:{request.operation_id}"
+        task_scope = {
+            "user_id": request.user_id,
+            "session_id": request.session_id,
+            "session_scope_id": session_scope_id,
+            "long_term_scope_id": l3_scope_id,
+            "delete_scope": request.scope.value,
+            "memory_id": request.memory_id,
+        }
+        existing_task = self.repository.get_task(task_id)
+        if existing_task is not None:
+            self._assert_operation_scope_matches(
+                existing_task, task_scope, operation_name="erase"
+            )
+            if existing_task.status is TaskStatus.COMPLETED:
+                return self._existing_erase_response(existing_task)
+            return self._run_erase_stages(request, existing_task)
+
+        task = TaskEntry(
+            task_id=task_id,
+            request_id=request.request_id,
+            op_type=OperationType.ERASE,
+            scope=task_scope,
+            status=TaskStatus.RUNNING,
+            operation_id=request.operation_id,
+        )
+        task, task_claimed = self.repository.claim_task(task)
+        self._assert_operation_scope_matches(task, task_scope, operation_name="erase")
+        if not task_claimed:
+            if task.status is TaskStatus.COMPLETED:
+                return self._existing_erase_response(task)
+            return self._run_erase_stages(request, task)
+
+        plan = self._plan_erase(request, l3_scope_id, session_scope_id)
+        task.result = {"plan": plan, "done_stages": []}
+        self.repository.save_task(task)
+        return self._run_erase_stages(request, task)
+
+    def _plan_erase(
+        self,
+        request: DeleteMemoryRequest,
+        l3_scope_id: str,
+        session_scope_id: str,
+    ) -> dict[str, Any]:
+        """算出擦除计划：目标记忆、后端 ID、会话与轮次。
+
+        计划先落库再动数据：失败重试按计划续跑，不再依赖已经删掉的本地索引。
+        """
         if request.scope is DeleteScope.MEMORY:
             targets = self._erase_targets_one(request, l3_scope_id)
             affected_sessions = {
@@ -1784,77 +1836,138 @@ L2 更新 (缓存失效)
                 for ref in memory.source_refs
                 if ref.get("session_id")
             }
-            round_ids_by_session = {
-                str(ref["session_id"]): {
-                    str(ref["round_id"]) for ref in memory.source_refs if ref.get("round_id")
-                }
-                for memory in targets
-                for ref in memory.source_refs
-                if ref.get("session_id")
-            }
+            round_ids_by_session: dict[str, Any] = {}
+            for memory in targets:
+                for ref in memory.source_refs:
+                    session_id = ref.get("session_id")
+                    if not session_id:
+                        continue
+                    bucket = round_ids_by_session.setdefault(str(session_id), [])
+                    round_id = ref.get("round_id")
+                    if round_id and str(round_id) not in bucket:
+                        bucket.append(str(round_id))
         elif request.scope is DeleteScope.SESSION:
             targets = self._erase_targets_session(request, l3_scope_id)
             affected_sessions = {session_scope_id}
-            round_ids_by_session = {}
+            # 整个会话都要清：None = 该会话的全部轮次。
+            round_ids_by_session = {session_scope_id: None}
         else:
             targets = self._erase_targets_all(request, l3_scope_id)
             affected_sessions = set(self._user_summary_scope_ids(request.user_id))
-            round_ids_by_session = {}
+            round_ids_by_session = {scope_id: None for scope_id in affected_sessions}
 
-        if not targets and request.scope is DeleteScope.MEMORY:
-            # 单条擦除没有目标 = 没有可擦的内容。其余 scope 必须继续走
-            # L1/L2 清理：只有 L1/L2 的会话同样属于用户的记忆。
-            return DeleteMemoryResponse(
-                status="completed",
-                task_id=f"memory-erase:{request.operation_id}",
-                affected_memories=0,
-                summary_state=SummaryState.DIRTY,
-            )
+        return {
+            "scope": request.scope.value,
+            "namespace": l3_scope_id,
+            "memory_ids": [memory.memory_id for memory in targets],
+            "backend_ids": [
+                memory.backend_memory_id
+                for memory in targets
+                if self._is_backend_managed_memory_id(memory.backend_memory_id)
+            ],
+            "sessions": sorted(affected_sessions),
+            "round_ids": round_ids_by_session,
+        }
 
-        # 后端向量记录先删：失败要让调用方知道（不吞）。
-        backend_ids = [
-            memory.backend_memory_id
-            for memory in targets
-            if self._is_backend_managed_memory_id(memory.backend_memory_id)
-        ]
-        if request.scope is DeleteScope.ALL:
-            # ALL 必须覆盖本地没有索引行的后端记录（抽取后索引失败等暗数据），
-            # 只按本地索引逐条删会留下不可管理也不可见的残留。
-            self.backend.delete_all(
-                user_id=request.user_id, memory_scope_id=l3_scope_id
-            )
-        elif backend_ids:
-            self.backend.delete_many(backend_ids)
+    def _run_erase_stages(
+        self, request: DeleteMemoryRequest, task: TaskEntry
+    ) -> DeleteMemoryResponse:
+        """按计划执行擦除阶段。中途失败重试时从已完成阶段之后继续。"""
+        plan = dict(task.result.get("plan") or {})
+        done = set(task.result.get("done_stages") or [])
+        scope_value = str(plan.get("scope") or request.scope.value)
+        namespace = str(plan.get("namespace") or self._long_term_scope_id(request))
+        memory_ids = [str(item) for item in (plan.get("memory_ids") or [])]
+        backend_ids = [str(item) for item in (plan.get("backend_ids") or [])]
+        sessions = [str(item) for item in (plan.get("sessions") or [])]
+        round_ids = {str(key): value for key, value in (plan.get("round_ids") or {}).items()}
 
-        # 本地业务索引行物理删除
-        self.repository.delete_memory_rows([memory.memory_id for memory in targets])
+        def mark_done(stage: str) -> None:
+            done.add(stage)
 
-        # 引擎侧残留：事实抽取历史 + 原始消息（mem0 本地 SQLite）
-        purged = self.backend.purge_history(
-            user_id=request.user_id,
-            memory_ids=backend_ids,
-            scopes=[l3_scope_id],
-        )
+            def mutate(current: TaskEntry) -> None:
+                current.result = {
+                    **current.result,
+                    "plan": plan,
+                    "done_stages": sorted(done),
+                }
 
-        # L1 轮次原文 + L2 摘要正文
-        for scope_id in affected_sessions:
-            self.repository.delete_rounds(
-                request.user_id,
-                scope_id,
-                round_ids=(
-                    sorted(round_ids_by_session[scope_id])
-                    if scope_id in round_ids_by_session
-                    else None
-                ),
-            )
-            self.repository.clear_summary(request.user_id, scope_id)
-            self.repository.clear_l1(request.user_id, scope_id, scope_id)
+            self._mutate_task_with_retry(task.task_id, mutate, strict=True)
 
-        self._record_erase_audit(request, targets, backend_ids, purged)
+        purged: dict[str, int] = dict(task.result.get("purged") or {})
+        try:
+            if "backend" not in done:
+                if scope_value == DeleteScope.ALL.value:
+                    # ALL 必须覆盖本地没有索引行的后端记录（抽取后索引失败等
+                    # 暗数据），只按本地索引逐条删会留下不可管理的残留。
+                    self.backend.delete_all(
+                        user_id=request.user_id, memory_scope_id=namespace
+                    )
+                elif backend_ids:
+                    self.backend.delete_many(backend_ids)
+                mark_done("backend")
+
+            if "history" not in done:
+                purged = self.backend.purge_history(
+                    user_id=request.user_id,
+                    memory_ids=backend_ids,
+                    scopes=[namespace],
+                )
+
+                def save_purged(current: TaskEntry) -> None:
+                    current.result = {**current.result, "purged": purged}
+
+                self._mutate_task_with_retry(task.task_id, save_purged, strict=True)
+                mark_done("history")
+
+            if "l1" not in done:
+                for scope_id in sessions:
+                    self.repository.delete_rounds(
+                        request.user_id,
+                        scope_id,
+                        round_ids=round_ids.get(scope_id),
+                    )
+                    self.repository.clear_summary(request.user_id, scope_id)
+                    self.repository.clear_l1(request.user_id, scope_id, scope_id)
+                mark_done("l1")
+
+            if "audit" not in done:
+                self._record_erase_audit(request, len(memory_ids), backend_ids, purged)
+                mark_done("audit")
+
+            if "index" not in done:
+                # 本地索引最后删：前面任何阶段失败，重试都能按计划继续。
+                self.repository.delete_memory_rows(memory_ids)
+                mark_done("index")
+
+            def finalize(current: TaskEntry) -> None:
+                current.status = TaskStatus.COMPLETED
+                current.result = {
+                    **current.result,
+                    "affected_memories": len(memory_ids),
+                }
+
+            self._mutate_task_with_retry(task.task_id, finalize, strict=True)
+        except Exception as exc:
+            def mark_failed(current: TaskEntry) -> None:
+                current.status = TaskStatus.FAILED
+                current.last_error = str(exc)[:500]
+
+            self._mutate_task_with_retry(task.task_id, mark_failed)
+            raise
+
         return DeleteMemoryResponse(
             status="completed",
-            task_id=f"memory-erase:{request.operation_id}",
-            affected_memories=len(targets),
+            task_id=task.task_id,
+            affected_memories=len(memory_ids),
+            summary_state=SummaryState.DIRTY,
+        )
+
+    def _existing_erase_response(self, task: TaskEntry) -> DeleteMemoryResponse:
+        return DeleteMemoryResponse(
+            status="completed",
+            task_id=task.task_id,
+            affected_memories=int(task.result.get("affected_memories", 0) or 0),
             summary_state=SummaryState.DIRTY,
         )
 
@@ -1898,7 +2011,7 @@ L2 更新 (缓存失效)
     def _record_erase_audit(
         self,
         request: DeleteMemoryRequest,
-        targets: list[Any],
+        affected_memories: int,
         backend_ids: list[str],
         purged: dict[str, int],
     ) -> None:
@@ -1913,7 +2026,7 @@ L2 更新 (缓存失效)
                 action="memory.erase",
                 target=f"{request.user_id}/{request.scope.value}",
                 detail={
-                    "affected_memories": len(targets),
+                    "affected_memories": affected_memories,
                     "backend_records_deleted": len(backend_ids),
                     "mem0_history_purged": True,
                     "mem0_history_rows_deleted": int(purged.get("history", 0)),
