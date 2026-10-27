@@ -10,7 +10,7 @@
 
 **Spec:** `docs/specs/2026-10-26-thinkback-memory-plugin-design.md`（D9 引擎优先、D10 内网免鉴权、§2.3 审计项、§10 质量门禁）
 
-**后续计划（不在本文件范围）：** P0 引擎与门禁（mem0 2.1.0→2.2.x 升级 + 真实引擎契约套件进 CI）、P1 内网化收口、P2 插件模型、P3 接入生态。
+**后续计划（不在本文件范围）：** P0 引擎与门禁（mem0 已升级 2.1.0→2.2.1，856 用例全绿；真实 Milvus 契约验证因本机 arm64 容器启动即崩溃而未完成，需换 x86_64 实例或兼容镜像重跑）、P1 内网化收口、P2 插件模型、P3 接入生态。
 
 ## Global Constraints
 
@@ -20,6 +20,7 @@
 - 完成定义：`make check` 全绿（format-check + lint + typecheck + mutation-audit + eval），`make test` 全绿。
 - Mem0 是固定引擎，不要在 Thinkback 里重实现抽取、检索、去重、过期。
 - 免鉴权（D10）：业务接口不引入鉴权代码；`/admin/api/*` 的 ADMIN_TOKEN 不动。
+- 门禁在本地跑：真实 Mem0/Milvus 契约套件是本地必跑项，不要求进 CI；CI 保持现状。
 - 每个任务单独提交，commit message 描述改了什么行为。
 
 ## Review Focus
@@ -31,6 +32,23 @@
 3. 后端写失败：Mem0 写失败时客户端不得收到 `completed`（Task 3）。
 4. 同一把 Idempotency-Key 用在不同端点：append 的缓存响应不得被 recall 领走（Task 4）。
 5. 助手的自述被当成用户事实：用户没说过的事不得进入长期记忆（Task 5）。
+
+---
+
+## 完成状态（2026-10-27 回填）
+
+| 任务 | 状态 | 提交 |
+| --- | --- | --- |
+| Task 1 删除屏障 | 完成 | `505ae4d` |
+| Task 1.5 读写等待预算解耦（flaky 用例） | 完成 | `e7f7e0a`（随 Task 2 一并提交） |
+| Task 2 L2 摘要乐观锁 | 完成 | `e7f7e0a` |
+| Task 3 update 失败不谎报 completed | 完成 | `6dfe72b` |
+| Task 4 幂等键区分端点 + 指纹 canonical 化 | 完成 | `60a0920` |
+| Task 5 assistant 断言不进长期事实 | 完成 | （与 Task 6 同批） |
+| Task 6 敏感分类落库前拦截 | 完成 | `4369d9c` |
+
+验收结果：`mypy` 无错误；全套件 856 passed；`make eval` 20/20、baseline 达标；`make mutation-audit` 已跑。
+`ruff format/check` 仅剩用户 WIP 文件 `tests/unit/test_api_key_auth.py` 的 SIM300 与 B017，未改动该文件。
 
 ---
 

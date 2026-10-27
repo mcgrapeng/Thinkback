@@ -272,6 +272,53 @@ types:
 
 新增“过敏史”“用药记录”这类类型时，写一个类型实现加一段配置，不动编排器。
 
+### 4.4 垂类记忆档案（vertical domain）
+
+垂类对话助手（先半导体，后续可扩展到其他行业）需要领域实体与行业语义，固定的 P0 槽位（昵称/宠物/地点/生日/饮品）覆盖不了。但**领域知识不写成代码**：不在 Thinkback 里加半导体正则、本体库或词典文件，而是用配置描述一个 vertical profile。
+
+| 配置项 | 含义 | 落点 |
+| --- | --- | --- |
+| `domain` | 行业标识，如 `semiconductor` | namespace 的第三段，与其它行业隔离 |
+| `entity_vocabulary` | 受控实体类别与别名，如工艺节点、设备型号、客户、良率、产能、缺陷模式 | 作为类型 metadata 与检索过滤维度，不写代码 |
+| `extraction_prompt` | 按类型给的抽取指令（含领域术语与输出约束） | Mem0 原生 `add(prompt=...)` 每次写入可带 |
+| `retention` | 各类型的保留期，如良率趋势 90 天、客户偏好永久 | 类型注册表的 retention 策略 |
+| `classification` | 行业敏感级别，如客户名、工艺参数、成本 | 分类准入（§8） |
+
+Mem0 承接点：每次写入的 `prompt` 参数承载领域抽取指令；`metadata` 携带 domain/entity 标签；升级 2.2.x 后 entity matching 让「工艺节点 / 设备型号 / 客户」成为原生检索信号。Thinkback 不再自己写实体识别逻辑。
+
+半导体示例（配置而非代码）：
+
+```yaml
+domain: semiconductor
+entity_vocabulary:
+  process_node: ["3nm", "5nm", "7nm", "14nm", "28nm"]
+  equipment: ["光刻机", "刻蚀机", "薄膜沉积", "CMP", "量测设备"]
+  metric: ["良率", "产能", "缺陷密度", "关键尺寸", "套刻精度"]
+types:
+  process_preference:
+    layer: facts
+    extractor: mem0.collection
+    extraction_prompt: prompts/semiconductor/process_preference.md
+    classification: confidential
+    retention: forever
+  yield_watch:
+    layer: facts
+    extractor: mem0.collection
+    extraction_prompt: prompts/semiconductor/yield_watch.md
+    classification: internal
+    retention: ttl
+    ttl_days: 90
+    recall: {path: fact, budget: 400}
+  customer_context:
+    layer: facts
+    extractor: mem0.collection
+    extraction_prompt: prompts/semiconductor/customer_context.md
+    classification: restricted
+    review: required
+```
+
+这套结构同时适用于其它垂类（换 `domain`、词表、抽取 prompt 与保留策略即可），不需要为每个行业写一套引擎。
+
 ## 5. 写入与执行
 
 ### 5.1 状态语义
@@ -360,15 +407,15 @@ GET  /v2/memory/sources/{ref} 取原始证据
 3. **数据隔离门禁**：免鉴权后越权不再是问题，但数据混用仍是正确性问题。每个端点 × 每个传输 × 匿名 × 跨 user/namespace 读取必须为空；任务按 user 过滤，不允许按 task_id 读到别人的任务。
 4. **删除物理校验**：erase 后直接查 PG、Milvus、Mem0 history、缓存，确认原文不存在（依赖问题 4 的机制）。
 5. **召回质量**：复合查询、同义表达、当前轮预算、assistant 幻觉、用户纠正五类负向用例。
-6. **评测语料**：10-19 Task 1.1 的陪伴语料面向陪伴场景，**不能直接用于企业助手**。需要按目标场景重写客服/销售/内部助手语料，或明确本期只服务陪伴场景。
-7. **真实引擎门禁升级为主门禁**：D9 之下，语义由 Mem0 承担，Mem0 的契约与质量就是系统质量。现存 834 个测试与 20 条 eval 全部用 `FakeMemoryBackend`，`tests/script/real_mem0_*.py` 是手工脚本；`.github/workflows/ci.yml` 只有 ruff、mypy、pytest、fuzz、pip-audit、docker build，**既没有 `make check`，也没有任何真实 Mem0/Milvus 步骤**。需要：docker-compose 起 Mem0+Milvus+LLM 的契约套件进 CI，且 `make check` 本身进 CI。
+6. **评测语料按垂类对话助手编写，先半导体，可扩展到其它行业**：覆盖工艺咨询、设备选型、良率分析、客户支持四类对话；每条标注期望召回 / 不该召回 / 不该主动提 / 保留期。10-19 Task 1.1 的陪伴语料不作为本期主门禁，仅作回归 fixture。
+7. **真实引擎门禁是本地门禁，不要求进 CI**：D9 之下，语义由 Mem0 承担，Mem0 的契约与质量就是系统质量。现存 834 个测试与 20 条 eval 全部用 `FakeMemoryBackend`，`tests/script/real_mem0_*.py` 是手工脚本。真实 Mem0/Milvus 契约套件保留为**本地必跑**的门禁（发布前在开发机执行并记录结果），CI 维持现状（ruff、mypy、pytest、fuzz、pip-audit、docker build），不引入服务化依赖。
 
 ## 11. 实施顺序
 
 | 阶段 | 范围 | 验收 |
 | --- | --- | --- |
 | P0 正确性 | 删除与在飞写入的删除屏障、L2 版本化写入、backend.update 失败不再谎报 completed、幂等键加 method/path、指纹 canonical 化、来源信任（assistant 不进用户事实）、分类准入 | 删除后无复活；删除后摘要不回退；失败注入门禁全绿；assistant 断言不进用户事实 |
-| P0 引擎与门禁 | 升级 mem0 2.1.0 → 2.2.x 拿混合检索与 entity matching；真实 Mem0 契约套件与 `make check` 进 CI | 真实 Mem0 契约套件全绿；`make check` 全绿 |
+| P0 引擎与门禁 | 升级 mem0 2.1.0 → 2.2.x 拿混合检索与 entity matching；真实 Mem0 契约套件作为本地必跑门禁（不进 CI） | 真实 Mem0 契约套件本地全绿；`make check` 本地全绿 |
 | P1 内网化收口 | 免鉴权：删 API Key / Scope / X-Tenant-Id 校验；业务面收敛为 v2 单一契约；namespace 字符集校验；admin 保留 ADMIN_TOKEN；限流改按 IP | 免鉴权后无鉴权死代码；namespace 无碰撞；admin 缺 token 时拒绝 |
 | P2 插件模型 | 类型注册表、抽取前统一准入、召回装配重写、删除固定 L3 scope 常量、suppress/erase | 新增类型只改配置与注册项；erase 全链路物理校验通过；召回负向用例全绿 |
 | P3 接入生态 | SDK 生成、MCP、审计导出、文档 | SDK 覆盖 Python/TS 样例；MCP 客户端矩阵通过 |
@@ -386,8 +433,10 @@ P0 与 P1 完成前不发布新接入方。P2 完成才算“插件形态”成�
 | 3 | tenant 用独立列还是命名空间 | 不做安全隔离；namespace 作为业务分组标签，字符集校验防碰撞，`ins_memory.memory_scope_id` 列直接承载，不做 schema 迁移 |
 | 9 | 10-19 Phase 1/2/3/4 范围 | 保留 Phase 1 评测（语料重写），Phase 2 降级为类型注册表，Phase 3 删除按 D6/D7 调整，Phase 4 不默认关 Milvus |
 | 11 | 接受 mem0 2.1.0 → 2.2.x 行为变化 | 接受，threshold 与 rerank 重测 |
-| 12 | 真实引擎门禁进不进 CI | 进，折中方案：nightly 真实套件，PR 跑 mock 套件加契约签名校验 |
+| 12 | 真实引擎门禁进不进 CI | 不进 CI。真实 Mem0/Milvus 契约套件作为本地必跑门禁，CI 维持现状（ruff、mypy、pytest、fuzz、pip-audit、docker build） |
 | 13 | 鉴权 | 业务接口免鉴权，仅内网可达（D10）；`/admin/api/*` 保留 ADMIN_TOKEN |
+| 14 | `make check` 是否进 CI | 不进。本地跑完 format-check、lint、typecheck、mutation-audit、eval 即可；CI 保持现状 |
+| 15 | 评测语料场景 | 已决：垂类对话助手，先半导体（工艺咨询、设备选型、良率分析、客户支持），结构上可扩展到其它行业 |
 
 ### 仍待你给信息
 
@@ -398,7 +447,6 @@ P0 与 P1 完成前不发布新接入方。P2 完成才算“插件形态”成�
 | 6 | 分类由谁判定，“不落库”是否含 L1 | 分类准入实现 | 类型注册表静态 classification 加服务端检测器组合；SENSITIVE/RESTRICTED 连 L1 都不落 |
 | 7 | v2 的 gRPC 是否同步升版；召回是否进幂等缓存 | 契约形态 | gRPC 同步升 v2；召回不进幂等缓存 |
 | 8 | procedure 是否进 v2 契约，审批路径谁提供 | 类型范围 | 先不暴露 procedure 类型，避免无审批路径 |
-| 10 | 评测语料按什么场景重写 | 质量门禁定义 | 需要你给出目标客户场景（客服/销售/内部助手/陪伴） |
 
 ## 13. 明确不做与理由
 
