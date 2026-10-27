@@ -8175,3 +8175,117 @@ def test_l3_indexing_keeps_original_when_canonical_collapses_single_slot_facts()
     assert "Alibaba" in stored, "雇主信息不能因为只命中一个槽位就丢"
     assert "2024" in stored, "年份不能丢"
     assert "old team" in stored, "团队信息不能丢"
+
+
+def test_assistant_assertion_does_not_become_user_fact() -> None:
+    """只有用户消息能进 mem0 抽取与 source_text，assistant 的断言不进长期事实。"""
+    from datetime import UTC, datetime
+
+    class RecordingAddBackend(FakeMemoryBackend):
+        def __init__(self) -> None:
+            super().__init__()
+            self.received: list[list[dict[str, str]]] = []
+
+        def add(self, messages, *, user_id, memory_scope_id, metadata=None, infer=True):  # type: ignore[no-untyped-def]
+            self.received.append(messages)
+            return super().add(
+                messages,
+                user_id=user_id,
+                memory_scope_id=memory_scope_id,
+                metadata=metadata,
+                infer=infer,
+            )
+
+    repository = InMemoryMemoryRepository()
+    backend = RecordingAddBackend()
+    service = MemoryService(repository=repository, backend=backend, l3_write_mode="sync")
+    service.append(
+        AppendMemoryRequest(
+            request_id="req-role",
+            user_id="user-1",
+            session_id="session-1",
+            round_id="round-role",
+            messages=[
+                {
+                    "message_id": "m1",
+                    "role": "user",
+                    "content": "Where should I live?",
+                    "timestamp": datetime(2026, 1, 1, tzinfo=UTC),
+                },
+                {
+                    "message_id": "m2",
+                    "role": "assistant",
+                    "content": "You live in Shanghai.",
+                    "timestamp": datetime(2026, 1, 1, tzinfo=UTC),
+                },
+            ],
+            source_timestamp=datetime(2026, 1, 1, tzinfo=UTC),
+        )
+    )
+
+    assert backend.received
+    for call in backend.received:
+        assert [message["role"] for message in call] == ["user"]
+        assert all("Shanghai" not in message["content"] for message in call)
+    assert all(
+        "Shanghai" not in memory.memory_text
+        for memory in repository.active_memories("user-1", "thinkback")
+    )
+
+
+def test_assistant_only_round_skips_l3_extraction() -> None:
+    """没有用户消息时不调用 mem0，也不产生长期事实。"""
+    repository = InMemoryMemoryRepository()
+    backend = FakeMemoryBackend()
+    service = MemoryService(repository=repository, backend=backend, l3_write_mode="sync")
+
+    events = service._add_l3_from_messages(
+        [{"role": "assistant", "content": "You live in Shanghai."}],
+        user_id="user-1",
+        memory_scope_id="thinkback",
+        source_refs=[{"session_id": "session-1", "round_id": "r-assistant-only"}],
+        request_metadata={},
+    )
+
+    assert events == []
+    assert backend.memories == {}
+
+
+@pytest.mark.parametrize("classification", ["sensitive", "restricted"])
+def test_classification_blocks_persistence_and_backend_calls(classification: str) -> None:
+    """SENSITIVE/RESTRICTED 在写 journal 前就被拒，LLM/后端零调用、零落库。"""
+    repository = InMemoryMemoryRepository()
+    backend = FakeMemoryBackend()
+    service = MemoryService(repository=repository, backend=backend, l3_write_mode="sync")
+
+    with pytest.raises(ValueError, match="sensitive_or_restricted"):
+        service.append(
+            make_append(round_id="r-classified", metadata={"data_classification": classification})
+        )
+
+    assert repository.get_round("r-classified") is None
+    assert backend.memories == {}
+    assert repository.get_task("memory-extract:r-classified") is None
+
+
+def test_classification_defaults_and_unknown_values() -> None:
+    """缺省沿用 personal；未知分类直接报错，不静默降级。"""
+    from thinkback.domain.classification import (
+        assert_storable,
+        blocks_storage,
+        resolve_classification,
+    )
+
+    assert resolve_classification(None) == "personal"
+    assert resolve_classification({}) == "personal"
+    assert resolve_classification({"data_classification": "normal"}) == "normal"
+    assert blocks_storage("sensitive") is True
+    assert blocks_storage("restricted") is True
+    assert blocks_storage("personal") is False
+    assert blocks_storage("normal") is False
+    with pytest.raises(ValueError, match="unknown data_classification"):
+        resolve_classification({"data_classification": "top-secret"})
+    with pytest.raises(ValueError, match="sensitive_or_restricted"):
+        assert_storable("sensitive")
+    assert_storable("personal")
+    assert_storable("normal")
