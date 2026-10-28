@@ -1,0 +1,17 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# `make k8s-apply` / `kubectl apply -k k8s` 的入口。
+# 此前目录里没有 kustomization，Makefile 的 `kubectl apply -k k8s` 直接报错，
+# 发布命令不可用。
+#
+# namespace.yaml 与 secret.example.yaml 不在这里：
+# - namespace 由平台/运维决定（清单里不带具体 namespace，用 default 之外
+#   的请用 overlay 覆盖）；
+# - secret.example.yaml 是模板，含假值，必须先替换成真实 Secret 才可应用。
+resources:
+  - configmap.yaml
+  - job-migrate.yaml
+  - deployment-api.yaml
+  - service.yaml
+  - networkpolicy.yaml

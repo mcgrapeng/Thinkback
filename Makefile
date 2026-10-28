@@ -5,7 +5,7 @@ IMAGE ?= thinkback
 VERSION ?= 0.1.0
 # K8S_DIR：Kustomize 部署目录，环境 overlay 可覆盖为其他目录。
 K8S_DIR ?= k8s
-.PHONY: fmt format-check lint typecheck test test-fast coverage check test-ui test-e2e test-fuzz eval audit load-smoke mutation-audit hooks-install hooks-run dev dev-up dev-down image-build k8s-apply k8s-delete proto-gen migration-up migration-downgrade-1 migration-status migration-history migration-revision
+.PHONY: fmt format-check lint typecheck test test-fast coverage check test-ui test-e2e test-fuzz eval audit load-smoke mutation-audit hooks-install hooks-run dev dev-up dev-down image-build k8s-render k8s-apply k8s-delete proto-gen migration-up migration-downgrade-1 migration-status migration-history migration-revision
 
 proto-gen:
 	# 固定生成器版本：不固定时 grpcio-tools 升级会产出大量无关 diff。
@@ -109,6 +109,10 @@ dev-down:
 
 image-build:
 	docker build -t $(IMAGE):$(VERSION) .
+
+k8s-render:
+	# 只渲染不应用：发布前先确认清单能过 kustomize 构建。
+	kubectl kustomize $(K8S_DIR)
 
 k8s-apply:
 	kubectl apply -k $(K8S_DIR)

@@ -25,6 +25,9 @@ export const options = {
     http_req_failed: ["rate<0.01"],
     "http_req_duration{op:append}": ["p(95)<1000"],
     "http_req_duration{op:recall}": ["p(95)<500"],
+    // 正确性也要决定退出码：写进去了却召不回来（check 失败）在只判延迟
+    // 时会「绿着」通过 —— 那正是线上最难查的一类故障。
+    checks: ["rate==1.0"],
   },
 };
 
