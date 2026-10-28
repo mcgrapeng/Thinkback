@@ -11,6 +11,7 @@
 
 修订记录：
 
+- v3（2026-10-28）：依据真实栈实测（`docs/report/2026-10-28-real-stack-mem0-capability-probe.md`）与一次 grilling 决议修订。混合检索的描述改为实测结论，硬过滤下线改为暂缓，排序与擦除口径补齐，新增 D11–D19。
 - v2 修正：既有计划多项已提交，原文误标为待做；L1 缓存 TTL 已完成；补全文件路径；补齐审计项的阶段归属；把 10-19 计划与“三层保留”冲突的三处显式列出；补入独立 reviewer 提出的 10 个待裁决问题。
 
 ---
@@ -29,6 +30,15 @@
 | D8 | legacy `/memory/*` 在生产不可达 | 10-19 Task 3.1「旧路由保持可用」不采纳 |
 | D9 | 引擎优先原则：引擎能做的交给引擎，引擎做不好的才补，引擎完全没有的才自己做 | 见 §2.4 能力划分、§2.5 删除清单 |
 | D10 | 部署在内网，业务接口不做鉴权；信任边界是网络边界 | 删除 API Key / Scope / X-Tenant-Id 校验；`/admin/api/*` 保留 ADMIN_TOKEN 作为破坏性操作闸门；namespace 降为业务分组标签，靠字符集校验避免碰撞 |
+| D11 | 擦除分四档对外声明：不可召回、逻辑删除、物理擦除、备份过期 | 当前只宣称前两档与单副本下的第三档；引擎侧清理加版本护栏，见 ADR-0001 |
+| D12 | 数据分类的判定权在服务端，调用方只能更严格 | SENSITIVE/RESTRICTED 连 L1 都不写，见 ADR-0002 |
+| D13 | 引擎分数只在同一次查询内可比 | 服务层可叠加显式信号重排，不重写分数量纲，见 ADR-0003 |
+| D14 | 硬过滤与固定槽位引擎暂不下线 | 先上中文 BM25，之后按类型逐个下线，见 ADR-0004 |
+| D15 | round_id 保持全局唯一 | 约束写进公开 schema 与 SDK，见 ADR-0005 |
+| D16 | v2 契约里 gRPC 与 HTTP 同步升版 | 语义不再分叉；召回不进幂等缓存 |
+| D17 | procedure 类型暂不进 v2 契约 | 没有审批主体就没有信任等级 |
+| D18 | gRPC 业务面不做 TLS，反射保留，并发上限设有限值 | 信任边界是网络；反射用于内网运维 |
+| D19 | 引擎投资只做中文分词器 | 不装 nlp extras；reranker 先建无 rerank 基线 |
 
 D1+D6 的推论：10-19 的目标模型（Profile + 叙事 Collection + state TTL + procedural + 承诺，Milvus 可选）不是三层模型。本设计保留它的**类型化思路**，但把类型放回三层之内。
 
@@ -115,7 +125,7 @@ Mem0 OSS 2.1.0（当前安装版本）原生能力与缺口：
 | 事实抽取 | 有，ADD-only 模型 | `mem0/memory/main.py:978-981` 解析 LLM 输出的 `memory` 键 |
 | 每次写入自定义抽取指令 | 有，`add(prompt=...)` | `main.py:769-771` |
 | 语义检索 | 有 | `main.py:1388-1432` |
-| 混合检索（BM25 + entity matching） | **没有**，2.2.x 才引入 | 安装包内无 bm25 / keyword_search / entity matching 实现；官方迁移文档说明该能力随新算法发布 |
+| 混合检索（BM25 + entity matching） | 2.2.1 有 BM25；entity matching 需 `mem0ai[nlp]` | 实测：collection 有 text+sparse+sparse_index，英文与型号词命中（MA6000 的 bm25 分 0.289），中文词命中为 0（text 字段 analyzer_params 为空，默认分析器不切中文）；entity matching 未启用（缺 spaCy，entity_boost 恒 0，无 `_entities` collection） |
 | 过期与 TTL | 有，`expiration_date` + `show_expired` | `main.py:788-789,1260-1271` |
 | 记忆分类 | **仅 `procedural`**，其它值抛 `Mem0ValidationError` | `main.py:831-835` |
 | 事实时间锚点 / as-of 查询 | **没有**，OSS 直接抛错 | `main.py:787,817-818`（`timestamp`）、`main.py:1421-1433`（`reference_date`）均为 Platform-only |
@@ -131,10 +141,10 @@ Mem0 OSS 2.1.0（当前安装版本）原生能力与缺口：
 
 | 现有实现 | 规模 | 处理 | 替代 |
 | --- | --- | --- | --- |
-| `src/thinkback/domain/slots/` 固定槽位引擎 | 1,270 行 + service 约 550 行引用 | 删 | Mem0 抽取 + 类型注册表 |
-| 词典交集硬过滤 `context_terms` | 约 100 行 | 删 | Mem0 2.2.x 的 BM25 + entity matching |
-| 自造事实排序分（层优先级 + quality + strength） | 约 80 行 | 降为只做预算分配 | Mem0 融合分负责事实排序 |
-| `src/thinkback/memory/decay.py` 清扫器 | 155 行 | 删 | Mem0 `expiration_date` + `show_expired` |
+| `src/thinkback/domain/slots/` 固定槽位引擎 | 1,270 行 + service 约 550 行引用 | 暂缓下线，先补中文 BM25，再按类型逐个下线 | Mem0 抽取 + 类型注册表；ADR-0004 |
+| 词典交集硬过滤 `context_terms` | 约 100 行 | 暂缓下线 | 中文 BM25 上线并通过评测后按类型逐个关；ADR-0004 |
+| 自造事实排序分（层优先级 + quality + strength） | 约 80 行 | 降为只做预算分配；允许叠加显式信号重排 | 引擎融合分负责同查询内相对序；ADR-0003 |
+| `src/thinkback/memory/decay.py` 清扫器 | 155 行 | 待决 | `expiration_date` 只隐藏不删除，是否保留物理保留期清扫需单独定，见第二轮边界 |
 | 本地 `valid_at/invalid_at` 生命周期 | 约 60 行 | 保留但收窄 | 事实时间 OSS 不支持，只能自建；先只做失效标记，不做 as-of 查询 |
 | 10-19 Task 4.1「Milvus 默认关」 | - | 不采纳 | 引擎既然固定，语义层不能用自造实现替代 |
 | 治理台 mem0 提示词编辑 | 已删 | 改为按类型传 `add(prompt=...)` | Mem0 原生每次写入可带抽取指令 |
@@ -347,11 +357,11 @@ types:
 
 1. **角色与证据保留**：L1 按角色分段，不拼成无标签文本；每条记忆带 source_refs。
 2. **复合查询**：不再因为命中一个槽位就跳过语义检索。精确槽位只用于单一事实 lookup。
-3. **排序**：L3 内部由 Mem0 的融合分负责（semantic + BM25 + entity matching），Thinkback 不再自造事实排序分。Thinkback 只决定“哪些层、哪些类型进入上下文”。
+3. **排序**：引擎融合分只在同一次查询内可比（分母随本次是否命中 BM25 而变），不当阈值用也不跨查询比较。服务层可叠加有业务含义的信号重排：当前事实优先、信任等级、数据分类、类型预算；不重写引擎分数的量纲，也不自建事实排序分取代引擎。后端需透传 `explain`，否则 BM25 与 entity 的分解在服务侧不可观测。ADR-0003。
 4. **分层预算**：L1/L2/L3 与各类型各有配额，避免长期事实吃光当前对话；单条超预算时截断或跳过并记原因，不返回空包。
 5. **proactive 标记**：沿用 10-19 Task 2.5，返回条目加 `proactive=false` 与原因，由调用方决定是否注入。
 6. **不可信数据边界**：所有层返回内容统一标记；L2 prompt 明确要求把轮次内容当数据。
-7. **不重排引擎结果**：Thinkback 收到 Mem0 的 top-k 后，只做过滤（按本地索引状态、来源、信任、分类）与预算裁剪，不改写引擎给出的顺序权重。
+7. **重排只叠加显式信号**：收到引擎 top-k 后做过滤（本地索引状态、来源、信任、分类）与预算裁剪，可按业务信号重排，但不改写引擎分数的量纲。ADR-0003。
 
 ## 7. 删除语义
 
@@ -363,7 +373,9 @@ types:
 
 `erase` 的级联清单必须逐项验证：journal messages、context view 文本、ins_memory 行、Milvus collection、Mem0 SQLite history、进程内缓存、审计日志原文。审计只留范围、数量、时间与操作人。
 
-Mem0 2.1.0 没有 history 清理接口，history 表结构由 Mem0 内部定义且文件按 Pod 共享，物理擦除机制需要单独决策（见问题 4）。
+Mem0 的公开 CRUD 不清理 history 与 messages 表，`delete` 还会追加保留旧值的历史行；history 表结构由 Mem0 内部定义且文件按 Pod 共享。Thinkback 保留对该 SQLite 的定向删除，固定 mem0 2.2.1，表结构或列名不匹配时 fail-visible 并让操作失败，不允许静默跳过。
+
+对外承诺分四档：不可召回、逻辑删除、物理擦除、备份过期。当前只宣称前两档与单副本下的第三档，第四档没有机制。单副本是当前发布边界；多副本开放前，引擎侧历史必须先外置。ADR-0001。
 
 ## 8. 安全
 
@@ -438,15 +450,30 @@ P0 与 P1 完成前不发布新接入方。P2 完成才算“插件形态”成�
 | 14 | `make check` 是否进 CI | 不进。本地跑完 format-check、lint、typecheck、mutation-audit、eval 即可；CI 保持现状 |
 | 15 | 评测语料场景 | 已决：垂类对话助手，先半导体（工艺咨询、设备选型、良率分析、客户支持），结构上可扩展到其它行业 |
 
-### 仍待你给信息
+### 已决（2026-10-28 grilling）
 
-| # | 问题 | 阻塞什么 | 我的建议 |
+| # | 问题 | 结论 | 对应 |
 | --- | --- | --- | --- |
-| 4 | Mem0 history 的物理擦除机制 | erase 的物理校验门禁 | 接受残留并明确文档化，或关闭 Mem0 history 持久化；不做脆弱的 SQL 手术 |
-| 5 | gRPC TLS 在哪终止 | 传输加固 | 内网免鉴权可暂不做 TLS，但反射与无限并发要收 |
-| 6 | 分类由谁判定，“不落库”是否含 L1 | 分类准入实现 | 类型注册表静态 classification 加服务端检测器组合；SENSITIVE/RESTRICTED 连 L1 都不落 |
-| 7 | v2 的 gRPC 是否同步升版；召回是否进幂等缓存 | 契约形态 | gRPC 同步升 v2；召回不进幂等缓存 |
-| 8 | procedure 是否进 v2 契约，审批路径谁提供 | 类型范围 | 先不暴露 procedure 类型，避免无审批路径 |
+| 4 | Mem0 history 的物理擦除机制 | 保留对 Mem0 SQLite 的定向删除，固定 mem0 2.2.1 并加表结构护栏；对外按四档声明，只宣称前两档与单副本下的第三档 | D11 / ADR-0001 |
+| 5 | gRPC TLS 在哪终止 | 业务面不做 TLS，信任边界是网络；反射保留；并发上限从无限改为有限值 | D18 |
+| 6 | 分类由谁判定，“不落库”是否含 L1 | 判定权在服务端，调用方只能更严格；SENSITIVE/RESTRICTED 连 L1 都不写 | D12 / ADR-0002 |
+| 7 | v2 的 gRPC 是否同步升版；召回是否进幂等缓存 | gRPC 与 HTTP 同步升 v2，语义不分叉；召回不进幂等缓存，超时可安全重试 | D16 |
+| 8 | procedure 是否进 v2 契约，审批路径谁提供 | 暂不暴露 procedure 类型，模型里保留 `review_state` | D17 |
+| 16 | 引擎结果能不能被服务层重排 | 能，但只叠加显式信号，不重写引擎分数量纲 | D13 / ADR-0003 |
+| 17 | 硬过滤与固定槽位引擎何时下线 | 暂缓；先上中文 BM25，再按类型逐个下线 | D14 / ADR-0004 |
+| 18 | 幂等锚点是全局 round_id 还是复合键 | 保持全局唯一，约束写进 schema 与 SDK | D15 / ADR-0005 |
+| 19 | 要不要为引擎能力投资 | 只做中文分词器；不装 nlp extras；reranker 先建无 rerank 基线 | D19 |
+
+### 第二轮待决
+
+| # | 问题 | 阻塞什么 |
+| --- | --- | --- |
+| 20 | `decay.py` 物理保留期清扫删还是留 | 保留策略的实现范围；`expiration_date` 只隐藏不删除 |
+| 21 | 重建 collection 上中文分词器的回放与回滚方案 | 中文 BM25 落地；ADR-0004 的前置 |
+| 22 | 分层预算怎么切，L1/L2/L3 与类型各占多少 | 召回装配 |
+| 23 | v2 契约的字段级形态（WriteReceipt、ContextPackage、SourceEvent） | 契约冻结与 SDK 生成 |
+| 24 | 类型注册表配置文件的格式与生效方式 | 新增一类记忆只改配置 |
+| 25 | 真实栈门禁的具体清单与归档位置 | 发布签发 |
 
 ## 13. 明确不做与理由
 
