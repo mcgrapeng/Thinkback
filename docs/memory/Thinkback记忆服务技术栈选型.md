@@ -17,7 +17,7 @@
 
 工程边界：
 
-- FastAPI 承载 `/memory/*`、健康检查和就绪检查。
+- FastAPI 承载 `/v2/memory/*`、健康检查和就绪检查。
 - PostgreSQL 保存 L2 摘要、可靠轮次、L3 业务索引和任务状态。
 - Alembic 管理 `ins_` 业务表结构。
   首版基线迁移为 `20260504_0001_memory_p0_tables.py`；
@@ -100,12 +100,12 @@ Celery worker 已有 bootstrap，并注册 `memory.diagnostics.ping` 诊断任�
 当前 L3 `MEMORY_L3_WRITE_MODE=async` 不依赖 Celery worker 消费。
 append 请求由 API 进程同步完成可靠轮次存储、L1/L2 更新和 P0 槽位索引；
 Mem0 L3 抽取在 API 进程内线程池中执行。
-对应队列状态通过 `/memory/l3/background-status` 暴露。
+对应队列状态通过 `/v2/memory/l3/background-status` 暴露。
 
 因此生产部署 Celery worker 的主要价值是保留 worker Deployment 形态。
 Celery worker 目前只承载诊断任务和后续异步任务扩展入口。
 不要把 Celery worker 状态误解为当前 L3 后台抽取是否在执行；
-判断 L3 后台抽取应看 API 日志、`ins_memory_task` 和 `/memory/l3/background-status`。
+判断 L3 后台抽取应看 API 日志、`ins_memory_task` 和 `/v2/memory/l3/background-status`。
 
 ## 5. L3 删除边界
 

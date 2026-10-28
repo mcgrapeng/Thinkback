@@ -35,28 +35,19 @@ def check(name: str, condition: bool, detail: str = "") -> None:
 
 def append(round_id: str, user_text: str, assistant_text: str, index: int) -> dict:
     resp = client.post(
-        "/memory/append",
+        "/v2/memory/events",
         json={
             "request_id": f"req-{round_id}",
             "user_id": USER,
             "session_id": SESSION,
-            "round_id": f"{RUN}-{round_id}",
             "round_index": index,
-            "messages": [
-                {
-                    "message_id": f"{round_id}-u",
-                    "role": "user",
-                    "content": user_text,
-                    "timestamp": "2026-09-07T10:00:00+00:00",
-                },
-                {
-                    "message_id": f"{round_id}-a",
-                    "role": "assistant",
-                    "content": assistant_text,
-                    "timestamp": "2026-09-07T10:00:01+00:00",
-                },
-            ],
-            "source_timestamp": "2026-09-07T10:00:01+00:00",
+            "event": {
+                "event_id": f"{RUN}-{round_id}",
+                "source": "chat_round",
+                "role": "user",
+                "payload": user_text,
+                "occurred_at": "2026-09-07T10:00:00+00:00",
+            },
         },
     )
     return {"status_code": resp.status_code, "body": resp.json()}
@@ -65,7 +56,7 @@ def append(round_id: str, user_text: str, assistant_text: str, index: int) -> di
 def wait_task(task_id: str, timeout: float = 420.0) -> tuple[str, dict]:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        resp = client.get(f"/memory/tasks/{task_id}")
+        resp = client.get(f"/v2/memory/tasks/{task_id}")
         if resp.status_code == 200:
             body = resp.json()
             if body["status"] in {"completed", "failed", "dead_letter"}:
@@ -77,7 +68,7 @@ def wait_task(task_id: str, timeout: float = 420.0) -> tuple[str, dict]:
 def recall(query: str) -> dict:
     # RecallMemoryRequest 不接受 intent 轴（extra=forbid，带了就是 422）
     resp = client.post(
-        "/memory/recall",
+        "/v2/memory/recall",
         json={
             "user_id": USER,
             "session_id": SESSION,
@@ -127,7 +118,7 @@ def main() -> int:
         status, body = wait_task(task_id)
         check(f"task[{rid}] L3 抽取 completed", status == "completed", f"status={status} {body}")
 
-    bg = client.get("/memory/l3/background-status").json()
+    bg = client.get("/v2/memory/l3/background-status").json()
     check("background-status 返回结构", {"write_mode", "pending_write_tasks"} <= set(bg), str(bg))
 
     # ── 2.5 L2 LLM 综合摘要（P0）：轮询直到 L2 层出现结构化 llm 摘要 ──
@@ -148,7 +139,7 @@ def main() -> int:
     check("L2 LLM 综合摘要生成并进入召回", llm_l2_seen, "180s 内未见【主题】结构化摘要")
 
     # ── 3. items 本地索引可见性 ────────────────────────────────────
-    items = client.get("/memory/items", params={"user_id": USER}).json()
+    items = client.get("/v2/memory/items", params={"user_id": USER}).json()
     texts = [item["content"] for item in items.get("items", [])]
     print(f"  items={len(texts)}: {texts}")
     check("items 至少 1 条 L3 记忆", len(texts) >= 1, str(texts))
@@ -174,7 +165,7 @@ def main() -> int:
         target = items["items"][0]
         new_text = (target["content"] + "（用户确认补充）").strip()
         upd = client.post(
-            "/memory/update",
+            "/v2/memory/update",
             json={
                 "request_id": f"req-upd-{uuid.uuid4().hex[:6]}",
                 "user_id": USER,
@@ -188,7 +179,7 @@ def main() -> int:
             status, _ = wait_task(upd.json().get("task_id", ""), timeout=120)
             check("update 任务完成", status == "completed", status)
             got = client.get(
-                "/memory/items/" + target["memory_id"], params={"user_id": USER}
+                "/v2/memory/items/" + target["memory_id"], params={"user_id": USER}
             ).json()
             check(
                 "update 内容生效",
@@ -199,7 +190,7 @@ def main() -> int:
     # ── 6. delete 会话级删除 + 幂等 ────────────────────────────────
     op = f"op-del-{uuid.uuid4().hex[:6]}"
     dele = client.post(
-        "/memory/delete",
+        "/v2/memory/delete",
         json={
             "request_id": f"req-del-{uuid.uuid4().hex[:6]}",
             "user_id": USER,
@@ -212,7 +203,7 @@ def main() -> int:
     status, body = wait_task(dele.json().get("task_id", ""), timeout=300)
     check("delete 任务 completed", status == "completed", f"{status} {body}")
     again = client.post(
-        "/memory/delete",
+        "/v2/memory/delete",
         json={
             "request_id": f"req-del2-{uuid.uuid4().hex[:6]}",
             "user_id": USER,

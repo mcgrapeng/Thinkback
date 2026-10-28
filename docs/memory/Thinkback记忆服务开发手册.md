@@ -340,7 +340,7 @@ lsof -iTCP:8000 -sTCP:LISTEN
 
 ### L3 pending 队列持续增长
 
-先观察 `/memory/l3/background-status`。如果 pending 线性增长但没有错误，通常表示外部 LLM、Embedding、Milvus 或本机资源处理速度低于写入速度。当前本地默认 `MEMORY_BACKEND_MAX_CONCURRENT_CALLS=4` 偏保守；是否调高应基于目标主机压测，不应只根据本机硬件做最终判断。
+先观察 `/v2/memory/l3/background-status`。如果 pending 线性增长但没有错误，通常表示外部 LLM、Embedding、Milvus 或本机资源处理速度低于写入速度。当前本地默认 `MEMORY_BACKEND_MAX_CONCURRENT_CALLS=4` 偏保守；是否调高应基于目标主机压测，不应只根据本机硬件做最终判断。
 
 ## 9. 提交前检查清单
 

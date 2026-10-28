@@ -55,28 +55,31 @@ def test_openapi_schema_does_not_expose_internal_scope_fields(client) -> None:
 def test_openapi_schema_documents_memory_workflow_operations(client) -> None:
     schema = client.get("/openapi.json").json()
 
-    assert schema["paths"]["/memory/append"]["post"]["summary"] == "写入一轮对话记忆"
-    assert schema["paths"]["/memory/append"]["post"]["operationId"] == "memory_append"
-    assert "完整 user -> assistant 轮次" in schema["paths"]["/memory/append"]["post"]["description"]
-    assert schema["paths"]["/memory/recall"]["post"]["summary"] == "召回用户相关记忆"
-    assert schema["paths"]["/memory/recall"]["post"]["operationId"] == "memory_recall"
-    assert "L1/L2/L3" in schema["paths"]["/memory/recall"]["post"]["description"]
-    assert schema["paths"]["/memory/delete"]["post"]["summary"] == "删除记忆或记忆范围"
-    assert schema["paths"]["/memory/delete"]["post"]["operationId"] == "memory_delete"
-    assert schema["paths"]["/memory/items"]["get"]["summary"] == "列出可管理的长期记忆"
-    assert schema["paths"]["/memory/items"]["get"]["operationId"] == "memory_list_items"
-    assert schema["paths"]["/memory/items/{memory_id}"]["get"]["summary"] == "查询单条可管理记忆"
-    assert schema["paths"]["/memory/items/{memory_id}"]["get"]["operationId"] == "memory_get_item"
-    assert schema["paths"]["/memory/update"]["post"]["summary"] == "编辑单条长期记忆"
-    assert schema["paths"]["/memory/update"]["post"]["operationId"] == "memory_update_item"
-    assert "/memory/rebuild" not in schema["paths"]
-    assert schema["paths"]["/memory/tasks/{task_id}"]["get"]["summary"] == "查询记忆后台任务"
-    assert schema["paths"]["/memory/tasks/{task_id}"]["get"]["operationId"] == "memory_get_task"
+    assert schema["paths"]["/v2/memory/events"]["post"]["summary"] == "写入一条原始事件"
+    assert schema["paths"]["/v2/memory/events"]["post"]["operationId"] == "memory_append_event"
+    assert "SourceEvent" in schema["paths"]["/v2/memory/events"]["post"]["description"]
+    assert schema["paths"]["/v2/memory/recall"]["post"]["summary"] == "召回用户相关记忆"
+    assert schema["paths"]["/v2/memory/recall"]["post"]["operationId"] == "memory_recall"
+    assert "L1/L2/L3" in schema["paths"]["/v2/memory/recall"]["post"]["description"]
+    assert schema["paths"]["/v2/memory/delete"]["post"]["summary"] == "删除记忆或记忆范围"
+    assert schema["paths"]["/v2/memory/delete"]["post"]["operationId"] == "memory_delete"
+    assert schema["paths"]["/v2/memory/items"]["get"]["summary"] == "列出可管理的长期记忆"
+    assert schema["paths"]["/v2/memory/items"]["get"]["operationId"] == "memory_list_items"
+    assert schema["paths"]["/v2/memory/items/{memory_id}"]["get"]["summary"] == "查询单条可管理记忆"
     assert (
-        schema["paths"]["/memory/l3/background-status"]["get"]["summary"] == "查看 L3 后台队列状态"
+        schema["paths"]["/v2/memory/items/{memory_id}"]["get"]["operationId"] == "memory_get_item"
+    )
+    assert schema["paths"]["/v2/memory/update"]["post"]["summary"] == "编辑单条长期记忆"
+    assert schema["paths"]["/v2/memory/update"]["post"]["operationId"] == "memory_update_item"
+    assert "/v2/memory/rebuild" not in schema["paths"]
+    assert schema["paths"]["/v2/memory/tasks/{task_id}"]["get"]["summary"] == "查询记忆后台任务"
+    assert schema["paths"]["/v2/memory/tasks/{task_id}"]["get"]["operationId"] == "memory_get_task"
+    assert (
+        schema["paths"]["/v2/memory/l3/background-status"]["get"]["summary"]
+        == "查看 L3 后台队列状态"
     )
     assert (
-        schema["paths"]["/memory/l3/background-status"]["get"]["operationId"]
+        schema["paths"]["/v2/memory/l3/background-status"]["get"]["operationId"]
         == "memory_l3_background_status"
     )
 
@@ -86,13 +89,13 @@ def test_openapi_schema_documents_memory_request_and_response_fields(client) -> 
     components = schema["components"]["schemas"]
 
     schema_names = [
-        "MemoryMessage",
-        "AppendMemoryRequest",
         "RecallMemoryRequest",
         "DeleteMemoryRequest",
         "UpdateMemoryRequest",
         "MemoryItem",
         "ManagedMemoryItem",
+        "AppendEventRequest",
+        "SourceEvent",
         "AppendMemoryResponse",
         "RecallMemoryResponse",
         "DeleteMemoryResponse",
@@ -108,7 +111,7 @@ def test_openapi_schema_documents_memory_request_and_response_fields(client) -> 
         for field_name, field_schema in properties.items():
             assert field_schema.get("description"), f"{schema_name}.{field_name}"
 
-    task_id_param = schema["paths"]["/memory/tasks/{task_id}"]["get"]["parameters"][0]
+    task_id_param = schema["paths"]["/v2/memory/tasks/{task_id}"]["get"]["parameters"][0]
     assert task_id_param["name"] == "task_id"
     assert task_id_param["description"] == "要查询的记忆后台任务 ID。"
     assert (
@@ -119,9 +122,9 @@ def test_openapi_schema_documents_memory_request_and_response_fields(client) -> 
     assert "backend_memory_id" not in str(components["ManagedMemoryItem"])
     assert "source_refs" not in str(components["ManagedMemoryItem"])
 
-    l3_status_response = schema["paths"]["/memory/l3/background-status"]["get"]["responses"]["200"][
-        "content"
-    ]["application/json"]["schema"]
+    l3_status_response = schema["paths"]["/v2/memory/l3/background-status"]["get"]["responses"][
+        "200"
+    ]["content"]["application/json"]["schema"]
     assert l3_status_response["$ref"] == "#/components/schemas/L3BackgroundStatusResponse"
 
 

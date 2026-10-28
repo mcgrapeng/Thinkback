@@ -78,7 +78,7 @@ Manifests are in `k8s/`:
   `networkpolicy.yaml` is inert and the service stays reachable from every pod.
 - **A labelled caller namespace.** The business API has no caller authentication by
   design (see [the architecture note](memory/Thinkback记忆三层架构.md) §0.1), so the
-  network boundary is the only thing keeping other workloads out of `/memory/*`:
+  network boundary is the only thing keeping other workloads out of `/v2/memory/*`:
 
   ```bash
   kubectl label namespace <your-gateway-ns> thinkback.io/allowed-caller-namespace=true

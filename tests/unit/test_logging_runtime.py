@@ -15,22 +15,13 @@ def _append_payload() -> dict[str, object]:
         "request_id": "req-r1",
         "user_id": "user-1",
         "session_id": "session-1",
-        "round_id": "round-1",
-        "messages": [
-            {
-                "message_id": "m1",
-                "role": "user",
-                "content": "我不喜欢被催睡觉",
-                "timestamp": "2026-05-04T10:00:00Z",
-            },
-            {
-                "message_id": "m2",
-                "role": "assistant",
-                "content": "我会记住这个边界。",
-                "timestamp": "2026-05-04T10:00:03Z",
-            },
-        ],
-        "source_timestamp": "2026-05-04T10:00:03Z",
+        "event": {
+            "event_id": "round-1",
+            "source": "chat_round",
+            "role": "user",
+            "payload": "我不喜欢被催睡觉",
+            "occurred_at": "2026-05-04T10:00:03Z",
+        },
     }
 
 
@@ -199,7 +190,7 @@ def test_memory_append_route_preserves_trace_id_through_worker_threads(client, m
 
     try:
         response = client.post(
-            "/memory/append",
+            "/v2/memory/events",
             json=_append_payload(),
             headers={"X-Request-Id": "trace-api"},
         )

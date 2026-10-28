@@ -296,7 +296,7 @@ def test_memory_routes_call_sync_service_in_threadpool() -> None:
     assert "loop.call_soon_threadsafe(slots.release)" in source
     assert "deadline = monotonic() + wait_seconds" in source
     assert "asyncio.wait_for(" in source
-    assert "_run_write_memory_call(service.append, request)" in source
+    assert "_run_write_memory_call(service.append, request.to_internal())" in source
     assert "_run_read_memory_call(service.recall, request)" in source
     assert "_run_write_memory_call(service.delete, request)" in source
 
