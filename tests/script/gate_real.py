@@ -25,6 +25,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -252,7 +253,7 @@ def history_residue(history_db_path: str, marker: str) -> tuple[int, int]:
 
 
 def _milvus_rows(settings: Settings, user_id: str) -> int:
-    """该用户在 Milvus 主 collection 里还剩多少行。"""
+    """该用户在 Milvus 里还剩多少行（主集合 + 迁移窗口的镜像集合）。"""
     try:
         from pymilvus import MilvusClient
 
@@ -261,12 +262,18 @@ def _milvus_rows(settings: Settings, user_id: str) -> int:
             token=settings.milvus_token or "",
             db_name=settings.milvus_database,
         )
-        rows = client.query(
-            collection_name=settings.memory_milvus_collection,
-            filter=f'metadata["user_id"] == "{user_id}"',
-            output_fields=["id"],
-        )
-        return len(rows)
+        collections = [settings.memory_milvus_collection]
+        if settings.memory_milvus_mirror_collection:
+            collections.append(settings.memory_milvus_mirror_collection)
+        total = 0
+        for collection in collections:
+            rows = client.query(
+                collection_name=collection,
+                filter=f'metadata["user_id"] == "{user_id}"',
+                output_fields=["id"],
+            )
+            total += len(rows)
+        return total
     except Exception as exc:  # noqa: BLE001 - 残留检查失败本身要报出来
         print(f"  WARN Milvus 残留检查失败: {type(exc).__name__}: {exc}")
         return -1
@@ -324,10 +331,15 @@ def _sample_terms(settings: Settings) -> tuple[str | None, str | None]:
 
 
 def _bm25_probe(settings: Settings, term: str | None) -> tuple[bool, str]:
-    """在主集合上做一次 BM25 稀疏检索，看这个词能不能命中。"""
+    """在主集合上做一次 BM25 稀疏检索，看这个词能不能命中。
+
+    报告与终端里都只留词的长度与哈希：抽样词取自真实内容，把它原样写进
+    归档报告或日志等于把客户内容抄进产物。
+    """
 
     if not term:
         return False, "集合里没有可抽样的词"
+    fingerprint = f"len={len(term)} sha={hashlib.sha256(term.encode()).hexdigest()[:12]}"
     try:
         client = _collection_client(settings)
     except Exception as exc:  # noqa: BLE001 - 失败要报出来
@@ -338,7 +350,7 @@ def _bm25_probe(settings: Settings, term: str | None) -> tuple[bool, str]:
             data=[term],
             anns_field="sparse",
             limit=3,
-            output_fields=["text"],
+            output_fields=["id"],
         )
     except Exception as exc:  # noqa: BLE001 - 失败要报出来
         return False, f"{type(exc).__name__}: {exc}"
@@ -346,7 +358,8 @@ def _bm25_probe(settings: Settings, term: str | None) -> tuple[bool, str]:
         client.close()
     score = float(hits[0][0]["distance"]) if hits and hits[0] else 0.0
     hit_id = hits[0][0]["id"] if hits and hits[0] else None
-    return score > 0, f"词 {term!r} -> 命中 {hit_id} score={score:.3f}"
+    print(f"  抽样词指纹 {fingerprint}")
+    return score > 0, f"抽样词 {fingerprint} -> 命中 {hit_id} score={score:.3f}"
 
 
 def _write_report(settings: Settings) -> Path:

@@ -61,6 +61,57 @@ class CollectionState:
     detail: str = ""
 
 
+def connect(*, url: str, database: str, token: str | None = None) -> Any:
+    """连 Milvus 的客户端工厂。
+
+    记忆层不直接碰 Milvus SDK（边界测试钉着这条），所有客户端都从这里拿。
+    """
+
+    from pymilvus import MilvusClient
+
+    return MilvusClient(uri=url, token=token or None, db_name=database)
+
+
+def scope_ids(
+    *,
+    client: Any,
+    collection: str,
+    user_id: str,
+    agent_id: str,
+    limit: int,
+) -> list[str]:
+    """集合里属于该作用域的记忆 ID。
+
+    口径与 mem0 一致：user_id / agent_id 都在 metadata JSON 里。
+    """
+
+    escaped_user = user_id.replace("\\", "\\\\").replace('"', '\\"')
+    escaped_agent = agent_id.replace("\\", "\\\\").replace('"', '\\"')
+    rows = client.query(
+        collection_name=collection,
+        filter=(
+            f'metadata["user_id"] == "{escaped_user}" and metadata["agent_id"] == "{escaped_agent}"'
+        ),
+        output_fields=[ID_FIELD],
+        limit=limit,
+    )
+    return [str(row.get(ID_FIELD, "")) for row in rows or [] if row.get(ID_FIELD)]
+
+
+def present_ids(*, client: Any, collection: str, memory_ids: list[str]) -> set[str]:
+    """集合里还在的记忆 ID（给定候选 ID 集合）。"""
+
+    if not memory_ids:
+        return set()
+    quoted = ", ".join(f'"{memory_id}"' for memory_id in memory_ids)
+    rows = client.query(
+        collection_name=collection,
+        filter=f"{ID_FIELD} in [{quoted}]",
+        output_fields=[ID_FIELD],
+    )
+    return {str(row.get(ID_FIELD, "")) for row in rows or [] if row.get(ID_FIELD)}
+
+
 @dataclass(frozen=True)
 class MilvusMirror:
     """迁移窗口里的次集合：双写目标 + 双读回落源。

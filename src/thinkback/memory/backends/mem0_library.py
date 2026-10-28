@@ -197,6 +197,7 @@ class Mem0LibraryMemoryBackend:
         self.mirror = mirror
         self._mirror_client: Any | None = None
         self._mirror_memory: Any | None = None
+        self._primary_client: Any | None = None
         # 读、写两把独立的并发预算。
         # 写路径要打 LLM（抽取，慢），读路径只要 embedding + 向量检索（快）。
         # 共用一把信号量时，写积压会把读饿死：实测 4 路并发写入时 add 耗时
@@ -518,13 +519,29 @@ class Mem0LibraryMemoryBackend:
     def get_all(
         self, *, user_id: str, memory_scope_id: str, limit: int = 200
     ) -> list[dict[str, Any]]:
-        """列出该 user+scope 的后端记忆（含 metadata），用于重试对账。"""
+        """列出该 user+scope 的后端记忆（含 metadata），用于重试对账。
+
+        迁移窗口内还要带上镜像集合里的记录：主集合与镜像集合是同一份逻辑
+        数据的两个副本，擦除复核与 ALL 范围删除都要按并集算，否则镜像里
+        残留的记录既查不出来也删不掉。镜像列不出来时异常照旧往上抛 ——
+        擦除复核会把它当成「未能证明已删」而失败重试。
+        """
         result = self._call(
             "get_all",
             **self._scope_kwargs("get_all", user_id=user_id, memory_scope_id=memory_scope_id),
             **self._limit_kwargs("get_all", min(limit, MEMORY_LIST_PAGE_LIMIT)),
         )
-        return self._results(result)
+        items = self._results(result)
+        if self.mirror is None:
+            return items
+        known = {str(item.get("id", "")) for item in items}
+        for memory_id in self._mirror_scope_ids(
+            user_id=user_id, memory_scope_id=memory_scope_id, limit=limit
+        ):
+            if memory_id and memory_id not in known:
+                known.add(memory_id)
+                items.append({"id": memory_id, "metadata": {}})
+        return items
 
     def delete_all(self, *, user_id: str, memory_scope_id: str) -> int:
         """删除指定用户和记忆范围内的所有后端记忆。
@@ -866,14 +883,68 @@ class Mem0LibraryMemoryBackend:
         store = self.config.get("vector_store", {}).get("config", {})
         return str(store.get("collection_name", ""))
 
-    def _mirror_handle(self) -> Any | None:
+    def _mirror_handle(self) -> Any:
         """镜像集合的 Milvus 客户端（懒构造）。"""
 
         if self.mirror is None:
-            return None
+            raise RuntimeError("mirror collection is not configured")
         if self._mirror_client is None:
             self._mirror_client = self.mirror.client()
         return self._mirror_client
+
+    def _primary_handle(self) -> Any:
+        """主集合的 Milvus 客户端（懒构造）。
+
+        镜像回落要核对主集合里这条还在不在，主集合的 mem0 客户端不暴露这层
+        能力，所以自己握一个客户端 —— 从 infra 拿，记忆层不直接碰 Milvus SDK。
+        """
+
+        if self._primary_client is None:
+            from thinkback.infra.milvus_collection import connect
+
+            store = self.config.get("vector_store", {}).get("config", {})
+            self._primary_client = connect(
+                url=str(store.get("url", "")),
+                database=str(store.get("db_name", "")),
+                token=str(store.get("token", "")),
+            )
+        return self._primary_client
+
+    def _mirror_scope_ids(self, *, user_id: str, memory_scope_id: str, limit: int) -> list[str]:
+        """镜像集合里属于该作用域的记忆 ID。
+
+        列不出来就往上抛：擦除复核把这个异常当成「未能证明已删」，任务失败
+        重试，而不是当作「镜像里没有数据」。
+        """
+
+        if self.mirror is None:
+            return []
+        from thinkback.infra.milvus_collection import scope_ids
+
+        return scope_ids(
+            client=self._mirror_handle(),
+            collection=self.mirror.collection,
+            user_id=user_id,
+            agent_id=memory_scope_id,
+            limit=limit,
+        )
+
+    def _primary_present_ids(self, memory_ids: list[str]) -> set[str]:
+        """主集合里还在的记忆 ID。
+
+        镜像回落只能补主集合有的东西：主集合里已经删掉的（擦除已完成），
+        镜像里若还留着就说明镜像删除失败，直接补进来等于把已擦除的事实复活。
+        """
+
+        if not memory_ids:
+            return set()
+        from thinkback.infra.milvus_collection import present_ids
+
+        return present_ids(
+            client=self._primary_handle(),
+            collection=self._primary_collection(),
+            memory_ids=memory_ids,
+        )
 
     def _mirror_write(self, memory_ids: list[str]) -> None:
         """双写：把刚写的行搬到次集合。
@@ -910,7 +981,11 @@ class Mem0LibraryMemoryBackend:
             time.sleep(delay)
 
     def _mirror_delete(self, memory_ids: list[str]) -> None:
-        """双写窗口内的删除同步：旧集合必须跟着删，否则回滚会把已擦除事实带回来。"""
+        """双写窗口内的删除同步：旧集合必须跟着删，否则回滚会把已擦除事实带回来。
+
+        失败必须往上抛：吞掉异常等于宣称「已擦除」，而旧集合里还留着原文，
+        回滚时它会重新出现在召回里。擦除要么做完，要么失败重试（ADR-0001）。
+        """
 
         if self.mirror is None or not memory_ids:
             return
@@ -921,8 +996,9 @@ class Mem0LibraryMemoryBackend:
                 ids=memory_ids,
             )
             logger.bind(deleted=len(memory_ids)).info("memory mirror delete completed")
-        except Exception as exc:  # noqa: BLE001 - 镜像失败不阻断主删除
+        except Exception as exc:
             logger.bind(error_type=type(exc).__name__).warning("memory mirror delete failed")
+            raise
 
     def _mirror_memory_client(self) -> Any:
         """镜像集合上的 mem0 客户端（懒构造）。
@@ -979,10 +1055,29 @@ class Mem0LibraryMemoryBackend:
         if not extra:
             return items
         seen = {str(item.get("id", "")) for item in items}
+        candidates = [
+            str(item.get("id", "")) for item in extra if str(item.get("id", "")) not in seen
+        ]
+        if not candidates:
+            return items
+        # 只补主集合里还在的：主集合删掉的（擦除已完成）若镜像里还留着，
+        # 补进来等于把已擦除的事实复活。核对失败就不回落 —— 主集合的结果
+        # 仍然可用，缺几条回落比放进一条已擦除的事实安全。
+        try:
+            alive = self._primary_present_ids(candidates)
+        except Exception as exc:  # noqa: BLE001 - 核对失败只放弃回落
+            logger.bind(error_type=type(exc).__name__).warning(
+                "memory mirror presence check failed; fallback skipped"
+            )
+            return items
         merged = list(items)
+        skipped = 0
         for item in extra:
             key = str(item.get("id", ""))
             if key in seen:
+                continue
+            if key not in alive:
+                skipped += 1
                 continue
             seen.add(key)
             merged.append(item)
@@ -990,6 +1085,7 @@ class Mem0LibraryMemoryBackend:
             primary_count=len(items),
             mirror_count=len(extra),
             merged_count=len(merged),
+            skipped_absent_in_primary=skipped,
         ).info("memory mirror search merged")
         return merged[:limit]
 
