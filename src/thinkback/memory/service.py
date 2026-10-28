@@ -4772,8 +4772,21 @@ L2 更新 (缓存失效)
         # P0 白名单 gate（MEMORY_P0_SLOTS 配置）：
         # - 留空（默认）= ``is_p0_supported`` 永远 True = 全部进本地 MemoryRecord
         # - 非空 = slot 不在白名单的 memory 被跳过本地索引，但保留在 mem0 供 /recall
-        # 不删 mem0 那条记录——之前误删导致 /recall 的 L3 召回也丢事实。
+        # 准入不通过时，本地不索引。
+        # - 已有本地索引行（existing）：保留后端记录。它此前是可见的，删掉会
+        #   让 /recall 丢掉这条事实（历史上就是这么丢的）。
+        # - 没有本地索引行（existing is None）：这条记录从未可见，留在后端就是
+        #   不可召回、不可按条管理的暗数据。抽取前后必须同一口径：把它删掉，
+        #   要么进索引、要么不存在。
         if not is_p0_supported:
+            if existing is None:
+                pending_backend_writes.append(
+                    _BackendDeleteSync(memory_id=backend_id, backend=self.backend)
+                )
+                index_log.bind(reason="unsupported_by_source").info(
+                    "memory l3 event rejected and backend record removed"
+                )
+                return pending_backend_writes
             index_log.bind(reason="unsupported_by_source").info("memory l3 event indexing skipped")
             return pending_backend_writes
         valid_at, expires_at, recorded_at = self._index_lifecycle(l3_metadata, memory_scope_id)
