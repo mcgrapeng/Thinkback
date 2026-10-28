@@ -89,8 +89,9 @@ class _ExtractingBackend(FakeMemoryBackend):
         metadata: dict[str, Any] | None = None,
         infer: bool = True,
         expiration_date: str | None = None,
+        prompt: str | None = None,
     ) -> list[dict[str, Any]]:
-        _ = (infer, expiration_date)
+        _ = (infer, expiration_date, prompt)
         text = " ".join(
             message["content"].strip() for message in messages if message.get("content", "").strip()
         )
