@@ -28,6 +28,7 @@ from thinkback.domain.memory_types import (
 from thinkback.domain.summarization import SummaryComposer
 from thinkback.infra.config import Settings, settings
 from thinkback.infra.llm import OpenAICompatibleLLMClient
+from thinkback.infra.milvus_collection import MilvusMirror
 from thinkback.memory.backends import (
     Mem0LibraryMemoryBackend,
     MemoryBackend,
@@ -134,9 +135,19 @@ def get_memory_backend(config: Settings | None = None) -> MemoryBackend:
         embedding_model_dims=current_settings.memory_embedding_dims,
         history_db_path=current_settings.mem0_history_db_path,
     )
+    mirror = None
+    if current_settings.memory_milvus_mirror_collection:
+        mirror = MilvusMirror(
+            url=current_settings.milvus_url,
+            database=current_settings.milvus_database,
+            collection=current_settings.memory_milvus_mirror_collection,
+            token=current_settings.milvus_token,
+        )
     backend = Mem0LibraryMemoryBackend(
         config=mem0_config,
         max_concurrent_calls=current_settings.memory_backend_max_concurrent_calls,
+        collection_analyzer=current_settings.memory_milvus_analyzer,
+        mirror=mirror,
     )
     backend_log.debug("memory backend initialized")
     return backend

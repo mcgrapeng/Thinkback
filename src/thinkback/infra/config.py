@@ -84,6 +84,13 @@ class Settings(BaseSettings):
         description="Embedding API key; optional — leave empty when the endpoint needs no auth",
     )
     memory_milvus_collection: str = "thinkback"
+    # Milvus ``text`` 字段的分析器。集合由 Thinkback 预建（ADR-0007）：
+    # mem0 自建集合不带 analyzer_params，中文整句被当成一个词，BM25 对中文恒为 0。
+    # Milvus 不允许原地改分析器，改不动就走迁移重建（script/migrate_milvus_collection.py）。
+    memory_milvus_analyzer: str = "chinese"
+    # 迁移窗口的次集合（双写 + 双读回落）。留空表示迁移不在窗口内。
+    # 回滚只需清掉它、把 MEMORY_MILVUS_COLLECTION 改回旧集合名。
+    memory_milvus_mirror_collection: str = ""
     memory_embedding_dims: int = 1024
     memory_llm_model: str = "qwen-plus-latest"
     memory_embedding_model: str = "default-embedding"

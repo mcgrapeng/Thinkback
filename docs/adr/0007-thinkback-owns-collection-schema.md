@@ -7,3 +7,17 @@ Thinkback 自己创建并持有 Milvus collection 的 schema，mem0 发现 colle
 代价：schema 归我们管，mem0 升级时它的建表逻辑变化不会自动生效，必须由我们的兼容测试兜住。collection 重建按新建加复制式回填执行，不重新抽取事实。
 
 切换窗口采用双写：写同时进新旧两个集合，回滚只需把配置改回旧集合名，不需要补数据，回滚时数据缺口的风险消失。双读窗口 48 小时，召回读新集合、未命中回落旧集合，切换判据是新集合行数与旧集合一致且抽样召回通过。旧集合至少保留 30 天再清理。窗口名与回滚步骤写进运行手册。
+
+实测确定的三件事（Milvus 2.6.15）：
+
+- 分析器类型是 `chinese`（服务端内置的 jieba 分词）。`jieba` 与 `multilingual`
+  这两个名字服务端不接受，建集合时报 tokenizer 创建失败。同一段内容查
+  「气浮平台」：`standard` 无命中，`chinese` 命中。
+- 分析器不能原地改：`alter_collection_field` 对 analyzer_params 与
+  enable_analyzer 都返回 `does not allow update`。换分析器只能重建集合。
+- 「行数一致」的判据用可见行数（query 出来的行），不用
+  `get_collection_stats` 的 row_count —— 后者把已删除未压实的墓碑行也算进去，
+  同一集合报 252 而实际可见 240，用它当判据永远对不上。
+
+双写的粒度是行搬运而不是二次抽取：写完把新行按 id 搬到旧集合，删除与修改
+同样同步，否则回滚会把已擦除的事实带回来。回退路径不补数据。
