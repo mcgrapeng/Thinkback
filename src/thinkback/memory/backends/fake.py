@@ -40,9 +40,11 @@ class FakeMemoryBackend:
         metadata: dict[str, Any] | None = None,
         infer: bool = True,
         expiration_date: str | None = None,
+        prompt: str | None = None,
     ) -> list[dict[str, Any]]:
         _ = infer  # fake backend 不做 LLM 抽取，参数仅用于协议兼容
         _ = expiration_date  # fake backend 不实现过期，参数仅用于协议兼容
+        _ = prompt  # fake backend 不做抽取，指令仅用于协议兼容
         text = " ".join(
             message["content"].strip() for message in messages if message.get("content", "").strip()
         )
@@ -69,8 +71,10 @@ class FakeMemoryBackend:
         memory_scope_id: str,
         limit: int,
         threshold: float | None = None,
+        explain: bool = False,
     ) -> list[dict[str, Any]]:
         _ = threshold
+        _ = explain  # fake backend 不给分数分解，仅用于协议兼容
         query_terms = {part for part in query.lower().split() if part}
         query_chunks = {query[index : index + 2] for index in range(max(0, len(query) - 1))}
         results: list[dict[str, Any]] = []

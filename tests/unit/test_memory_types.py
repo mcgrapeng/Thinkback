@@ -71,25 +71,96 @@ def test_registry_from_dict_keeps_config_values() -> None:
     assert registry.namespace == "semiconductor"
 
 
-def test_registry_drops_config_without_behavior() -> None:
-    """没有行为消费者的配置项直接不认：不能给人「配了就生效」的错觉。"""
-    registry = registry_from_dict(
-        {
-            "types": {
-                "profile": {
-                    "extractor": "mem0",
-                    "entity_vocabulary": ["CMP"],
-                    "recall_budget": 400,
-                    "layer": "L3",
-                }
-            }
-        },
-        namespace="semiconductor",
-    )
+def test_registry_rejects_unknown_fields() -> None:
+    """未知字段直接报错，不静默忽略。
 
-    spec = registry.get("profile")
-    assert not hasattr(spec, "entity_vocabulary")
-    assert not hasattr(spec, "recall_budget")
+    写错字段名而静默忽略是最难查的一类配置问题：配置看起来生效了，实际
+    跑的是另一套规则。D29。
+    """
+    with pytest.raises(ValueError, match="unknown fields"):
+        registry_from_dict(
+            {
+                "types": {
+                    "profile": {
+                        "extractor": "mem0",
+                        "source_roles": ["user"],
+                        "conflict": "overwrite",
+                        "retention": "forever",
+                        "classification": "personal",
+                        "entity_vocabulary": ["CMP"],
+                    }
+                }
+            },
+            namespace="semiconductor",
+        )
+
+
+def test_registry_requires_core_fields() -> None:
+    """缺必填字段直接报错：静默用默认值等于跑另一套策略。"""
+    with pytest.raises(ValueError, match="missing required fields"):
+        registry_from_dict(
+            {"types": {"profile": {"extractor": "mem0"}}},
+            namespace="semiconductor",
+        )
+
+
+def test_registry_rejects_ttl_without_days() -> None:
+    """retention=ttl 必须给 ttl_days，否则过期语义是假的。"""
+    with pytest.raises(ValueError, match="ttl_days"):
+        registry_from_dict(
+            {
+                "types": {
+                    "state": {
+                        "extractor": "mem0",
+                        "source_roles": ["user"],
+                        "conflict": "overwrite",
+                        "retention": "ttl",
+                        "classification": "personal",
+                    }
+                }
+            },
+            namespace="semiconductor",
+        )
+
+
+def test_registry_rejects_reviewed_type_accepting_user_role() -> None:
+    """要审批的类型不能接受 user 来源：审批就没有意义了。"""
+    with pytest.raises(ValueError, match="review_required"):
+        registry_from_dict(
+            {
+                "types": {
+                    "procedure": {
+                        "extractor": "none",
+                        "source_roles": ["user", "admin"],
+                        "conflict": "none",
+                        "retention": "forever",
+                        "classification": "restricted",
+                        "review_required": True,
+                    }
+                }
+            },
+            namespace="semiconductor",
+        )
+
+
+def test_registry_rejects_prompt_path_escape() -> None:
+    """抽取指令路径必须留在 profile 目录内。"""
+    with pytest.raises(ValueError, match="relative path"):
+        registry_from_dict(
+            {
+                "types": {
+                    "profile": {
+                        "extractor": "mem0",
+                        "source_roles": ["user"],
+                        "conflict": "overwrite",
+                        "retention": "forever",
+                        "classification": "personal",
+                        "extraction_prompt": "../../etc/passwd",
+                    }
+                }
+            },
+            namespace="semiconductor",
+        )
 
 
 def test_load_registry_reads_namespace_profile(tmp_path: Path) -> None:
@@ -102,6 +173,7 @@ def test_load_registry_reads_namespace_profile(tmp_path: Path) -> None:
                         "source_roles": ["user"],
                         "classification": "personal",
                         "conflict": "overwrite",
+                        "retention": "forever",
                     }
                 }
             }
@@ -129,7 +201,17 @@ def test_unknown_classification_in_profile_is_rejected_at_load() -> None:
     """配置里的分类级别必须是 DataClassification 的取值，载入时就报错。"""
     with pytest.raises(ValueError, match="unknown classification"):
         registry_from_dict(
-            {"types": {"x": {"classification": "confidential"}}},
+            {
+                "types": {
+                    "x": {
+                        "extractor": "mem0",
+                        "source_roles": ["user"],
+                        "conflict": "overwrite",
+                        "retention": "forever",
+                        "classification": "confidential",
+                    }
+                }
+            },
             namespace="semiconductor",
         )
 
