@@ -44,7 +44,10 @@ THINKBACK_CUSTOM_INSTRUCTIONS = """Additional requirements:
 3. Preserve Chinese entities verbatim (宠物名/昵称/地点/品牌逐字保留), including tone particles only when they are part of a name.
 4. Corrections write only the new value, never re-state the old one. When the user says "不叫 X，叫 Y" or "改成 Y", record only the new fact Y. Do NOT include X in the same memory text. The superseded memory is handled by a separate update path; your job is to surface the current truth, not the audit trail.
 5. One fact per memory. If a turn contains multiple distinct facts, emit one memory per fact. Never combine "X is Y" + "X is Z" into a single memory.
-6. Output must be pure Chinese characters and Chinese punctuation. Do NOT append a parenthetical pinyin transliteration (e.g. "Mashu (麻薯)"). Write only the entity value in Chinese.
+6. Keep the memory text in the SAME language as the source message, and keep
+       entity values verbatim in their original script. Do NOT transliterate
+       names, and do NOT append a parenthetical romanization
+       (e.g. "Mashu (麻薯)") — write only the entity value as it appeared.
 7. The "New Messages" section may contain ONLY a "user" message — the assistant has not replied yet, or the caller deliberately filtered assistant turns out. That is expected and normal: extract the user's facts from it anyway. NEVER return an empty list merely because there is no assistant turn to extract from.
 8. Facts include the user's own work and business context: responsibilities, process / equipment / tool facts, targets, requirements, constraints, deadlines, customer information, complaints, and numeric specifics (percentages, process nodes, tolerances). If the user's message contains ANY of these, extract at least one memory about it - returning an empty list for such a message is WRONG. Return an empty list ONLY for messages that truly contain no personal, work or business fact (pure greetings or acknowledgements)."""
 

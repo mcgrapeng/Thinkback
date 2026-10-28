@@ -390,7 +390,9 @@ class RebuildMemoryRequest(BaseModel):
 class MemoryItem(BaseModel):
     """单条召回记忆项
 
-    ``layer`` 表示来源层级（L1/L2/L3），``content`` 为脱敏后正文。
+    ``layer`` 表示来源层级（L1/L2/L3），``content`` 为记忆正文。
+    Thinkback **不做自动脱敏**：正文是调用方写入时的原文，调用方若需要
+    脱敏必须在写入前完成。
     L3 召回额外提供 ``memory_id`` 与 ``score``，用于调用方做来源回溯和置信度筛选。
     ``recall_count`` / ``last_recalled_at`` 仅 L3 有值，用于 S1 强度排序
     (recency × frequency)。

@@ -45,10 +45,16 @@ class MemoryStatus(StrEnum):
 
 
 class DataClassification(StrEnum):
-    """数据敏感等级。控制 L3 后端是否接收或存储"""
+    """数据敏感等级。控制 L3 后端是否接收或存储
+
+    语义边界（2026-10-28 复审）：
+    - NORMAL / PERSONAL：**允许**原文存储与外发，Thinkback 不做自动脱敏。
+      调用方负责在写入前完成脱敏。
+    - SENSITIVE / RESTRICTED：禁止落库与外发（含 L1、LLM、embedding、Mem0）。
+    """
 
     NORMAL = "normal"  # 常规数据，完全存储
-    PERSONAL = "personal"  # 个人身份相关，脱敏存储
+    PERSONAL = "personal"  # 个人身份相关，允许存储（调用方负责脱敏）
     SENSITIVE = "sensitive"  # 敏感内容（密钥、医疗等），不存储
     RESTRICTED = "restricted"  # 系统级元数据，不存储
 
