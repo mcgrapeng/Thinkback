@@ -30,7 +30,15 @@ if TYPE_CHECKING:
 class MemoryRepository(Protocol):
     def get_round(self, round_id: str) -> JournalEntry | None: ...
 
-    def save_round(self, request: AppendMemoryRequest) -> JournalEntry: ...
+    def save_round(
+        self, request: AppendMemoryRequest, *, request_metadata: dict[str, Any] | None = None
+    ) -> JournalEntry:
+        """落一条 L1 轮次。
+
+        ``request_metadata`` 是该轮的**生效**请求元数据（记忆类型、分类等
+        策略）：rebuild 回放时要靠它还原原始类型策略，不能退回默认 profile。
+        """
+        ...
 
     def update_l1(self, entry: JournalEntry, limit: int = 10) -> None: ...
 
@@ -115,6 +123,8 @@ class MemoryRepository(Protocol):
         backend_categories: list[str] | None = None,
         metadata: dict[str, Any] | None = None,
         valid_at: datetime | None = None,
+        expires_at: datetime | None = None,
+        recorded_at: datetime | None = None,
     ) -> MemoryIndexEntry: ...
 
     def active_memories(self, user_id: str, memory_scope_id: str) -> list[MemoryIndexEntry]: ...
@@ -138,6 +148,8 @@ class MemoryRepository(Protocol):
         backend_categories: list[str] | None = None,
         metadata: dict[str, Any] | None = None,
         valid_at: datetime | None = None,
+        expires_at: datetime | None = None,
+        recorded_at: datetime | None = None,
     ) -> MemoryIndexEntry | None: ...
 
     def mark_memory_deleted(self, memory_id: str) -> MemoryIndexEntry | None: ...

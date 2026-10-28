@@ -72,7 +72,9 @@ class InMemoryMemoryRepository(L1CacheMixin):
             super().update_l1(entry, limit=L1_CACHE_LIMIT)
         return super().get_l1(user_id, memory_scope_id, session_id)
 
-    def save_round(self, request: AppendMemoryRequest) -> JournalEntry:
+    def save_round(
+        self, request: AppendMemoryRequest, *, request_metadata: dict[str, Any] | None = None
+    ) -> JournalEntry:
         # 与 SQL 实现同语义：round_id 幂等、首写胜出（含 round_state），
         # 重复 save 不覆盖已存回合（append 重试不得复活/改写墓碑与 pending 态）。
         existing = self.journal_by_round.get(request.round_id)
@@ -97,6 +99,8 @@ class InMemoryMemoryRepository(L1CacheMixin):
             messages=messages,
             source_timestamp=request.source_timestamp,
             round_fingerprint=request_fingerprint(request),
+            namespace=request.namespace,
+            request_metadata=dict(request_metadata or {}),
         )
         self.journal_by_round[request.round_id] = entry
         return entry
@@ -251,6 +255,8 @@ class InMemoryMemoryRepository(L1CacheMixin):
         backend_categories: list[str] | None = None,
         metadata: dict[str, Any] | None = None,
         valid_at: datetime | None = None,
+        expires_at: datetime | None = None,
+        recorded_at: datetime | None = None,
     ) -> MemoryIndexEntry:
         existing = self.get_active_memory_by_backend_id(user_id, memory_scope_id, backend_memory_id)
         if existing is not None:
@@ -265,6 +271,8 @@ class InMemoryMemoryRepository(L1CacheMixin):
                 backend_categories=backend_categories,
                 metadata=metadata,
                 valid_at=valid_at,
+                expires_at=expires_at,
+                recorded_at=recorded_at,
             )
             if updated is not None:
                 return updated
@@ -282,6 +290,11 @@ class InMemoryMemoryRepository(L1CacheMixin):
             metadata=dict(metadata or {}),
             # P2#6：未显式给定时以写入时刻为事实生效时刻
             valid_at=valid_at or datetime.now(UTC),
+            # TTL 到期时刻：后端会隐藏过期记忆，本地索引必须记同一份，
+            # 否则过期事实会从本地召回/列表回流。
+            expires_at=expires_at,
+            # 记录时刻（本地写下这条事实的时刻）。
+            recorded_at=recorded_at or datetime.now(UTC),
         )
         self.memories[entry.memory_id] = entry
         return entry
@@ -327,6 +340,8 @@ class InMemoryMemoryRepository(L1CacheMixin):
         backend_categories: list[str] | None = None,
         metadata: dict[str, Any] | None = None,
         valid_at: datetime | None = None,
+        expires_at: datetime | None = None,
+        recorded_at: datetime | None = None,
     ) -> MemoryIndexEntry | None:
         memory = self.memories.get(memory_id)
         if memory is None:
@@ -342,6 +357,10 @@ class InMemoryMemoryRepository(L1CacheMixin):
         memory.metadata = dict(metadata or {})
         if valid_at is not None:
             memory.valid_at = valid_at
+        if expires_at is not None:
+            memory.expires_at = expires_at
+        if recorded_at is not None:
+            memory.recorded_at = recorded_at
         return memory
 
     def mark_memory_deleted(self, memory_id: str) -> MemoryIndexEntry | None:

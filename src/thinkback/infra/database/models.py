@@ -79,6 +79,12 @@ class SummaryRoundJournalRecord(Base):
     messages: Mapped[list[dict[str, str]]] = mapped_column(JSON)
     source_timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     round_state: Mapped[str] = mapped_column(String(32), default="active")
+    # 该轮写入的长期记忆作用域（namespace）：append 幂等的组成部分。
+    namespace: Mapped[str] = mapped_column(
+        String(128), default="thinkback", server_default="thinkback"
+    )
+    # 该轮的生效请求元数据（记忆类型/分类等策略）：rebuild 回放据此还原策略。
+    request_metadata: Mapped[dict[str, object]] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
@@ -123,6 +129,11 @@ class MemoryRecord(Base):
         DateTime(timezone=True), nullable=True
     )
     recall_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    # TTL 到期时刻（None = 永不过期）。后端会隐藏过期记忆，本地索引必须记
+    # 同一份到期时间，否则过期事实会从本地召回/列表回流。
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # 记录时刻（写下这条事实的时刻），与 valid_at（事实何时为真）区分。
+    recorded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()

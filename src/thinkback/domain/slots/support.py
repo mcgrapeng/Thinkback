@@ -14,7 +14,7 @@
 from __future__ import annotations
 
 import re
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 from thinkback.domain.keys import source_ref_key
@@ -71,13 +71,26 @@ def is_same_source_local_p0_memory(
 
 
 def round_order(
-    repository: MemoryRepository, user_id: str, session_id: str, round_id: str
+    repository: MemoryRepository,
+    user_id: str,
+    session_id: str,
+    round_id: str,
+    *,
+    source_timestamp: datetime | None = None,
 ) -> tuple[int, float, str]:
-    """回合的全序排序键：库内时间戳 > round_index > round_id 数字后缀。"""
+    """回合的全序排序键：来源时间 > 库内时间戳 > round_index > round_id 数字后缀。
+
+    ``source_timestamp`` 是调用方手里已经拿到的来源时间（外部历史回放时
+    库里没有这轮）。没有它时才会退回 round_id 数字——那只是权宜之计：
+    round_id 的字典序和事实新旧无关，外部历史里 "round-z" 并不比 "round-a"
+    新。
+    """
     entry = repository.get_round(round_id)
     normalized = round_id.lower()
     numbers = [int(part) for part in re.findall(r"\d+", normalized)]
     lexical_order = f"{numbers[-1]:020d}:{normalized}" if numbers else normalized
+    if isinstance(source_timestamp, datetime):
+        return (4, source_timestamp.timestamp(), lexical_order)
     if entry is not None and entry.user_id == user_id and entry.session_id == session_id:
         timestamp = entry.source_timestamp
         if isinstance(timestamp, datetime):
@@ -91,9 +104,17 @@ def round_order(
 
 
 def source_cursor_from_refs(
-    repository: MemoryRepository, user_id: str, raw_refs: list[dict[str, str]]
+    repository: MemoryRepository,
+    user_id: str,
+    raw_refs: list[dict[str, str]],
+    *,
+    source_timestamp: datetime | None = None,
 ) -> tuple[tuple[int, float, str], str, str] | None:
-    """一组来源引用中最新的回合游标。"""
+    """一组来源引用中最新的回合游标。
+
+    ``source_timestamp`` 是这批引用对应的来源时间（同一轮的所有引用共享
+    同一个时间）；有它时不再按 round_id 猜测新旧。
+    """
     refs: list[tuple[tuple[int, float, str], str, str]] = []
     for raw_ref in raw_refs:
         if not isinstance(raw_ref, dict):
@@ -105,7 +126,17 @@ def source_cursor_from_refs(
         session_key = str(session_id)
         round_key = str(round_id)
         refs.append(
-            (round_order(repository, user_id, session_key, round_key), session_key, round_key)
+            (
+                round_order(
+                    repository,
+                    user_id,
+                    session_key,
+                    round_key,
+                    source_timestamp=source_timestamp,
+                ),
+                session_key,
+                round_key,
+            )
         )
     if not refs:
         return None
@@ -115,11 +146,29 @@ def source_cursor_from_refs(
 def source_cursor(
     repository: MemoryRepository, user_id: str, metadata: dict[str, Any]
 ) -> tuple[tuple[int, float, str], str, str] | None:
-    """从记忆 metadata 的 source_refs 计算来源游标。"""
+    """从记忆 metadata 的 source_refs 计算来源游标。
+
+    metadata 里的 ``source_timestamp`` 是这批记忆的来源时间：有它就按真实
+    时间定新旧，没有才退回 round_id（外部历史回放时库里查不到源轮次）。
+    """
     raw_refs = metadata.get("source_refs")
     if not isinstance(raw_refs, list):
         return None
-    return source_cursor_from_refs(repository, user_id, raw_refs)
+    source_timestamp = _parse_source_timestamp(metadata.get("source_timestamp"))
+    return source_cursor_from_refs(repository, user_id, raw_refs, source_timestamp=source_timestamp)
+
+
+def _parse_source_timestamp(value: Any) -> datetime | None:
+    """解析 metadata 里的 ISO 来源时间；naive 按 UTC 处理。"""
+    if isinstance(value, datetime):
+        return value
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
 
 
 def source_has_any(source_text: str, markers: tuple[str, ...]) -> bool:
