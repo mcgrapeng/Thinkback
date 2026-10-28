@@ -125,11 +125,7 @@ def _without_rules(*rule_numbers: int) -> str:
     """
     lines = DEFAULT_EXTRACTION_INSTRUCTIONS.split("\n")
     dropped = set(rule_numbers)
-    kept = [
-        line
-        for index, line in enumerate(lines)
-        if index == 0 or (index - 1) not in dropped
-    ]
+    kept = [line for index, line in enumerate(lines) if index == 0 or (index - 1) not in dropped]
     return "\n".join(kept)
 
 
@@ -147,24 +143,33 @@ ABLATIONS: dict[str, str] = {
 #: 在现役指令上补「一条消息里的每件事实都要抽」：消融显示语言、输出形状、
 #: 一事一记忆、无 assistant 轮次这四条承重，不能删；缺口在第五条不够狠 ——
 #: 一条消息带两件事时模型常只给一条。
-V_MULTI_RULE = DEFAULT_EXTRACTION_INSTRUCTIONS + """
+V_MULTI_RULE = (
+    DEFAULT_EXTRACTION_INSTRUCTIONS
+    + """
 8. One message often carries two or more facts (which tool and which metrology tool, which process step and which defect, target and current value). Extract ALL of them: one memory per fact, never stop after the first."""
+)
 
 #: 再加一个两事实的示例，把输出形状落到具体条目上。
-V_MULTI_EXAMPLE = V_MULTI_RULE + """
+V_MULTI_EXAMPLE = (
+    V_MULTI_RULE
+    + """
 
 Example:
 Input: 刻蚀机台我们用 TEL 的 Divinity，量测用 KLA 的 2930。
 Output: {"memory": [{"id": "0", "text": "用户的刻蚀机台使用 TEL 的 Divinity。"}, {"id": "1", "text": "用户的量测设备使用 KLA 的 2930。"}]}"""
+)
 
 #: 中性示例：内容与评测语料、门禁语料都不重叠（物流场景，不是半导体）。
 #: 用语料里的内容做示例等于把评测题抄进提示词，覆盖率会虚高 —— 那版只作
 #: 对照，不作结论。
-V_MULTI_EXAMPLE_NEUTRAL = V_MULTI_RULE + """
+V_MULTI_EXAMPLE_NEUTRAL = (
+    V_MULTI_RULE
+    + """
 
 Example:
 Input: 我负责华东仓的库存周转，目标是每季度压到 4 轮。
 Output: {"memory": [{"id": "0", "text": "用户负责华东仓的库存周转。"}, {"id": "1", "text": "用户的库存周转目标是每季度压到 4 轮。"}]}"""
+)
 
 EXTRA_VARIANTS: dict[str, str] = {
     "multi_rule": V_MULTI_RULE,
