@@ -1678,6 +1678,7 @@ L2 更新 (缓存失效)
                 items,
                 query=request.query,
                 active_memories=active_memories,
+                query_slots=query_slots,
             )
             recalled_entries.extend(backfilled)
         # 语义检索始终执行：命中固定槽位只是「可能问到哪条事实」的提示，
@@ -3989,44 +3990,54 @@ L2 更新 (缓存失效)
         *,
         query: str,
         active_memories: list[Any],
+        query_slots: list[str] | None = None,
     ) -> list[Any]:
-        query_slot = self._query_conflict_slot(query)
-        if query_slot is None:
+        """本地精确回填：按请求涉及的每个槽位各取一条最新事实。
+
+        复合查询（位置 + 饮食）必须把两个槽位都回填：只填第一个会让
+        降级模式（后端不可用）少一半答案。
+        """
+        slots = list(query_slots or [])
+        if not slots:
+            single = self._query_conflict_slot(query)
+            slots = [single] if single else []
+        if not slots:
             return []
         existing_l3_ids = {item.memory_id for item in items if item.layer == "L3"}
-        # P2#6 新事实优先：同槽位可能存在多条 ACTIVE（异步竞争遗留、
-        # 非本副本写入的旧事实等），只回填 valid_at 最新的一条 ——
-        # 否则"搬家/换工作"后的旧事实会与新事实并列甚至挤占预算。
-        candidates = []
-        for memory in active_memories:
-            if memory.memory_id in existing_l3_ids:
+        filled: list[Any] = []
+        for query_slot in slots:
+            candidates = []
+            for memory in active_memories:
+                if memory.memory_id in existing_l3_ids:
+                    continue
+                if getattr(memory, "invalid_at", None) is not None:
+                    continue
+                # 过期事实不得从本地精确回填回流（后端已经隐藏它）。
+                if memory_is_expired(memory):
+                    continue
+                if not self._memory_context_allowed(memory, query):
+                    continue
+                if self._memory_conflict_slot(memory.memory_text) != query_slot:
+                    continue
+                candidates.append(memory)
+            if not candidates:
                 continue
-            if getattr(memory, "invalid_at", None) is not None:
-                continue
-            # 过期事实不得从本地精确回填回流（后端已经隐藏它）。
-            if memory_is_expired(memory):
-                continue
-            if not self._memory_context_allowed(memory, query):
-                continue
-            if self._memory_conflict_slot(memory.memory_text) != query_slot:
-                continue
-            candidates.append(memory)
-        if not candidates:
-            return []
-        newest = max(candidates, key=_memory_valid_sort_key)
-        items.append(
-            MemoryItem(
-                layer="L3",
-                content=newest.memory_text,
-                source="business_index",
-                memory_id=newest.memory_id,
-                metadata={"memory_as_data": True, "slot_backfill": query_slot},
-                recall_count=getattr(newest, "recall_count", 0) or 0,
-                last_recalled_at=getattr(newest, "last_recalled_at", None),
-                valid_at=getattr(newest, "valid_at", None),
+            newest = max(candidates, key=_memory_valid_sort_key)
+            items.append(
+                MemoryItem(
+                    layer="L3",
+                    content=newest.memory_text,
+                    source="business_index",
+                    memory_id=newest.memory_id,
+                    metadata={"memory_as_data": True, "slot_backfill": query_slot},
+                    recall_count=getattr(newest, "recall_count", 0) or 0,
+                    last_recalled_at=getattr(newest, "last_recalled_at", None),
+                    valid_at=getattr(newest, "valid_at", None),
+                )
             )
-        )
-        return [newest]
+            existing_l3_ids.add(newest.memory_id)
+            filled.append(newest)
+        return filled
 
     @staticmethod
     @staticmethod
@@ -4411,6 +4422,18 @@ L2 更新 (缓存失效)
             )
         self._run_backend_writes(pending_backend_writes, index_log=index_log)
 
+    def _conflict_policy(self, l3_metadata: dict[str, Any], memory_scope_id: str) -> str:
+        """这条事实的同槽位冲突策略（overwrite / append / none）。
+
+        读取记忆类型注册表里的 ``conflict``：配置说 append 就 append，
+        不能一律按 P0 槽位覆盖（事件类记忆被覆盖就是丢历史）。
+        """
+        try:
+            spec = self._type_spec_from_metadata(l3_metadata, memory_scope_id)
+        except (KeyError, ValueError):
+            return "overwrite"
+        return str(spec.conflict)
+
     def _index_lifecycle(
         self, l3_metadata: dict[str, Any], memory_scope_id: str
     ) -> tuple[datetime | None, datetime | None, datetime | None]:
@@ -4661,13 +4684,18 @@ L2 更新 (缓存失效)
                     "memory l3 event indexing skipped"
                 )
                 return pending_backend_writes
-            _, supersede_pending = self._supersede_conflicting_memories(
-                user_id=user_id,
-                memory_scope_id=memory_scope_id,
-                backend_memory_id=backend_id,
-                memory_text=memory_text,
-            )
-            pending_backend_writes.extend(supersede_pending)
+            # 类型策略决定同槽位新事实是否覆盖旧事实：
+            # conflict=append/none 的类型（事件、承诺）保留历史，不被
+            # supersede；overwrite 的类型（画像、偏好）保持「新的覆盖旧的」。
+            conflict = self._conflict_policy(l3_metadata, memory_scope_id)
+            if conflict == "overwrite":
+                _, supersede_pending = self._supersede_conflicting_memories(
+                    user_id=user_id,
+                    memory_scope_id=memory_scope_id,
+                    backend_memory_id=backend_id,
+                    memory_text=memory_text,
+                )
+                pending_backend_writes.extend(supersede_pending)
         self.repository.add_memory_index(
             backend_memory_id=backend_id,
             user_id=user_id,

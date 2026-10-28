@@ -51,11 +51,11 @@ def test_registry_from_dict_keeps_config_values() -> None:
                 "yield_watch": {
                     "extractor": "mem0",
                     "source_roles": ["user", "tool"],
+                    "conflict": "append",
                     "retention": "ttl",
                     "ttl_days": 90,
                     "classification": "personal",
-                    "entity_vocabulary": ["良率", "缺陷密度"],
-                    "recall_budget": 400,
+                    "description": "良率与缺陷密度的观察",
                 }
             }
         },
@@ -66,9 +66,30 @@ def test_registry_from_dict_keeps_config_values() -> None:
     assert spec.retention == "ttl"
     assert spec.ttl_days == 90
     assert spec.classification == "personal"
-    assert spec.entity_vocabulary == ("良率", "缺陷密度")
-    assert spec.recall_budget == 400
+    assert spec.conflict == "append"
+    assert spec.description == "良率与缺陷密度的观察"
     assert registry.namespace == "semiconductor"
+
+
+def test_registry_drops_config_without_behavior() -> None:
+    """没有行为消费者的配置项直接不认：不能给人「配了就生效」的错觉。"""
+    registry = registry_from_dict(
+        {
+            "types": {
+                "profile": {
+                    "extractor": "mem0",
+                    "entity_vocabulary": ["CMP"],
+                    "recall_budget": 400,
+                    "layer": "L3",
+                }
+            }
+        },
+        namespace="semiconductor",
+    )
+
+    spec = registry.get("profile")
+    assert not hasattr(spec, "entity_vocabulary")
+    assert not hasattr(spec, "recall_budget")
 
 
 def test_load_registry_reads_namespace_profile(tmp_path: Path) -> None:
@@ -80,7 +101,7 @@ def test_load_registry_reads_namespace_profile(tmp_path: Path) -> None:
                         "extractor": "mem0",
                         "source_roles": ["user"],
                         "classification": "personal",
-                        "entity_vocabulary": ["3nm", "5nm", "CMP"],
+                        "conflict": "overwrite",
                     }
                 }
             }
@@ -126,5 +147,6 @@ def test_shipped_semiconductor_profile_loads() -> None:
     assert registry.get("procedure").review_required is True
     # 时效性类型必须带 TTL
     assert registry.get("state").ttl_days == 90
-    # 行业词表是数据，不是代码
-    assert "3nm" in registry.get("process_preference").entity_vocabulary
+    # 冲突策略按类型区分：设备上下文是追加型，工艺偏好是覆盖型
+    assert registry.get("equipment_context").conflict == "append"
+    assert registry.get("process_preference").conflict == "overwrite"
