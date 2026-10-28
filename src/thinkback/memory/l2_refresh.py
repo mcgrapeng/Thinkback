@@ -80,9 +80,15 @@ class L2BackgroundRefresher:
         self._futures: set[Future[None]] = set()
 
     def _remember_scope(self, scope: tuple[str, str]) -> None:
-        """记住一个活跃 scope，并淘汰最久未用的（进程内状态必须有上界）。"""
-        self._append_counters.pop(scope, None)
-        self._append_counters[scope] = 0
+        """记住一个活跃 scope，并淘汰最久未用的（进程内状态必须有上界）。
+
+        注意：这里**不能**清零 append 计数——计数表示「上次提交之后又来了
+        几轮」，在飞刷新结束时要靠它决定要不要补一次 trailing 刷新。清零
+        会让在飞期间到达的轮次被吞掉（且只在刷新写入成功时复现，很难被
+        常规跑法发现）。
+        """
+        if scope in self._append_counters:
+            self._append_counters.move_to_end(scope)
         self._llm_refreshed_scopes.pop(scope, None)
         self._llm_refreshed_scopes[scope] = None
         self._trim_scopes()
