@@ -316,6 +316,7 @@ blob-report/
 playwright/.cache/
 .planning
 
-# Untracked 2026-10 — docs/ is local-only iteration; kept on disk, not in git
-docs
+# Untracked 2026-10 — 只有评测/门禁的运行产物留在本地，docs/ 其余部分照常跟踪
+# （README 链到 docs/API.md 等，新文档不需要 git add -f）。
+docs/memory/report/
 .claude-flow
