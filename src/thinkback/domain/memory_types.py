@@ -210,12 +210,18 @@ def registry_from_dict(payload: dict[str, Any], *, namespace: str) -> MemoryType
 
 
 def load_registry(profile_dir: Path, namespace: str) -> MemoryTypeRegistry:
-    """按 namespace 加载 profile；没有对应文件时回落到默认注册表。
+    """按 namespace 加载 profile。
 
-    文件约定：``<profile_dir>/<namespace>.json``。
+    文件约定：``<profile_dir>/<namespace>.json``。文件不存在时回落到默认
+    注册表 —— 默认 namespace 就是内置类型集，缺文件是正常的。
     """
     path = profile_dir / f"{namespace}.json"
     if not path.is_file():
         return default_registry()
     payload = json.loads(path.read_text(encoding="utf-8"))
     return registry_from_dict(payload, namespace=namespace)
+
+
+def has_profile(profile_dir: Path, namespace: str) -> bool:
+    """该 namespace 是否有自己的 profile 文件。"""
+    return (profile_dir / f"{namespace}.json").is_file()
