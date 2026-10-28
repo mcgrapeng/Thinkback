@@ -61,9 +61,6 @@ CJK = re.compile(r"[一-鿿]")
 
 # ── 候选指令 ──────────────────────────────────────────────────────────
 
-#: 现行版本：7 条规则，含输出形状与「何时返回空列表」。
-V_CURRENT = "current"
-
 #: 瘦身版：删掉输出形状（mem0 的 system prompt 已经定义）与空列表条款。
 V_SLIM = """1. Write each memory in the SAME language and script as the conversation. Chinese input -> Chinese memories. Never translate names, equipment models or brands into English.
 2. Keep entity values verbatim (设备型号、工艺节点、机台编号、品牌名逐字保留). Do not transliterate, do not explain them in parentheses.
@@ -93,11 +90,86 @@ Output: {"memory": [{"id": "0", "text": "用户负责 28nm 逻辑工艺的整合
 Input: 我平时用 Neovim 写 Python，报表口径按下季度。
 Output: {"memory": [{"id": "0", "text": "用户平时用 Neovim 写 Python。"}, {"id": "1", "text": "用户的报表口径是按下季度。"}]}"""
 
+#: 覆盖率版：保留「不许返回空列表」这条硬约束，补「一条消息里的每件事实都要
+#: 抽」，并用示例把「输出形状」讲清楚（现行版本的输出形状写成一个元素的
+#: 模板，模型就照着只给一条）。
+V_COVERAGE = """Additional requirements:
+1. Language: write each memory text in the SAME language and script as the conversation (Chinese conversation -> Chinese memories). Never translate names, equipment models, process nodes or brands into English.
+2. Entities: keep entity values verbatim (device model, process node, tool id, brand). Do not transliterate them and do not add a parenthetical translation.
+3. Coverage: extract EVERY distinct fact in the message. One message often carries two facts (which tool and which metrology tool, which process step and which defect); emit one memory per fact and never drop one. If the message contains ANY work fact (responsibility, equipment, tool, process parameter, target, constraint, deadline, customer, number), extract at least one memory about it - returning an empty list for such a message is WRONG. Return an empty list ONLY for pure greetings or acknowledgements.
+4. Shape: {"memory": [{"id": "0", "text": "..."}, {"id": "1", "text": "..."}]} - one entry per fact, ids numbered from 0.
+5. Corrections: when the user changes a value ("不叫 X，叫 Y"), record only the new value, never re-state the old one.
+
+Examples:
+Input: 刻蚀机台我们用 TEL 的 Divinity，量测用 KLA 的 2930。
+Output: {"memory": [{"id": "0", "text": "用户的刻蚀机台使用 TEL 的 Divinity。"}, {"id": "1", "text": "用户的量测设备使用 KLA 的 2930。"}]}
+
+Input: 3nm 良率卡在 CMP 段，缺陷密度偏高，主要是颗粒和针孔。
+Output: {"memory": [{"id": "0", "text": "用户的 3nm 良率卡在 CMP 段。"}, {"id": "1", "text": "用户的缺陷密度偏高，主要是颗粒和针孔。"}]}"""
+
 VARIANTS: dict[str, str] = {
-    V_CURRENT: DEFAULT_EXTRACTION_INSTRUCTIONS,
-    V_SLIM: V_SLIM,
-    V_SLIM_FEWSHOT: V_SLIM_FEWSHOT,
-    V_FEWSHOT_ONLY: V_FEWSHOT_ONLY,
+    "current": DEFAULT_EXTRACTION_INSTRUCTIONS,
+    "slim": V_SLIM,
+    "slim_fewshot": V_SLIM_FEWSHOT,
+    "fewshot_only": V_FEWSHOT_ONLY,
+    "coverage": V_COVERAGE,
+}
+
+
+def _without_rules(*rule_numbers: int) -> str:
+    """从现役指令里去掉某几条规则。
+
+    现役指令的第一行是 "Additional requirements:"，后面每行一条规则，
+    规则 N 在第 N 行。消融用：哪条规则真正承重，看去掉它之后空抽率与
+    覆盖率怎么动，而不是凭感觉删。
+    """
+    lines = DEFAULT_EXTRACTION_INSTRUCTIONS.split("\n")
+    dropped = set(rule_numbers)
+    kept = [
+        line
+        for index, line in enumerate(lines)
+        if index == 0 or (index - 1) not in dropped
+    ]
+    return "\n".join(kept)
+
+
+#: 逐条消融：现行指令的 7 条规则各自承多少重。
+ABLATIONS: dict[str, str] = {
+    "no_rule1_language": _without_rules(1),
+    "no_rule2_shape": _without_rules(2),
+    "no_rule3_entity": _without_rules(3),
+    "no_rule4_correction": _without_rules(4),
+    "no_rule5_one_fact": _without_rules(5),
+    "no_rule6_no_assistant": _without_rules(6),
+    "no_rule7_empty_clause": _without_rules(7),
+}
+
+#: 在现役指令上补「一条消息里的每件事实都要抽」：消融显示语言、输出形状、
+#: 一事一记忆、无 assistant 轮次这四条承重，不能删；缺口在第五条不够狠 ——
+#: 一条消息带两件事时模型常只给一条。
+V_MULTI_RULE = DEFAULT_EXTRACTION_INSTRUCTIONS + """
+8. One message often carries two or more facts (which tool and which metrology tool, which process step and which defect, target and current value). Extract ALL of them: one memory per fact, never stop after the first."""
+
+#: 再加一个两事实的示例，把输出形状落到具体条目上。
+V_MULTI_EXAMPLE = V_MULTI_RULE + """
+
+Example:
+Input: 刻蚀机台我们用 TEL 的 Divinity，量测用 KLA 的 2930。
+Output: {"memory": [{"id": "0", "text": "用户的刻蚀机台使用 TEL 的 Divinity。"}, {"id": "1", "text": "用户的量测设备使用 KLA 的 2930。"}]}"""
+
+#: 中性示例：内容与评测语料、门禁语料都不重叠（物流场景，不是半导体）。
+#: 用语料里的内容做示例等于把评测题抄进提示词，覆盖率会虚高 —— 那版只作
+#: 对照，不作结论。
+V_MULTI_EXAMPLE_NEUTRAL = V_MULTI_RULE + """
+
+Example:
+Input: 我负责华东仓的库存周转，目标是每季度压到 4 轮。
+Output: {"memory": [{"id": "0", "text": "用户负责华东仓的库存周转。"}, {"id": "1", "text": "用户的库存周转目标是每季度压到 4 轮。"}]}"""
+
+EXTRA_VARIANTS: dict[str, str] = {
+    "multi_rule": V_MULTI_RULE,
+    "multi_example_corpus": V_MULTI_EXAMPLE,
+    "multi_example_neutral": V_MULTI_EXAMPLE_NEUTRAL,
 }
 
 
@@ -149,21 +221,28 @@ def run_variant(
     for case in cases:
         expected = [str(term) for term in (case.get("expected_terms") or [])]
         texts: list[str] = []
+        # 同一则语料的多个轮次共用一个作用域：mem0 会拿已有记忆做关联，
+        # 拆开就测不到「一条消息里含几件事实」这种真实情形。
+        user_id = f"ab-{uuid4().hex[:10]}"
         for payload in _user_rounds(case):
             outcome = client.add(  # type: ignore[attr-defined]
                 [{"role": "user", "content": payload}],
-                user_id=f"ab-{uuid4().hex[:10]}",
+                user_id=user_id,
                 agent_id="thinkback",
                 metadata={"memory_scope_id": "thinkback"},
                 infer=True,
                 prompt=prompt,
             )
             items = outcome.get("results") if isinstance(outcome, dict) else outcome
-            for item in items or []:
-                if isinstance(item, dict):
-                    texts.append(str(item.get("memory") or item.get("text") or ""))
+            round_texts = [
+                str(item.get("memory") or item.get("text") or "")
+                for item in items or []
+                if isinstance(item, dict)
+            ]
+            texts.extend(round_texts)
             result.rounds += 1
-            if not texts:
+            # 空抽按「这一轮有没有抽出东西」算，不是按累计。
+            if not round_texts:
                 result.empty_rounds += 1
         hits = [term for term in expected if any(term in text for text in texts)]
         result.covered += len(hits)
@@ -187,6 +266,16 @@ def main() -> int:
     parser.add_argument("--cases", type=int, default=8, help="用前 N 条语料")
     parser.add_argument("--env-file", default=None)
     parser.add_argument("--corpus", default=str(CORPUS_PATH))
+    parser.add_argument(
+        "--ablations",
+        action="store_true",
+        help="额外跑逐条消融（现行指令去掉某一条规则）",
+    )
+    parser.add_argument(
+        "--extra",
+        action="store_true",
+        help="额外跑候选增强版（在现行指令上加规则/示例）",
+    )
     parser.add_argument("--out", default="docs/memory/report/real/prompt-ab.json")
     args = parser.parse_args()
 
@@ -197,8 +286,14 @@ def main() -> int:
     backend = get_memory_backend(settings)
     client = backend.memory_client
 
+    pool: dict[str, str] = dict(VARIANTS)
+    if args.ablations:
+        pool.update(ABLATIONS)
+    if args.extra:
+        pool.update(EXTRA_VARIANTS)
+
     results = []
-    for name, prompt in VARIANTS.items():
+    for name, prompt in pool.items():
         print(f"\n===== 变体 {name} =====")
         result = run_variant(name, prompt, cases, client=client)
         print(
