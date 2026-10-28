@@ -32,6 +32,9 @@ COPY --from=builder /app/.venv /app/.venv
 COPY src/ /app/src/
 COPY alembic/ /app/alembic/
 COPY alembic.ini /app/alembic.ini
+# 记忆类型 profile 必须进镜像：容器里没有 profiles/ 时，namespace 的类型
+# 注册表会静默回退到默认注册表，行业类型直接变成「未注册」。
+COPY profiles/ /app/profiles/
 
 RUN mkdir -p /tmp/thinkback/mem0 \
     && chown -R app:app /app /tmp/thinkback

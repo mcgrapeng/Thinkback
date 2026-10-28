@@ -18,9 +18,11 @@ from typing import Any
 
 from loguru import logger
 
+from thinkback.domain.keys import DEFAULT_NAMESPACE
 from thinkback.domain.memory_types import (
     MemoryTypeRegistry,
     default_registry,
+    has_profile,
     load_registry,
 )
 from thinkback.domain.summarization import SummaryComposer
@@ -145,20 +147,45 @@ def build_registry_provider(
 ) -> Callable[[str], MemoryTypeRegistry]:
     """按 namespace 加载记忆类型注册表。
 
-    profile 目录约定：``<dir>/<namespace>.json``；文件缺失或解析失败时回落到
-    内置默认注册表（当前行为），不因配置缺失而拒绝服务启动。
+    profile 目录约定：``<dir>/<namespace>.json``。
+
+    加载失败的处理分两种：
+    - 开发环境：回落默认注册表并告警，不挡住服务启动。
+    - 生产环境：**报错**。静默换一套策略等于让企业以为在跑自己的记忆
+      类型规则，实际跑的是内置默认规则 —— 这类「配置看起来生效了」比启动
+      失败危险得多。
     """
     current_settings = config or settings
     profile_dir = Path(current_settings.memory_type_profile_dir)
+    strict = current_settings.environment == "production"
 
     def provider(namespace: str) -> MemoryTypeRegistry:
         try:
+            if (
+                strict
+                and namespace != DEFAULT_NAMESPACE
+                and not has_profile(profile_dir, namespace)
+            ):
+                # 非默认 namespace 却没有任何 profile：说明部署漏了配置。
+                # 静默用默认注册表 = 行业类型全部「未注册」，而调用方以为
+                # 自己的类型规则在生效。
+                raise FileNotFoundError(
+                    f"no memory type profile for namespace {namespace!r} in {profile_dir}"
+                )
             return load_registry(profile_dir, namespace)
         except (OSError, ValueError, json.JSONDecodeError) as exc:
-            logger.bind(namespace=namespace, profile_dir=str(profile_dir)).warning(
+            logger.bind(
+                namespace=namespace,
+                profile_dir=str(profile_dir),
+                error_type=type(exc).__name__,
+            ).warning("memory type profile load failed")
+            if strict:
+                raise RuntimeError(
+                    f"memory type profile for namespace {namespace!r} could not be loaded: {exc}"
+                ) from exc
+            logger.bind(namespace=namespace).warning(
                 "memory type profile load failed, using default registry"
             )
-            _ = exc
             return default_registry()
 
     return provider
