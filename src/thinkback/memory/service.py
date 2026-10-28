@@ -19,7 +19,11 @@ from typing import Any, Literal
 
 from loguru import logger
 
-from thinkback.domain.classification import assert_storable, resolve_classification
+from thinkback.domain.classification import (
+    assert_storable,
+    resolve_classification,
+    strictest_classification,
+)
 from thinkback.domain.entities import memory_is_expired
 from thinkback.domain.errors import TaskLockExhaustedError, TaskStaleWriteError
 from thinkback.domain.memory_types import MemoryTypeRegistry, MemoryTypeSpec, default_registry
@@ -528,8 +532,12 @@ L2 更新 (缓存失效)
                 f"memory type {type_spec.name!r} requires review; no approval path is configured"
             )
         effective_metadata = dict(request.metadata or {})
-        if not effective_metadata.get("data_classification"):
-            effective_metadata["data_classification"] = type_spec.classification
+        # 分类取「请求」与「类型策略」中更严格的一级：调用方不能把策略
+        # 定成 sensitive 的类型降级成 normal 后写入。
+        effective_metadata["data_classification"] = strictest_classification(
+            str(effective_metadata.get("data_classification") or ""),
+            type_spec.classification,
+        )
         # 存库的类型名以注册表为准，避免「配置说是 state、存下来是 profile」。
         effective_metadata["memory_type"] = type_spec.name
         # 来源时间进生效元数据：事实新旧按它判定（round_id 的字典序与新旧

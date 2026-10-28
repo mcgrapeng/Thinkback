@@ -8420,6 +8420,7 @@ def test_classification_defaults_and_unknown_values() -> None:
         assert_storable,
         blocks_storage,
         resolve_classification,
+        strictest_classification,
     )
 
     assert resolve_classification(None) == "personal"
@@ -8435,6 +8436,57 @@ def test_classification_defaults_and_unknown_values() -> None:
         assert_storable("sensitive")
     assert_storable("personal")
     assert_storable("normal")
+
+    # 更严格的一级胜出；未知值不静默放行。
+    assert strictest_classification("normal", "personal") == "personal"
+    assert strictest_classification("personal", "sensitive") == "sensitive"
+    assert strictest_classification("sensitive", "normal") == "sensitive"
+    assert strictest_classification("restricted", "sensitive") == "restricted"
+    assert strictest_classification("", "personal") == "personal"
+    with pytest.raises(ValueError, match="unknown data_classification"):
+        strictest_classification("normal", "top-secret")
+
+
+def test_request_cannot_downgrade_type_classification() -> None:
+    """类型策略定为 restricted 时，请求不能降级成 normal 绕过准入。
+
+    调用方自报的数据分类不得低于类型注册表的策略：否则 restricted 类型
+    的内容会以 normal 身份落库并外发给 LLM/embedding/Mem0。
+    """
+    from thinkback.domain.memory_types import MemoryTypeRegistry, MemoryTypeSpec
+
+    registry = MemoryTypeRegistry(
+        namespace="thinkback",
+        types={
+            "vault": MemoryTypeSpec(
+                name="vault",
+                extractor="mem0",
+                classification="restricted",
+            )
+        },
+    )
+    repository = InMemoryMemoryRepository()
+    backend = FakeMemoryBackend()
+    service = MemoryService(
+        repository=repository,
+        backend=backend,
+        l3_write_mode="sync",
+        registry_provider=lambda _namespace: registry,
+    )
+
+    with pytest.raises(ValueError, match="sensitive_or_restricted"):
+        service.append(
+            make_append(
+                round_id="r-downgrade",
+                metadata={
+                    "memory_type": "vault",
+                    "data_classification": "normal",
+                },
+            )
+        )
+
+    assert repository.get_round("r-downgrade") is None
+    assert backend.memories == {}
 
 
 class _CountingSearchBackend(FakeMemoryBackend):

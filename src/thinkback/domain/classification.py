@@ -43,6 +43,31 @@ def blocks_storage(classification: str) -> bool:
     }
 
 
+# 敏感度从低到高。取更严格的一级即取序号更大的那个。
+_CLASSIFICATION_SEVERITY: dict[str, int] = {
+    DataClassification.NORMAL.value: 0,
+    DataClassification.PERSONAL.value: 1,
+    DataClassification.SENSITIVE.value: 2,
+    DataClassification.RESTRICTED.value: 3,
+}
+
+
+def strictest_classification(*classifications: str) -> str:
+    """返回多个分类中最严格的一个。
+
+    类型策略（namespace 的类型注册表）与调用方请求都声明分类时，取更严格
+    的一级：调用方不能把策略定成 sensitive/restricted 的类型降级成
+    normal 后写入。未知值直接报错，不静默放行。
+    """
+    known = [value for value in classifications if value]
+    if not known:
+        return _DEFAULT_CLASSIFICATION
+    for value in known:
+        if value not in _CLASSIFICATION_SEVERITY:
+            raise ValueError(f"unknown data_classification: {value}")
+    return max(known, key=lambda value: _CLASSIFICATION_SEVERITY[value])
+
+
 def assert_storable(classification: str) -> None:
     """禁止级别直接拒绝，消息里带 sensitive_or_restricted 供客户端识别。"""
     if blocks_storage(classification):
