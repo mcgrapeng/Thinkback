@@ -17,7 +17,8 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor, wait
-from threading import BoundedSemaphore, Lock
+from threading import BoundedSemaphore, Event, Lock
+from time import monotonic
 from typing import Any
 
 from loguru import logger
@@ -62,6 +63,8 @@ class L3WriteExecutor:
         self._pending_write_slots = 0
         self._write_futures: set[Future[Any]] = set()
         self._cleanup_futures: set[Future[Any]] = set()
+        # 完成回调的完成信号：future done ≠ 回调跑完（见 drain 的说明）。
+        self._callback_events: dict[Future[Any], Event] = {}
 
     def reserve_write_slot(self, wait_seconds: float | None = None) -> None:
         """为后台 L3 写入预留一个队列槽位，队列满时快速失败。
@@ -110,7 +113,7 @@ class L3WriteExecutor:
 
         with self._lock:
             self._write_futures.add(future)
-        future.add_done_callback(on_finished)
+        self._attach_callback(future, on_finished)
 
     def discard_write(self, future: Future[Any]) -> None:
         with self._lock:
@@ -123,7 +126,32 @@ class L3WriteExecutor:
 
         with self._lock:
             self._cleanup_futures.add(future)
-        future.add_done_callback(on_finished)
+        self._attach_callback(future, on_finished)
+
+    def _attach_callback(
+        self, future: Future[Any], on_finished: Callable[[Future[Any]], None]
+    ) -> None:
+        """挂完成回调，并登记一个"回调已跑完"的事件。
+
+        ``concurrent.futures`` 在 worker 线程里 ``set_result`` 之后才执行
+        done callback，而 ``wait()`` 在 future done 时就返回 —— 两者之间有
+        窗口。业务回调里做的是记账（pending 计数递减、清理结束日志），
+        早退会让调用方看到半完成状态。
+        """
+
+        event = Event()
+        with self._lock:
+            self._callback_events[future] = event
+
+        def runner(done: Future[Any]) -> None:
+            try:
+                on_finished(done)
+            finally:
+                event.set()
+                with self._lock:
+                    self._callback_events.pop(done, None)
+
+        future.add_done_callback(runner)
 
     def discard_cleanup(self, future: Future[Any]) -> None:
         with self._lock:
@@ -134,15 +162,27 @@ class L3WriteExecutor:
             return len(self._cleanup_futures)
 
     def drain(self, timeout: float | None = None) -> None:
-        """等待所有在途后台写/清理 future 完成，向上传播异常。"""
+        """等待所有在途后台写/清理 future 完成，并等完成回调跑完。
 
+        只等 future 不够：done callback 是 worker 线程在 ``set_result``
+        之后才执行的，业务回调里的记账（pending 计数递减、清理结束日志）
+        可能落在 drain 返回之后，调用方会看到半完成状态。
+
+        ``timeout`` 是总预算：等 future 与等回调共用同一份时间。
+        """
+
+        deadline = None if timeout is None else monotonic() + timeout
         with self._lock:
             futures = list(self._write_futures | self._cleanup_futures)
+            events = list(self._callback_events.values())
         if futures:
             wait(futures, timeout=timeout)
             for future in futures:
                 if future.done():
                     future.result()
+        for event in events:
+            remaining = None if deadline is None else max(0.0, deadline - monotonic())
+            event.wait(timeout=remaining)
 
     def shutdown(self, *, wait: bool = True) -> None:
         """关闭自有的 executor（幂等；注入的 executor 归 caller 管理）。"""
