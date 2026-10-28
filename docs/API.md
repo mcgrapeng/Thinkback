@@ -4,32 +4,32 @@ Thinkback exposes three API surfaces: **Memory core** (for application code), **
 
 ## Authentication
 
-### Business surface (`/memory/*`)
+### Business surface (`/v2/memory/*`)
 
 No authentication. Thinkback is deployed on an internal network and the business surface is not exposed publicly — the network is the trust boundary, not a token. There is no API key, no scope, and no tenant header.
 
-Rate limiting still applies: `/memory/*` is throttled per client IP (600 requests/minute, burst 50). The v1 public integration protocol (API key + scope + tenant) was removed; see the [historical spec](specs/2026-10-08-thinkback-integration-protocol-v1.md).
+Rate limiting still applies: `/v2/memory/*` is throttled per client IP (600 requests/minute, burst 50). The v1 public integration protocol (API key + scope + tenant) was removed; see the [historical spec](specs/2026-10-08-thinkback-integration-protocol-v1.md).
 
 ### Admin (`/admin/api/*`)
 
 Requires `Authorization: Bearer <ADMIN_TOKEN>`. Not configured means 503 (fail-closed), never open.
 
-## Memory core (`/memory/*`)
+## Memory core (`/v2/memory/*`)
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| `POST` | `/memory/append` | Write a `user → assistant` round; triggers L1/L2/L3 updates |
-| `POST` | `/memory/recall` | Retrieve relevant memories (L1/L2/L3) |
-| `POST` | `/memory/delete` | Scoped delete (`MEMORY` / `SESSION` / `ALL`), tombstone kept |
-| `POST` | `/memory/suppress` | Take memories out of recall, keep the text and the tombstone |
-| `POST` | `/memory/erase` | Physically erase the text (L1/L2/L3 + backend vector) |
-| `GET` | `/memory/items` | List long-term memories of a user (default `ACTIVE` only) |
-| `GET` | `/memory/items/{memory_id}` | Fetch one memory |
-| `POST` | `/memory/update` | Edit the text of one memory |
-| `GET` | `/memory/tasks/{task_id}` | Async task state (retry, last_error, result) |
-| `GET` | `/memory/l3/background-status` | L3 background queue and worker status |
+| `POST` | `/v2/memory/events` | Write a `user → assistant` round; triggers L1/L2/L3 updates |
+| `POST` | `/v2/memory/recall` | Retrieve relevant memories (L1/L2/L3) |
+| `POST` | `/v2/memory/delete` | Scoped delete (`MEMORY` / `SESSION` / `ALL`), tombstone kept |
+| `POST` | `/v2/memory/suppress` | Take memories out of recall, keep the text and the tombstone |
+| `POST` | `/v2/memory/erase` | Physically erase the text (L1/L2/L3 + backend vector) |
+| `GET` | `/v2/memory/items` | List long-term memories of a user (default `ACTIVE` only) |
+| `GET` | `/v2/memory/items/{memory_id}` | Fetch one memory |
+| `POST` | `/v2/memory/update` | Edit the text of one memory |
+| `GET` | `/v2/memory/tasks/{task_id}` | Async task state (retry, last_error, result) |
+| `GET` | `/v2/memory/l3/background-status` | L3 background queue and worker status |
 
-Request bodies use the same Pydantic schemas as the service (`thinkback.memory.schemas`). Unknown fields are rejected — for example `intent` no longer exists on `POST /memory/recall` and sending it returns 422.
+Request bodies use the same Pydantic schemas as the service (`thinkback.memory.schemas`). Unknown fields are rejected — for example `intent` no longer exists on `POST /v2/memory/recall` and sending it returns 422.
 
 ## Health (`/health/*`)
 
@@ -84,7 +84,7 @@ API key management and live mem0 prompt editing were removed with the v1 public 
 | `Retry-After` | Seconds to wait (on 429) |
 | `X-Idempotent-Replay` | `true` when response is a cached replay of the same `Idempotency-Key` |
 
-`Idempotency-Key` is honoured on the write paths of `/memory/*` (`POST` / `PUT` / `DELETE`); `POST /memory/recall` is never replayed from cache.
+`Idempotency-Key` is honoured on the write paths of `/v2/memory/*` (`POST` / `PUT` / `DELETE`); `POST /v2/memory/recall` is never replayed from cache.
 
 ## gRPC
 

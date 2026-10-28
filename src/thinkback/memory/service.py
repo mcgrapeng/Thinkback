@@ -382,10 +382,16 @@ class MemoryService:
 
     @staticmethod
     def _resolve_type_name(request: Any) -> str:
-        """请求声明的记忆类型：请求字段 > metadata > 默认 profile。"""
+        """请求声明的记忆类型：请求字段 > metadata > 默认 profile。
+
+        请求字段是类型**名**（v2 契约放开自定义类型），可以是内置枚举值，
+        也可以是 profile 里注册的行业类型名。
+        """
         declared = getattr(request, "memory_type", None)
         if isinstance(declared, MemoryType):
             return declared.value
+        if isinstance(declared, str) and declared.strip():
+            return declared.strip()
         metadata = getattr(request, "metadata", None) or {}
         raw = metadata.get("memory_type")
         if isinstance(raw, str) and raw:

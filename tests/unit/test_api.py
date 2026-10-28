@@ -67,25 +67,20 @@ def test_validation_error_does_not_echo_input(client) -> None:
 
     try:
         response = client.post(
-            "/memory/append",
+            "/v2/memory/events",
             json={
                 "request_id": "req-validation-secret",
                 "user_id": "u-validation-secret",
                 "session_id": "s-validation-secret",
                 "round_id": "r-validation-secret",
-                "source_timestamp": "2026-10-27T10:00:00Z",
+                # 时间戳非法 → 422；正文里带着 secret，响应与日志都不能回显它。
+                "source_timestamp": "not-a-timestamp",
                 "messages": [
                     {
                         "message_id": "m1",
                         "role": "user",
                         "content": secret,
                         "timestamp": "2026-10-27T10:00:00Z",
-                    },
-                    {
-                        "message_id": "m2",
-                        "role": "user",
-                        "content": secret,
-                        "timestamp": "2026-10-27T10:00:01Z",
                     },
                 ],
             },

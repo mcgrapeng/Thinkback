@@ -43,21 +43,39 @@ def test_append_request_requires_full_user_assistant_round() -> None:
     assert request.scope_key == "user-1:session-1"
 
 
-def test_append_request_rejects_isolated_single_message() -> None:
-    with pytest.raises(ValidationError, match="complete user -> assistant round"):
+def test_append_request_accepts_single_message() -> None:
+    """一条消息就是一轮：事件模型下「只有 user 一条」是合法输入。
+
+    旧契约要求恰好 user -> assistant 两条，把工具结果与单向事实全挡在门外
+    （ADR-0008）。
+    """
+    request = AppendMemoryRequest(
+        request_id="req-1",
+        user_id="user-1",
+        session_id="session-1",
+        round_id="round-1",
+        messages=[
+            {
+                "message_id": "m1",
+                "role": MessageRole.USER,
+                "content": "只有单条消息",
+                "timestamp": "2026-05-04T10:00:00Z",
+            }
+        ],
+        source_timestamp="2026-05-04T10:00:00Z",
+    )
+
+    assert len(request.messages) == 1
+
+
+def test_append_request_rejects_empty_message_list() -> None:
+    with pytest.raises(ValidationError, match="at least one message"):
         AppendMemoryRequest(
             request_id="req-1",
             user_id="user-1",
             session_id="session-1",
             round_id="round-1",
-            messages=[
-                {
-                    "message_id": "m1",
-                    "role": MessageRole.USER,
-                    "content": "只有单条消息",
-                    "timestamp": "2026-05-04T10:00:00Z",
-                }
-            ],
+            messages=[],
             source_timestamp="2026-05-04T10:00:00Z",
         )
 

@@ -142,7 +142,7 @@ src/thinkback/
 ### 3.1 写入 append（async 模式主链路）
 
 ```text
-POST /memory/append
+POST /v2/memory/events
   → schemas 校验（完整 user→assistant 轮次、id≤128、metadata≤64KB）
   → get_round(round_id) 幂等锚点
       ├─ 存在且指纹不同 → 409 conflict
@@ -165,7 +165,7 @@ POST /memory/append
 ### 3.2 召回 recall
 
 ```text
-POST /memory/recall
+POST /v2/memory/recall
   → intent=SENSITIVE → fail-closed（ValueError → 403）
   → L1：进程内缓存（miss 时读 journal 派生）
   → L2：get_summary（kind=llm 综合版优先，concat 为降级）；DIRTY/REBUILDING 跳过，STALE 带 degradation_reasons
@@ -177,7 +177,7 @@ POST /memory/recall
 ### 3.3 删除 delete（MEMORY/SESSION/ALL 三种作用域）
 
 ```text
-POST /memory/delete
+POST /v2/memory/delete
   → claim_task（operation_id 幂等）→ 已存在直接回放既有响应
   → 本地索引置 DELETED + backend.delete（H-3：锁内收集、锁外执行）
   → 轮次置 deleted_tombstone + 合成 delete-all:/delete-session: 墓碑行
@@ -198,14 +198,14 @@ POST /memory/delete
 
 | 方法 | 路径 | 请求 | 成功 | 主要错误 |
 | --- | --- | --- | --- | --- |
-| POST | `/memory/append` | `AppendMemoryRequest` | 200 `AppendMemoryResponse` | 400 校验 / 409 round_id 冲突 / 403 安全门禁 / 503 队列满或超时 |
-| POST | `/memory/recall` | `RecallMemoryRequest` | 200 `RecallMemoryResponse`（含 degraded/degradation_reasons） | 403 sensitive fail-closed / 400 |
-| POST | `/memory/delete` | `DeleteMemoryRequest` | 200 `DeleteMemoryResponse` | 400 / 404 / 409 dead_letter |
-| POST | `/memory/update` | `UpdateMemoryRequest` | 200 `UpdateMemoryResponse` | 400 / 403 受限内容 / 404 / 409 |
-| GET | `/memory/items?user_id=&include_deleted=` | — | 200 `ListMemoriesResponse` | — |
-| GET | `/memory/items/{memory_id}?user_id=` | — | 200 `GetMemoryResponse` | 404 |
-| GET | `/memory/tasks/{task_id}` | — | 200 `TaskResponse` | 404 |
-| GET | `/memory/l3/background-status` | — | 200 `L3BackgroundStatusResponse` | — |
+| POST | `/v2/memory/events` | `AppendMemoryRequest` | 200 `AppendMemoryResponse` | 400 校验 / 409 round_id 冲突 / 403 安全门禁 / 503 队列满或超时 |
+| POST | `/v2/memory/recall` | `RecallMemoryRequest` | 200 `RecallMemoryResponse`（含 degraded/degradation_reasons） | 403 sensitive fail-closed / 400 |
+| POST | `/v2/memory/delete` | `DeleteMemoryRequest` | 200 `DeleteMemoryResponse` | 400 / 404 / 409 dead_letter |
+| POST | `/v2/memory/update` | `UpdateMemoryRequest` | 200 `UpdateMemoryResponse` | 400 / 403 受限内容 / 404 / 409 |
+| GET | `/v2/memory/items?user_id=&include_deleted=` | — | 200 `ListMemoriesResponse` | — |
+| GET | `/v2/memory/items/{memory_id}?user_id=` | — | 200 `GetMemoryResponse` | 404 |
+| GET | `/v2/memory/tasks/{task_id}` | — | 200 `TaskResponse` | 404 |
+| GET | `/v2/memory/l3/background-status` | — | 200 `L3BackgroundStatusResponse` | — |
 
 健康：`GET /health`、`/health/live`、`/health/ready`（503 摘流）。
 

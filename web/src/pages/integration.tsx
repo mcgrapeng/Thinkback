@@ -36,18 +36,18 @@ type EndpointRow = {
   desc: string;
 };
 
-/** 业务面：/memory/*，内网直连，无调用方鉴权。 */
+/** 业务面：/v2/memory/*，内网直连，无调用方鉴权。 */
 const BUSINESS_ENDPOINTS: EndpointRow[] = [
-  { method: "POST", path: "/memory/append", desc: "写入一轮完整 user → assistant 对话，触发 L1/L2 更新与 L3 沉淀" },
-  { method: "POST", path: "/memory/recall", desc: "按 user / session / query 召回 L1/L2/L3 记忆，返回降级状态与原因" },
-  { method: "POST", path: "/memory/update", desc: "编辑单条 ACTIVE 长期记忆，并把相关 L1/L2 置脏" },
-  { method: "POST", path: "/memory/delete", desc: "按单条 / 会话 / 用户全局范围删除记忆" },
-  { method: "POST", path: "/memory/suppress", desc: "逻辑下架：不再进入召回，原文与墓碑保留以供审计" },
-  { method: "POST", path: "/memory/erase", desc: "物理擦除 L1 轮次原文、L2 摘要正文、L3 索引与后端向量" },
-  { method: "GET", path: "/memory/items", desc: "列出可编辑 / 可删除的长期记忆（query: user_id 必填）" },
-  { method: "GET", path: "/memory/items/{memory_id}", desc: "查询单条长期记忆详情（query: user_id 必填）" },
-  { method: "GET", path: "/memory/tasks/{task_id}", desc: "查询后台任务终态（异步写入的轮询入口）" },
-  { method: "GET", path: "/memory/l3/background-status", desc: "L3 后台写队列状态：写模式 / 线程数 / 剩余容量" },
+  { method: "POST", path: "/v2/memory/events", desc: "写入一条原始事件（event_id 即幂等锚点），触发 L1/L2 更新与 L3 沉淀" },
+  { method: "POST", path: "/v2/memory/recall", desc: "按 user / session / query 召回 L1/L2/L3 记忆，返回降级状态与原因" },
+  { method: "POST", path: "/v2/memory/update", desc: "编辑单条 ACTIVE 长期记忆，并把相关 L1/L2 置脏" },
+  { method: "POST", path: "/v2/memory/delete", desc: "按单条 / 会话 / 用户全局范围删除记忆" },
+  { method: "POST", path: "/v2/memory/suppress", desc: "逻辑下架：不再进入召回，原文与墓碑保留以供审计" },
+  { method: "POST", path: "/v2/memory/erase", desc: "物理擦除 L1 轮次原文、L2 摘要正文、L3 索引与后端向量" },
+  { method: "GET", path: "/v2/memory/items", desc: "列出可编辑 / 可删除的长期记忆（query: user_id 必填）" },
+  { method: "GET", path: "/v2/memory/items/{memory_id}", desc: "查询单条长期记忆详情（query: user_id 必填）" },
+  { method: "GET", path: "/v2/memory/tasks/{task_id}", desc: "查询后台任务终态（异步写入的轮询入口）" },
+  { method: "GET", path: "/v2/memory/l3/background-status", desc: "L3 后台写队列状态：写模式 / 线程数 / 剩余容量" },
 ];
 
 /** 管理面：/admin/api/*，全部需要 Authorization: Bearer <ADMIN_TOKEN>。 */
@@ -92,37 +92,28 @@ const FACTS = [
 ];
 
 const APPEND_CURL = `# 写入一轮对话（写操作，带幂等键）
-curl -X POST https://thinkback.internal/memory/append \\
+curl -X POST https://thinkback.internal/v2/memory/append \\
   -H "Content-Type: application/json" \\
   -H "Idempotency-Key: idem_001" \\
   -d '{
     "request_id": "req_001",
     "user_id": "u_8421",
     "session_id": "s_001",
-    "round_id": "r_001",
-    "messages": [
-      {
-        "message_id": "m_1",
-        "role": "user",
-        "content": "我平时用 Neovim 写 Python。",
-        "timestamp": "2026-10-27T08:00:00Z"
-      },
-      {
-        "message_id": "m_2",
-        "role": "assistant",
-        "content": "记下了：编辑器偏好 Neovim。",
-        "timestamp": "2026-10-27T08:00:05Z"
-      }
-    ],
-    "source_timestamp": "2026-10-27T08:00:05Z",
+    "event": {
+      "event_id": "e_001",
+      "source": "chat_round",
+      "role": "user",
+      "payload": "我平时用 Neovim 写 Python。",
+      "occurred_at": "2026-10-27T08:00:00Z"
+    },
     "namespace": "thinkback"
   }'
 
 # 异步模式下返回 status="accepted"，轮询任务取终态
-curl -X GET https://thinkback.internal/memory/tasks/task_123`;
+curl -X GET https://thinkback.internal/v2/memory/tasks/task_123`;
 
 const RECALL_CURL = `# 召回记忆（读操作：不带幂等键，不进幂等缓存）
-curl -X POST https://thinkback.internal/memory/recall \\
+curl -X POST https://thinkback.internal/v2/memory/recall \\
   -H "Content-Type: application/json" \\
   -d '{
     "user_id": "u_8421",
@@ -221,7 +212,7 @@ export function IntegrationPage() {
     <div className="space-y-6">
       <PageHeader
         title="INTEGRATION · 接入协议"
-        description="业务面 /memory/* · 管理面 /admin/api/* · 内网部署，业务端点免鉴权"
+        description="业务面 /v2/memory/* · 管理面 /admin/api/* · 内网部署，业务端点免鉴权"
         actions={
           <div className="flex items-center gap-2">
             <Badge variant="info">业务面免鉴权</Badge>
@@ -238,7 +229,7 @@ export function IntegrationPage() {
         <Card className="border-border-muted">
           <CardContent className="space-y-3 p-4 text-sm leading-relaxed text-foreground-muted">
             <p>
-              业务端点 <code className="font-mono text-foreground-emphasis">/memory/*</code>{" "}
+              业务端点 <code className="font-mono text-foreground-emphasis">/v2/memory/*</code>{" "}
               <span className="font-medium text-foreground-emphasis">不做调用方鉴权</span>
               ：没有 API Key、没有 Scope、没有{" "}
               <code className="font-mono">X-Tenant-Id</code>。服务假定调用方位于受控内网，
@@ -321,11 +312,11 @@ export function IntegrationPage() {
             <CardContent className="p-4">
               <p className="section-label mb-2">异步写入（默认）</p>
               <p className="text-sm leading-relaxed text-foreground-muted">
-                <code className="font-mono text-foreground-emphasis">POST /memory/append</code>{" "}
+                <code className="font-mono text-foreground-emphasis">POST /v2/memory/events</code>{" "}
                 返回 <code className="font-mono text-foreground-emphasis">status="accepted"</code>
                 ，L3 抽取在后台执行。轮询{" "}
                 <code className="font-mono text-foreground-emphasis">
-                  {"GET /memory/tasks/{task_id}"}
+                  {"GET /v2/memory/tasks/{task_id}"}
                 </code>{" "}
                 取终态：completed / failed / dead_letter。
               </p>
@@ -345,10 +336,10 @@ export function IntegrationPage() {
             <CardContent className="p-4">
               <p className="section-label mb-2">Idempotency-Key（仅写操作）</p>
               <p className="text-sm leading-relaxed text-foreground-muted">
-                只对 <code className="font-mono text-foreground-emphasis">/memory/*</code> 的写操作生效，
+                只对 <code className="font-mono text-foreground-emphasis">/v2/memory/*</code> 的写操作生效，
                 缓存 24h：同 key 同 body 回放上次响应（带{" "}
                 <code className="font-mono">X-Idempotent-Replay</code>），同 key 不同 body → 409。
-                <code className="font-mono text-foreground-emphasis">/memory/recall</code>{" "}
+                <code className="font-mono text-foreground-emphasis">/v2/memory/recall</code>{" "}
                 是读路径，不进缓存，也不接受幂等键。
               </p>
             </CardContent>
@@ -394,13 +385,13 @@ export function IntegrationPage() {
           <Code2 className="size-4" /> Quick Start
         </h2>
         <div className="space-y-3">
-          <CodeBlock title="写入一轮对话" code={APPEND_CURL} />
+          <CodeBlock title="写入一条事件" code={APPEND_CURL} />
           <CodeBlock title="召回相关记忆" code={RECALL_CURL} />
           <CodeBlock title="调用管理端点" code={ADMIN_CURL} />
         </div>
         <p className="text-xs text-foreground-muted">
-          必填字段：request_id、user_id、session_id、round_id、messages[message_id, role, content, timestamp]、
-          source_timestamp；namespace 与 metadata 可选。完整 schema 见{" "}
+          必填字段：request_id、user_id、session_id、event[event_id, source, role, payload,
+          occurred_at]；namespace、memory_type 与 metadata 可选。event_id 即幂等锚点，必须全局唯一。完整 schema 见{" "}
           <code className="font-mono">src/thinkback/memory/schemas.py</code>，接口文档见{" "}
           <code className="font-mono">/docs</code>。
         </p>

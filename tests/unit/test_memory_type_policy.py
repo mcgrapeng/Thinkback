@@ -78,7 +78,9 @@ class _RecordingBackend(FakeMemoryBackend):
         )
 
 
-def _append_request(round_id: str, *, metadata: dict[str, Any] | None = None) -> AppendMemoryRequest:
+def _append_request(
+    round_id: str, *, metadata: dict[str, Any] | None = None
+) -> AppendMemoryRequest:
     return AppendMemoryRequest(
         request_id=f"req-{round_id}",
         user_id="user-1",
@@ -147,8 +149,14 @@ def test_prompt_merge_keeps_global_constraints_first() -> None:
 
 
 def test_prompt_merge_without_type_instruction_returns_default() -> None:
-    assert build_extraction_prompt(DEFAULT_EXTRACTION_INSTRUCTIONS, "") == DEFAULT_EXTRACTION_INSTRUCTIONS
-    assert build_extraction_prompt(DEFAULT_EXTRACTION_INSTRUCTIONS, None) == DEFAULT_EXTRACTION_INSTRUCTIONS
+    assert (
+        build_extraction_prompt(DEFAULT_EXTRACTION_INSTRUCTIONS, "")
+        == DEFAULT_EXTRACTION_INSTRUCTIONS
+    )
+    assert (
+        build_extraction_prompt(DEFAULT_EXTRACTION_INSTRUCTIONS, None)
+        == DEFAULT_EXTRACTION_INSTRUCTIONS
+    )
 
 
 def test_backend_receives_merged_prompt_and_policy_version(tmp_path: Path) -> None:

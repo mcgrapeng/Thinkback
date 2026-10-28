@@ -114,18 +114,84 @@ class MemoryMessage(BaseModel):
         return value.strip()
 
 
+class SourceEvent(BaseModel):
+    """一条原始事件：写入契约的原子单位。
+
+    一次 append 收一条事件（ADR-0008），事件 ID 同时是幂等锚点。角色放开到
+    user / assistant / tool / system：工具结果与单向事实是企业助手的实际
+    形态，"只接受完整问答轮次"会把它们全挡在门外。哪类角色能成为某个记忆
+    类型的事实，由类型的 ``source_roles`` 决定。
+    """
+
+    model_config = ConfigDict(populate_by_name=True, use_enum_values=False, extra="forbid")
+
+    event_id: IdStr = Field(description="事件 ID；全局唯一，同时是幂等锚点。")
+    source: str = Field(
+        default="chat_round",
+        description="事件来源标识，如 chat_round / tool_result / import。",
+    )
+    role: MessageRole = Field(description="事件角色；能否成为用户事实由类型的 source_roles 决定。")
+    payload: str = Field(description="事件正文。")
+    occurred_at: datetime = Field(description="事件在源头发生的时间，使用 ISO 8601 格式。")
+    subject_ref: str | None = Field(
+        default=None,
+        description="事件指向的主体；缺省即 user_id。",
+    )
+    provenance: dict[str, Any] = Field(
+        default_factory=dict,
+        description="来源链路信息（上游系统、工具名、原始引用）。",
+    )
+
+    @field_validator("event_id")
+    @classmethod
+    def _reject_empty_event_id(cls, value: str) -> str:
+        if not value or not value.strip():
+            raise ValueError("required id field must be non-empty")
+        return value
+
+    @field_validator("source")
+    @classmethod
+    def _reject_empty_source(cls, value: str) -> str:
+        if not value or not value.strip():
+            raise ValueError("source must be non-empty")
+        return value
+
+    @field_validator("payload")
+    @classmethod
+    def _require_payload(cls, value: str) -> str:
+        if not value or not value.strip():
+            raise ValueError("payload must be non-empty")
+        return value.strip()
+
+    @field_validator("provenance", mode="before")
+    @classmethod
+    def enforce_provenance_size(cls, value: Any) -> Any:
+        if value is None:
+            return value
+        if not isinstance(value, dict):
+            return value
+        return _validate_metadata_size(value)
+
+
 class AppendMemoryRequest(BaseModel):
-    """追加对话请求。写入流程的入口"""
+    """内部写入模型：一轮 journal 记录（对外契约见 :class:`AppendEventRequest`）。
+
+    这是**存储模型**，不是对外契约：L1 的 journal 行就是「一轮 + 若干条
+    消息」。对外的写入契约是事件模型（一次 append 一条事件），由 API 层
+    把事件翻译成这里的轮次。
+
+    消息条数不再强制「恰好 user → assistant 两条」：工具结果与单向事实是
+    企业助手的实际形态。哪类角色能成为某个记忆类型的事实，由类型的
+    ``source_roles`` 决定（spec §4.2 / ADR-0008）。
+    """
 
     model_config = ConfigDict(populate_by_name=True, use_enum_values=False, extra="forbid")
 
     request_id: IdStr = Field(description="调用方请求 ID，用于链路追踪和幂等排查。")
     user_id: IdStr = Field(description="用户 ID；L1/L2/L3 读写都以该用户维度隔离。")
     session_id: IdStr = Field(description="会话 ID；L1/L2 使用该会话维度维护上下文和摘要。")
-    round_id: IdStr = Field(description="对话轮次 ID；同一 round_id 重复提交会做幂等或冲突校验。")
-    messages: list[MemoryMessage] = Field(
-        description="完整 user -> assistant 两条消息；append 只接受完整轮次。"
-    )
+    round_id: IdStr = Field(description="轮次 ID；同一 round_id 重复提交会做幂等或冲突校验。")
+    messages: list[MemoryMessage] = Field(description="本轮消息；至少一条。")
     source_timestamp: datetime = Field(description="该轮对话的源事件时间，使用 ISO 8601 格式。")
     round_index: int | None = Field(default=None, description="会话内轮次序号；无序号时可为空。")
     namespace: str = Field(
@@ -171,20 +237,90 @@ class AppendMemoryRequest(BaseModel):
         return f"{self.user_id}:{self.session_id}"
 
     @model_validator(mode="after")
-    def validate_complete_round(self) -> AppendMemoryRequest:
-        """验证这是完整的对话回合：恰好 user->assistant 两条消息，且都非空"""
-        if len(self.messages) != 2:
-            raise ValueError("append requires a complete user -> assistant round")
-        if (
-            self.messages[0].role is not MessageRole.USER
-            or self.messages[1].role is not MessageRole.ASSISTANT
-        ):
-            raise ValueError(
-                "append requires messages ordered as a complete user -> assistant round"
-            )
+    def validate_round(self) -> AppendMemoryRequest:
+        """至少一条消息，且每条正文非空。"""
+        if not self.messages:
+            raise ValueError("append requires at least one message")
         if not all(message.content for message in self.messages):
             raise ValueError("append requires non-empty content for each message in the round")
         return self
+
+
+class AppendEventRequest(BaseModel):
+    """对外写入契约（v2）：一次 append 一条原始事件。
+
+    事件的 ``event_id`` 同时是幂等锚点，必须全局唯一（ADR-0005 /
+    ADR-0008）。批量写入用多次 append 实现，不引入批次 ID。
+    """
+
+    model_config = ConfigDict(populate_by_name=True, use_enum_values=False, extra="forbid")
+
+    request_id: IdStr = Field(description="调用方请求 ID，用于链路追踪和幂等排查。")
+    user_id: IdStr = Field(description="用户 ID；L1/L2/L3 读写都以该用户维度隔离。")
+    session_id: IdStr = Field(description="会话 ID；L1/L2 使用该会话维度维护上下文和摘要。")
+    event: SourceEvent = Field(description="要写入的原始事件。")
+    namespace: str = Field(
+        default=DEFAULT_NAMESPACE,
+        description="记忆作用域标签（企业/应用/助手/垂类），同一 user 的不同 namespace 互不可见。",
+    )
+    memory_type: str | None = Field(
+        default=None,
+        description="记忆类型名；必须是该 namespace 已注册的类型，未注册直接报错。",
+    )
+    round_index: int | None = Field(default=None, description="会话内序号；无序号时可为空。")
+    metadata: dict[str, Any] = Field(
+        default_factory=dict,
+        description="调用方附加元数据；只用于索引和后端 metadata，不应放入密钥或大对象。",
+    )
+
+    @field_validator("namespace")
+    @classmethod
+    def _check_namespace(cls, value: str) -> str:
+        return _validate_namespace(value)
+
+    @field_validator("user_id", "session_id", "request_id")
+    @classmethod
+    def _reject_empty_or_whitespace(cls, value: str) -> str:
+        if not value or not value.strip():
+            raise ValueError("required id field must be non-empty")
+        return value
+
+    @field_validator("metadata", mode="before")
+    @classmethod
+    def enforce_metadata_size(cls, value: Any) -> Any:
+        if value is None:
+            return value
+        if not isinstance(value, dict):
+            return value
+        return _validate_metadata_size(value)
+
+    def to_internal(self) -> AppendMemoryRequest:
+        """翻译成内部轮次模型：一条事件 = 一轮一条消息。
+
+        记忆类型走 metadata，内部的类型解析优先读请求字段、其次读
+        metadata，两者等价。
+        """
+        metadata = dict(self.metadata)
+        if self.memory_type:
+            metadata["memory_type"] = self.memory_type
+        return AppendMemoryRequest(
+            request_id=self.request_id,
+            user_id=self.user_id,
+            session_id=self.session_id,
+            round_id=self.event.event_id,
+            messages=[
+                MemoryMessage(
+                    message_id=self.event.event_id,
+                    role=self.event.role,
+                    content=self.event.payload,
+                    timestamp=self.event.occurred_at,
+                )
+            ],
+            source_timestamp=self.event.occurred_at,
+            round_index=self.round_index,
+            namespace=self.namespace,
+            metadata=metadata,
+        )
 
 
 class RecallMemoryRequest(BaseModel):

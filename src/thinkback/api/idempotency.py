@@ -26,7 +26,7 @@ MAX_CACHE_SIZE = 10000
 
 # 读路径不进幂等缓存。recall 返回的是记忆正文：缓存它意味着内容被擦除后，
 # 同一把 Idempotency-Key 仍能在 24h 内回放含旧内容的响应。
-READ_ONLY_PATHS = frozenset({"/memory/recall"})
+READ_ONLY_PATHS = frozenset({"/v2/memory/recall"})
 
 
 @dataclass
@@ -141,7 +141,7 @@ class IdempotencyMiddleware(BaseHTTPMiddleware):
 
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
         # 只处理业务记忆路径的写操作（内网免鉴权，/memory/* 为唯一业务面）
-        if not request.url.path.startswith("/memory/"):
+        if not request.url.path.startswith("/v2/memory/"):
             return await call_next(request)
 
         # 读操作不需要写入幂等：缓存响应只会让过期内容被回放。

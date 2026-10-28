@@ -8,10 +8,15 @@ from enum import StrEnum
 
 
 class MessageRole(StrEnum):
-    """消息角色枚举，标识一轮对话中的参与者"""
+    """消息角色枚举，标识一条原始事件的来源角色。
+
+    ``tool`` 是工具返回：企业助手里工具结果与单向事实是常态，能不能成为
+    某个记忆类型的事实由类型的 ``source_roles`` 决定，不在这里写死。
+    """
 
     USER = "user"  # 用户消息
     ASSISTANT = "assistant"  # 模型输出
+    TOOL = "tool"  # 工具返回
     SYSTEM = "system"  # 系统级指令
 
 
