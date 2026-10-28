@@ -19,9 +19,9 @@ GRPC_MAX_WORKERS=8  # 线程池大小
 
 ## Proto 定义
 
-Proto 文件位于 `proto/memory.proto`，定义了 9 个核心 RPC：
+Proto 文件位于 `proto/memory.proto`，定义了 11 个核心 RPC：
 
-- `Append` - 追加对话回合
+- `AppendEvent` - 写入一条原始事件（v2 契约，与 HTTP `/v2/memory/events` 同形）
 - `Recall` - 召回记忆
 - `Delete` - 删除记忆
 - `ListMemories` - 列出可管理记忆
@@ -67,28 +67,19 @@ from thinkback.rpc import memory_pb2, memory_pb2_grpc
 channel = grpc.insecure_channel("localhost:50051")
 stub = memory_pb2_grpc.MemoryServiceStub(channel)
 
-# Append
-response = stub.Append(
-    memory_pb2.AppendRequest(
+# AppendEvent：一次一条原始事件，event_id 同时是幂等锚点
+response = stub.AppendEvent(
+    memory_pb2.AppendEventRequest(
         request_id="req-1",
         user_id="user-1",
         session_id="session-1",
-        round_id="round-1",
-        messages=[
-            memory_pb2.MemoryMessage(
-                message_id="m1",
-                role=memory_pb2.MESSAGE_ROLE_USER,
-                content="hello",
-                timestamp="2026-01-01T00:00:00Z",
-            ),
-            memory_pb2.MemoryMessage(
-                message_id="m2",
-                role=memory_pb2.MESSAGE_ROLE_ASSISTANT,
-                content="hi",
-                timestamp="2026-01-01T00:00:01Z",
-            ),
-        ],
-        source_timestamp="2026-01-01T00:00:01Z",
+        event=memory_pb2.SourceEvent(
+            event_id="event-1",
+            source="chat_round",
+            role=memory_pb2.MESSAGE_ROLE_USER,
+            payload="hello",
+            occurred_at="2026-01-01T00:00:00Z",
+        ),
     )
 )
 print(response.status, response.task_id)

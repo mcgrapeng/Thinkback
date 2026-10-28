@@ -51,40 +51,32 @@ def stub(grpc_channel: grpc.Channel):  # type: ignore[no-untyped-def]
     return memory_pb2_grpc.MemoryServiceStub(grpc_channel)  # type: ignore[no-untyped-call]
 
 
-def _append_request(round_id: str = "round-1") -> pb.AppendRequest:
-    return pb.AppendRequest(
+def _append_event_request(event_id: str = "event-1") -> pb.AppendEventRequest:
+    """v2 写入契约：一次一条原始事件（与 HTTP /v2/memory/events 同形）。"""
+    return pb.AppendEventRequest(
         request_id="req-1",
         user_id="u1",
         session_id="s1",
-        round_id=round_id,
-        messages=[
-            pb.MemoryMessage(
-                message_id="m1",
-                role=pb.MESSAGE_ROLE_USER,
-                content="hello",
-                timestamp="2026-01-01T00:00:00+00:00",
-            ),
-            pb.MemoryMessage(
-                message_id="m2",
-                role=pb.MESSAGE_ROLE_ASSISTANT,
-                content="hi",
-                timestamp="2026-01-01T00:00:01+00:00",
-            ),
-        ],
-        source_timestamp="2026-01-01T00:00:01+00:00",
+        event=pb.SourceEvent(
+            event_id=event_id,
+            source="chat_round",
+            role=pb.MESSAGE_ROLE_USER,
+            payload="hello",
+            occurred_at="2026-01-01T00:00:00+00:00",
+        ),
     )
 
 
 def test_append_returns_completed(stub: memory_pb2_grpc.MemoryServiceStub) -> None:
-    resp = stub.Append(_append_request())
+    resp = stub.AppendEvent(_append_event_request())
     assert resp.status in {"completed", "already_done"}
-    assert resp.round_id == "round-1"
+    assert resp.round_id == "event-1"  # 事件 ID 即幂等锚点，内部轮次 ID 用它
     assert resp.task_id
 
 
 def test_append_idempotent(stub: memory_pb2_grpc.MemoryServiceStub) -> None:
-    stub.Append(_append_request("round-idem"))
-    resp2 = stub.Append(_append_request("round-idem"))
+    stub.AppendEvent(_append_event_request("event-idem"))
+    resp2 = stub.AppendEvent(_append_event_request("event-idem"))
     assert resp2.status == "already_done"
 
 
@@ -94,7 +86,6 @@ def test_recall_returns_response(stub: memory_pb2_grpc.MemoryServiceStub) -> Non
             user_id="u1",
             session_id="s1",
             query="hello",
-            intent=pb.RECALL_INTENT_CHAT,
             l3_limit=5,
             l3_score_threshold=0.5,
             token_budget=1200,
@@ -104,17 +95,21 @@ def test_recall_returns_response(stub: memory_pb2_grpc.MemoryServiceStub) -> Non
     assert len(resp.items) >= 0  # protobuf repeated field
 
 
-def test_recall_sensitive_intent_rejected(stub: memory_pb2_grpc.MemoryServiceStub) -> None:
-    with pytest.raises(grpc.RpcError) as exc_info:
-        stub.Recall(
-            pb.RecallRequest(
-                user_id="u1",
-                session_id="s1",
-                query="secret",
-                intent=pb.RECALL_INTENT_SENSITIVE,
-            )
+def test_recall_has_no_intent_axis(stub: memory_pb2_grpc.MemoryServiceStub) -> None:
+    """召回不再有 intent 轴：该轴在域模型里已删除，proto 里一并撤掉。
+
+    旧口径是 SENSITIVE 无条件拒绝 —— 那是 fail-useless（连本地安全的
+    L1/L2 都不返回）。隐私诉求交给调用方决定要不要带敏感内容。
+    """
+    assert not hasattr(pb, "RECALL_INTENT_SENSITIVE")
+    resp = stub.Recall(
+        pb.RecallRequest(
+            user_id="u1",
+            session_id="s1",
+            query="secret",
         )
-    assert exc_info.value.code() == grpc.StatusCode.PERMISSION_DENIED
+    )
+    assert resp.status == "ok"
 
 
 def test_delete_memory_not_found_returns_empty(stub: memory_pb2_grpc.MemoryServiceStub) -> None:
@@ -144,10 +139,10 @@ def test_get_memory_not_found(stub: memory_pb2_grpc.MemoryServiceStub) -> None:
 
 def test_namespace_isolates_memories_over_grpc(stub: memory_pb2_grpc.MemoryServiceStub) -> None:
     """gRPC 侧 namespace 生效：不同作用域的记忆互不可见。"""
-    request = _append_request("round-ns-semi")
+    request = _append_event_request("event-ns-semi")
     request.request_id = "req-ns-semi"
     request.namespace = "semiconductor"
-    stub.Append(request)
+    stub.AppendEvent(request)
 
     scoped = stub.ListMemories(pb.ListMemoriesRequest(user_id="u1", namespace="semiconductor"))
     assert scoped.items
@@ -164,11 +159,11 @@ def test_empty_namespace_falls_back_to_default(stub: memory_pb2_grpc.MemoryServi
 
 def test_invalid_namespace_rejected_over_grpc(stub: memory_pb2_grpc.MemoryServiceStub) -> None:
     """非法 namespace 明确报错（INVALID_ARGUMENT），不静默归一化。"""
-    request = _append_request("round-ns-bad")
+    request = _append_event_request("event-ns-bad")
     request.request_id = "req-ns-bad"
     request.namespace = "a:b"
     with pytest.raises(grpc.RpcError) as exc_info:
-        stub.Append(request)
+        stub.AppendEvent(request)
     assert exc_info.value.code() == grpc.StatusCode.INVALID_ARGUMENT
 
 
@@ -270,12 +265,10 @@ class _ExplodingService:
 @pytest.mark.parametrize(
     ("rpc_call", "pb_request"),
     [
-        ("Append", _append_request()),
+        ("AppendEvent", _append_event_request()),
         (
             "Recall",
-            pb.RecallRequest(
-                user_id="u1", session_id="s1", query="q", intent=pb.RECALL_INTENT_CHAT
-            ),
+            pb.RecallRequest(user_id="u1", session_id="s1", query="q"),
         ),
         (
             "Delete",
@@ -328,7 +321,7 @@ def test_servicer_error_paths_abort_then_unreachable(rpc_call: str, pb_request: 
 
 
 def test_update_memory_over_grpc(stub: memory_pb2_grpc.MemoryServiceStub) -> None:
-    stub.Append(_append_request("round-update"))
+    stub.AppendEvent(_append_event_request("event-update"))
     listed = stub.ListMemories(pb.ListMemoriesRequest(user_id="u1", include_deleted=True))
     target = next(item for item in listed.items if item.content)
     original_id = target.memory_id
@@ -353,7 +346,7 @@ def test_update_memory_over_grpc(stub: memory_pb2_grpc.MemoryServiceStub) -> Non
 
 
 def test_get_task_returns_task_snapshot(stub: memory_pb2_grpc.MemoryServiceStub) -> None:
-    appended = stub.Append(_append_request("round-task"))
+    appended = stub.AppendEvent(_append_event_request("event-task"))
     resp = stub.GetTask(pb.GetTaskRequest(task_id=appended.task_id))
     assert resp.task_id == appended.task_id
     assert resp.status
@@ -361,14 +354,14 @@ def test_get_task_returns_task_snapshot(stub: memory_pb2_grpc.MemoryServiceStub)
 
 def test_get_task_reports_retry_count(stub: memory_pb2_grpc.MemoryServiceStub) -> None:
     """任务查询必须带重试次数：客户端据此判断是否接近重试预算上限。"""
-    appended = stub.Append(_append_request("round-retry-count"))
+    appended = stub.AppendEvent(_append_event_request("event-retry-count"))
     resp = stub.GetTask(pb.GetTaskRequest(task_id=appended.task_id))
     assert resp.retry_count >= 0
 
 
 def test_erase_task_is_queryable_over_grpc(stub: memory_pb2_grpc.MemoryServiceStub) -> None:
     """擦除任务必须能通过 gRPC 查询：此前 op_type 缺 ERASE，转换直接 KeyError。"""
-    stub.Append(_append_request("round-erase-grpc"))
+    stub.AppendEvent(_append_event_request("event-erase-grpc"))
     listed = stub.ListMemories(pb.ListMemoriesRequest(user_id="u1", include_deleted=True))
     target = next(item for item in listed.items if item.content)
 
@@ -391,7 +384,7 @@ def test_erase_task_is_queryable_over_grpc(stub: memory_pb2_grpc.MemoryServiceSt
 
 def test_suppress_over_grpc(stub: memory_pb2_grpc.MemoryServiceStub) -> None:
     """逻辑下架在 gRPC 上与 HTTP 等价。"""
-    stub.Append(_append_request("round-suppress-grpc"))
+    stub.AppendEvent(_append_event_request("event-suppress-grpc"))
     listed = stub.ListMemories(pb.ListMemoriesRequest(user_id="u1", include_deleted=True))
     target = next(item for item in listed.items if item.content)
 
