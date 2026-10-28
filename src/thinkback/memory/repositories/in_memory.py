@@ -47,6 +47,12 @@ def _stamp_invalidated(memory: MemoryIndexEntry) -> None:
         memory.invalid_at = datetime.now(UTC)
 
 
+def _as_utc(value: datetime) -> datetime:
+    """naive 时间按 UTC 处理（asyncpg/SQLite 可能丢掉 tzinfo）。"""
+
+    return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+
+
 @dataclass
 class InMemoryMemoryRepository(L1CacheMixin):
     journal_by_round: dict[str, JournalEntry] = field(default_factory=dict)
@@ -414,6 +420,27 @@ class InMemoryMemoryRepository(L1CacheMixin):
             memory.memory_status = MemoryStatus.DELETED
             _stamp_invalidated(memory)
         return memory
+
+    def list_expired_memories(
+        self,
+        *,
+        before: datetime,
+        limit: int = 500,
+        memory_scope_id: str | None = None,
+        user_id: str | None = None,
+    ) -> list[MemoryIndexEntry]:
+        """列出到期时刻早于 ``before`` 的 ACTIVE 记忆索引行。"""
+        expired = [
+            memory
+            for memory in self.memories.values()
+            if memory.memory_status is MemoryStatus.ACTIVE
+            and memory.expires_at is not None
+            and _as_utc(memory.expires_at) <= _as_utc(before)
+            and (memory_scope_id is None or memory.memory_scope_id == memory_scope_id)
+            and (user_id is None or memory.user_id == user_id)
+        ]
+        expired.sort(key=lambda memory: memory.expires_at or before)
+        return expired[:limit]
 
     def delete_memory_rows(self, memory_ids: list[str]) -> int:
         """物理删除 L3 业务索引行（erase 语义）。"""
