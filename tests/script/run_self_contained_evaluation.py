@@ -37,7 +37,6 @@ from thinkback.memory.schemas import (
     DeleteMemoryRequest,
     DeleteScope,
     MessageRole,
-    RecallIntent,
     RecallMemoryRequest,
     UpdateMemoryRequest,
 )
@@ -127,7 +126,6 @@ def _recall_l3_texts(
             user_id=user_id,
             session_id=session_id,
             query=query,
-            intent=RecallIntent.CHAT,
         )
     )
     return [item.content for item in response.items if item.layer == "L3"]
@@ -591,7 +589,6 @@ def case_recall_degrades_when_backend_fails() -> CaseResult:
             user_id="user-1",
             session_id="session-1",
             query="推荐附近的餐厅",  # 非 P0 槽位查询，强制走 backend.search
-            intent=RecallIntent.CHAT,
         )
     )
     elapsed = (time.perf_counter() - t0) * 1000
@@ -666,7 +663,6 @@ def case_recall_precision_at_10() -> CaseResult:
             user_id="user-1",
             session_id="session-1",
             query="用户的猫叫什么？",
-            intent=RecallIntent.CHAT,
             l3_limit=10,
         )
     )
@@ -699,7 +695,6 @@ def case_recall_recall_at_5_for_broad_query() -> CaseResult:
             user_id="user-1",
             session_id="session-1",
             query="jazz music",  # 不触发 P0 槽位，走 mem0 search
-            intent=RecallIntent.CHAT,
             l3_limit=5,
         )
     )
@@ -731,7 +726,6 @@ def case_recall_token_budget_clip() -> CaseResult:
             user_id="user-1",
             session_id="session-1",
             query="用户的猫叫什么？",
-            intent=RecallIntent.CHAT,
             l3_limit=10,
             token_budget=100,  # 极小
         )

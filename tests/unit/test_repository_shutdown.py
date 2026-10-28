@@ -43,12 +43,12 @@ def test_lifespan_shutdown_resets_service_singleton() -> None:
 
     from fastapi.testclient import TestClient
 
-    with TestClient(create_app()):
+    with TestClient(create_app(run_startup_tasks=False)):
         first = dependencies._memory_service
         assert first is not None
     assert dependencies._memory_service is None
 
-    with TestClient(create_app()):
+    with TestClient(create_app(run_startup_tasks=False)):
         second = dependencies._memory_service
         assert second is not None
         assert second is not first

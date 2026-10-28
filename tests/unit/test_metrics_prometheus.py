@@ -58,7 +58,7 @@ def test_request_total_counter_is_monotonic_across_window_boundary() -> None:
 
 def test_metrics_endpoint_returns_prometheus_text() -> None:
     """S2: GET /metrics 返回 text/plain; version=0.0.4 格式。"""
-    app = create_app()
+    app = create_app(run_startup_tasks=False)
     record_event("append_ok")
     with TestClient(app) as client:
         response = client.get("/health/metrics")

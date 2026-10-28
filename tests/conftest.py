@@ -41,5 +41,7 @@ def isolate_runtime_settings(monkeypatch) -> None:  # type: ignore[no-untyped-de
 
 @pytest.fixture()
 def client() -> Generator[TestClient, None, None]:
-    with TestClient(create_app()) as test_client:
+    # run_startup_tasks=False：单测不跑迁移、不建 Milvus 库、不做启动恢复，
+    # 因此不依赖真实 PG / Milvus / LLM —— 同一份代码在任何机器上结果一致。
+    with TestClient(create_app(run_startup_tasks=False)) as test_client:
         yield test_client

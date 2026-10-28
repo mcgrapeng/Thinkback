@@ -6,7 +6,7 @@ from thinkback.infra import logging as logging_infra
 
 
 def test_create_app_returns_fastapi_app() -> None:
-    app = create_app()
+    app = create_app(run_startup_tasks=False)
 
     assert isinstance(app, FastAPI)
     assert app.title == "thinkback Memory Service API"

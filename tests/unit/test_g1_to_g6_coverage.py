@@ -172,7 +172,7 @@ def test_lifespan_shuts_down_l3_executor() -> None:
     original_service = dependencies_module._memory_service
     dependencies_module._memory_service = service
     try:
-        with TestClient(create_app()):
+        with TestClient(create_app(run_startup_tasks=False)):
             # lifespan 入口运行；离开 with 块时 lifespan 退出
             pass
     finally:
