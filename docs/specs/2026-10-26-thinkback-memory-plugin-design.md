@@ -39,6 +39,13 @@
 | D17 | procedure 类型暂不进 v2 契约 | 没有审批主体就没有信任等级 |
 | D18 | gRPC 业务面不做 TLS，反射保留，并发上限设有限值 | 信任边界是网络；反射用于内网运维 |
 | D19 | 引擎投资只做中文分词器 | 不装 nlp extras；reranker 先建无 rerank 基线 |
+| D20 | decay 定位为不可达化，物理删除是另一道独立作业 | ADR-0006 |
+| D21 | Milvus collection 由 Thinkback 预建，mem0 接管 | 中文分词器与 BM25 Function 由我们定义；ADR-0007 |
+| D22 | 一次 append 收一条事件，幂等锚点即事件 ID | role 放开到 user/assistant/tool/system；ADR-0008 |
+| D23 | 分层预算 = 层保底份额 + 类型上限 | 未用完的额度可回流；调用方可传总预算覆盖默认 |
+| D24 | 类型配置沿用 JSON 就地扩字段并带 version | admin 端点触发重载；策略版本写进记忆记录；ADR-0009 |
+| D25 | 真实栈门禁做成一条命令，归档带 commit 号 | 签发清单的一条；不进 CI |
+| D26 | 垂类词表降级为抽取提示与 metadata 标签 | 不承担检索期过滤；ADR-0004 |
 
 D1+D6 的推论：10-19 的目标模型（Profile + 叙事 Collection + state TTL + procedural + 承诺，Milvus 可选）不是三层模型。本设计保留它的**类型化思路**，但把类型放回三层之内。
 
@@ -266,6 +273,8 @@ types:
 
 `recall.path` 决定该类型如何进入上下文：`fact` 进事实池，`instruction` 进提示词装配，`schedule` 走独立到期通道，不与事实抢预算。
 
+实现上沿用 JSON（`profiles/<namespace>.json`）并就地扩字段，不引 YAML 依赖：配置带 `version`，类型字段按上表补齐（`layer`、`recall`、`review`、`ttl_days`）。生效方式是启动加载加 admin 端点触发重载，重载前校验，非法配置拒绝生效而不是回落默认值。ADR-0009 要求每条记忆记录产生它的策略版本。
+
 ### 4.2 来源信任
 
 `trust` 与 `review_state` 入库必填，且**由服务端推导**，不接受调用方自报。
@@ -294,7 +303,7 @@ types:
 | `retention` | 各类型的保留期，如良率趋势 90 天、客户偏好永久 | 类型注册表的 retention 策略 |
 | `classification` | 行业敏感级别，如客户名、工艺参数、成本 | 分类准入（§8） |
 
-Mem0 承接点：每次写入的 `prompt` 参数承载领域抽取指令；`metadata` 携带 domain/entity 标签；升级 2.2.x 后 entity matching 让「工艺节点 / 设备型号 / 客户」成为原生检索信号。Thinkback 不再自己写实体识别逻辑。
+Mem0 承接点：每次写入的 `prompt` 参数承载领域抽取指令；`metadata` 携带 domain/entity 标签。**词表不承担检索期过滤**：实测 2.2.1 的 entity matching 因缺 spaCy 未启用（`entity_boost` 恒为 0，无 `_entities` collection），BM25 只对英文与型号词命中，中文查询关键词分为零。词表先做抽取提示与 metadata 标签，是否需要检索期过滤交给评测决定。ADR-0004。
 
 半导体示例（配置而非代码）：
 
@@ -404,11 +413,40 @@ GET  /v2/memory/records       列出记录
 GET  /v2/memory/sources/{ref} 取原始证据
 ```
 
-- 幂等：所有写操作要求 `Idempotency-Key`，DB 唯一键为 `(namespace, method, path, key)`。召回这类读形态的 POST 默认不进幂等缓存（见问题 7）。
+- 幂等：写入的锚点是请求体里的事件 ID（全局唯一，D15/D22）；范围类写操作（suppress/erase）用 `Idempotency-Key`，DB 唯一键为 `(namespace, method, path, key)`。召回这类读形态的 POST 不进幂等缓存。
 - 免鉴权：业务端点不要求 Authorization 或 X-Tenant-Id（D10）。namespace 由请求体显式给出，按字符集校验。`/admin/api/*` 仍要求 ADMIN_TOKEN。
 - 错误码沿用 TB-XXXX，新增“操作未完成”“需要审批”两类。
 - SDK：契约稳定后由 OpenAPI 与 proto 生成，不手写。
 - MCP：作为 TransportAdapter 在 P3 加入，tools 用于写搜删查，resources 用于记录与证据，状态查询回退普通 API。
+
+### 9.1 契约字段形态
+
+```text
+SourceEvent
+  event_id       全局唯一，幂等锚点（ADR-0005 / ADR-0008）
+  source         事件来源标识，如 chat_round / tool_result / import
+  role           user | assistant | tool | system
+  subject_ref    事件指向的主体，默认即 user_id
+  occurred_at    事件在源头发生的时间
+  received_at    服务收到的时间（可由服务端填）
+  payload        事件正文
+  provenance     来源链路信息（上游系统、工具名、原始引用）
+  trust          信任等级，服务端推导，不接受调用方自报
+
+WriteReceipt
+  operation_id   操作标识
+  status         accepted | completed | failed
+  layers         journal / context_view / facts 各自的状态与版本
+
+ContextPackage
+  items          分层内容，每条带来源引用、类型、信任等级、是否主动召回
+  degraded       是否降级
+  reasons        降级原因
+  token_estimate 估算占用
+  budget         预算使用情况
+```
+
+`role=assistant` 的内容不作为用户事实来源，只留在 L1；`role=tool` 是否可作为事实来源由类型的 `source_roles` 决定。信任等级由服务端按类型策略推导，调用方传什么都不影响判定。
 
 ## 10. 质量门禁
 
@@ -464,16 +502,28 @@ P0 与 P1 完成前不发布新接入方。P2 完成才算“插件形态”成�
 | 18 | 幂等锚点是全局 round_id 还是复合键 | 保持全局唯一，约束写进 schema 与 SDK | D15 / ADR-0005 |
 | 19 | 要不要为引擎能力投资 | 只做中文分词器；不装 nlp extras；reranker 先建无 rerank 基线 | D19 |
 
-### 第二轮待决
+### 已决（2026-10-28 第二轮 grilling）
+
+| # | 问题 | 结论 | 对应 |
+| --- | --- | --- | --- |
+| 20 | `decay.py` 物理保留期清扫删还是留 | decay 定位为不可达化，物理删除是另一道独立作业 | D20 / ADR-0006 |
+| 21 | collection 重建的回放与回滚方案 | Thinkback 预建 collection 并接管 schema；存量行复制式回填，不重新抽取；切换靠配置改名，旧集合留作回滚，双读兜底 | D21 / ADR-0007 |
+| 22 | 分层预算怎么切 | 层保底份额加类型上限，未用额度可回流；调用方可传总预算覆盖默认 | D23 |
+| 23 | v2 契约的字段级形态 | 采用 SourceEvent 规范模型并放开 role；一次 append 一条事件，锚点即事件 ID；WriteReceipt 与 ContextPackage 形状见 §9.1 | D22 / ADR-0008 |
+| 24 | 类型注册表配置格式与生效方式 | 沿用 JSON 扩字段加 version；admin 端点触发重载，非法配置拒绝生效 | D24 / ADR-0009 |
+| 25 | 真实栈门禁清单与归档位置 | 一条命令跑完整清单，结果带 commit 号归档，不进 CI | D25 |
+
+### 第三轮待决
 
 | # | 问题 | 阻塞什么 |
 | --- | --- | --- |
-| 20 | `decay.py` 物理保留期清扫删还是留 | 保留策略的实现范围；`expiration_date` 只隐藏不删除 |
-| 21 | 重建 collection 上中文分词器的回放与回滚方案 | 中文 BM25 落地；ADR-0004 的前置 |
-| 22 | 分层预算怎么切，L1/L2/L3 与类型各占多少 | 召回装配 |
-| 23 | v2 契约的字段级形态（WriteReceipt、ContextPackage、SourceEvent） | 契约冻结与 SDK 生成 |
-| 24 | 类型注册表配置文件的格式与生效方式 | 新增一类记忆只改配置 |
-| 25 | 真实栈门禁的具体清单与归档位置 | 发布签发 |
+| 26 | 保留策略与物理删除作业的形状 | 到期后多久删、删哪几层、审计正文与备份怎么办 |
+| 27 | v2 契约的迁移方式 | 现有 `/memory/*` 直接替换还是并存 |
+| 28 | 类型注册表的字段清单与校验规则 | 配置文件的最终形态 |
+| 29 | collection 重建的回滚细节 | 双读窗口、切换判据、回放脚本 |
+| 30 | 真实栈门禁的条目与阈值 | 什么算绿 |
+| 31 | 发布签发清单的最终形态 | 谁签、签什么 |
+| 32 | 抽取 prompt 的存放与版本化，评测语料与阈值标定 | 质量门禁的可重复性 |
 
 ## 13. 明确不做与理由
 
