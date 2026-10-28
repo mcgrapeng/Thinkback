@@ -23,7 +23,6 @@
       "conflict": "overwrite",
       "retention": "forever",
       "classification": "personal",
-      "entity_vocabulary": ["3nm", "5nm", "7nm", "14nm", "28nm", "FinFET", "GAA", "CMP", "光刻", "刻蚀", "薄膜沉积", "量测"],
       "description": "工艺与设备相关的事实：制程节点偏好、常用机台、良率敏感点"
     },
     "equipment_context": {
@@ -33,7 +32,6 @@
       "retention": "ttl",
       "ttl_days": 180,
       "classification": "personal",
-      "entity_vocabulary": ["ASML", "AMAT", "TEL", "量测设备", "缺陷密度", "关键尺寸", "套刻精度"],
       "description": "设备与量测上下文，时效性强"
     },
     "event": {

@@ -6,8 +6,7 @@
 
 边界（引擎优先原则）：
 - 抽取、检索、去重、过期都由 Mem0 负责，注册表不重复实现；
-- 注册表只决定「准入与策略」，不自己写行业正则或词表匹配逻辑；
-- 行业实体词表（entity_vocabulary）作为配置数据，供抽取 prompt 与检索过滤使用。
+- 注册表只决定「准入与策略」，不自己写行业正则或词表匹配逻辑。
 """
 
 from __future__ import annotations
@@ -28,7 +27,25 @@ Retention = Literal["forever", "ttl"]
 
 @dataclass(frozen=True)
 class MemoryTypeSpec:
-    """一种记忆类型的策略定义。"""
+    """一种记忆类型的策略定义。
+
+    只保留**真正被运行时消费**的字段：没有行为消费者的配置项只会给出
+    错误预期（以为配了词表就会影响抽取），所以一律不留。
+
+    字段：
+      name: 类型名
+      layer: 所属层（当前实现只落地 L3）
+      extractor: 抽取方式。``none`` = 不抽取（策略性条目）；
+        其余值都交给 Mem0 抽取（``mem0`` / ``profile`` 目前行为相同）。
+      source_roles: 允许作为该类型来源的角色（assistant 默认不在其中：
+        助手的话不是用户事实）。
+      conflict: 同槽位新事实是否覆盖旧事实（overwrite / append / none）。
+      retention: 保留策略（forever / ttl）。
+      ttl_days: TTL 天数（retention=ttl 时生效，由 Mem0 expiration_date 承担）。
+      classification: 该类型的敏感级别（语义由 domain/classification.py 统一执行）。
+      review_required: 是否需要审批后才能写入。
+      description: **仅供人阅读**的类型说明，不参与任何行为。
+    """
 
     name: str
     layer: Literal["L1", "L2", "L3"] = "L3"
@@ -42,11 +59,7 @@ class MemoryTypeSpec:
     # 分类语义由 domain/classification.py 统一执行，配置不能自造级别。
     classification: str = "personal"
     review_required: bool = False
-    # 该类型在召回预算里的份额；None 表示用层默认配额。
-    recall_budget: int | None = None
-    # 受控实体词表（行业术语、别名），只作为数据，不参与匹配逻辑。
-    entity_vocabulary: tuple[str, ...] = ()
-    # 供抽取 prompt 引用的领域说明
+    # 仅供人阅读的类型说明；不参与抽取、检索或预算计算。
     description: str = ""
 
     def allows_role(self, role: str) -> bool:
@@ -191,8 +204,6 @@ def registry_from_dict(payload: dict[str, Any], *, namespace: str) -> MemoryType
             ttl_days=raw.get("ttl_days"),
             classification=classification,
             review_required=bool(raw.get("review_required", False)),
-            recall_budget=raw.get("recall_budget"),
-            entity_vocabulary=tuple(raw.get("entity_vocabulary", ())),
             description=raw.get("description", ""),
         )
     return MemoryTypeRegistry(namespace=namespace, types=types)
