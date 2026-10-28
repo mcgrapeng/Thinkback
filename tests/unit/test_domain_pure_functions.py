@@ -150,12 +150,6 @@ class TestFingerprint:
         event = make_append(round_id="round-1", content="hi", metadata={"memory_type": "event"})
         assert request_fingerprint(state) != request_fingerprint(event)
 
-    def test_request_fingerprint_depends_on_namespace(self) -> None:
-        """namespace 是幂等身份的一部分：同一轮换 namespace 必须是另一轮。"""
-        base = make_append(round_id="round-1", content="hi")
-        other = make_append(round_id="round-1", content="hi", namespace="semiconductor")
-        assert request_fingerprint(base) != request_fingerprint(other)
-
 
 class TestRoundSortKey:
     def test_null_round_index_sorts_before_numeric(self) -> None:

@@ -44,16 +44,15 @@ def fingerprint(messages: list[dict[str, Any]]) -> str:
 
 
 def request_fingerprint(request: AppendMemoryRequest) -> str:
-    """请求级指纹：消息 + namespace + 影响行为的 metadata。
+    """请求级指纹：消息 + 影响行为的 metadata。
 
     与 ``save_round`` 存库的 ``round_fingerprint`` 必须同源计算，重放才比得上。
 
-    namespace 进指纹的原因：同一 round_id 在不同 namespace 是两次不同的
-    写入（namespace 是长期记忆的隔离维度）。不进指纹时，第二个 namespace
-    会被当成已写过的同一轮而静默丢写。
+    注意：namespace **不进指纹**。指纹是已落库的哈希，改算法会让升级前的
+    轮次在重放时算出不匹配的指纹（误报 409，客户端可能因此重复写入）。
+    namespace 的隔离由 journal 的 namespace 字段单独判定。
     """
     payload = {
-        "namespace": request.namespace,
         "messages": [
             {"role": message.role.value, "content": message.content} for message in request.messages
         ],
