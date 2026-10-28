@@ -1407,9 +1407,11 @@ L2 更新 (缓存失效)
         if self.l3_write_mode != "async":
             return 0
         recovered = 0
-        for task in self.repository.list_tasks(
-            statuses=[TaskStatus.RUNNING.value, TaskStatus.PENDING.value], limit=200
-        ):
+        # 先把待恢复任务**全部**分页收集完，再开始处理。
+        # 边取边处理会漏任务：恢复完的任务状态变成 COMPLETED，退出
+        # 「RUNNING/PENDING」过滤集，列表缩短，offset 就跳过了未处理项。
+        pending = self._collect_pending_write_tasks()
+        for task in pending:
             if task.op_type is not OperationType.WRITE_ROUND:
                 continue
             scope = task.scope or {}
@@ -1440,7 +1442,9 @@ L2 更新 (缓存失效)
                     user_id=str(user_id),
                     memory_scope_id=str(namespace),
                     source_refs=source_refs,
-                    request_metadata={},
+                    # 重放必须沿用该轮原本的类型/分类/TTL 策略，否则
+                    # state 会被重放成 profile、TTL 丢失。
+                    request_metadata=self._replay_metadata(entry),
                     prefetched_events=prefetched,
                 )
             except Exception as exc:  # noqa: BLE001 - 单条失败不影响其它恢复
@@ -1461,6 +1465,29 @@ L2 更新 (缓存失效)
         if recovered:
             logger.bind(recovered_count=recovered).info("memory pending writes recovered")
         return recovered
+
+    def _collect_pending_write_tasks(self) -> list[TaskEntry]:
+        """分页取全部待恢复的 L3 写入任务。
+
+        单页上限会让超过一页的 accepted 写入永久停留在 RUNNING，最后被
+        当成孤儿标成 failed —— 那些长期记忆就永远缺失了。
+        """
+        page_size = 200
+        collected: list[TaskEntry] = []
+        offset = 0
+        while True:
+            page = self.repository.list_tasks(
+                statuses=[TaskStatus.RUNNING.value, TaskStatus.PENDING.value],
+                limit=page_size,
+                offset=offset,
+            )
+            if not page:
+                break
+            collected.extend(page)
+            if len(page) < page_size:
+                break
+            offset += len(page)
+        return collected
 
     def _run_l3_write(
         self,

@@ -9252,6 +9252,83 @@ def test_startup_replays_accepted_write_tasks() -> None:
     assert len(repository.active_memories("user-1", "thinkback")) == 1
 
 
+def test_recovery_preserves_memory_type_and_ttl_policy() -> None:
+    """崩溃恢复必须沿用该轮原本的类型/TTL 策略，不能退回默认 profile。
+
+    重放时若不带上 journal 里保存的生效元数据，state 类型会变成
+    profile、TTL 丢失，事实的保留期与冲突语义都跟着变。
+    """
+    repository = InMemoryMemoryRepository()
+    backend = FakeMemoryBackend()
+    service = MemoryService(repository=repository, backend=backend, l3_write_mode="async")
+    entry = repository.save_round(
+        make_append(
+            round_id="r-recover-ttl",
+            content="当前批次良率 88%",
+            metadata={"memory_type": "state"},
+        ),
+        request_metadata={"memory_type": "state", "data_classification": "personal"},
+    )
+    repository.update_l1(entry)
+    repository.save_task(
+        TaskEntry(
+            task_id="memory-extract:r-recover-ttl",
+            request_id="req-r-recover-ttl",
+            op_type=OperationType.WRITE_ROUND,
+            scope={
+                "user_id": "user-1",
+                "session_id": "session-1",
+                "session_scope_id": "session-1",
+                "long_term_scope_id": "thinkback",
+                "round_id": "r-recover-ttl",
+            },
+            status=TaskStatus.RUNNING,
+        )
+    )
+
+    recovered = service.recover_pending_writes()
+
+    assert recovered == 1
+    memories = repository.active_memories("user-1", "thinkback")
+    assert len(memories) == 1
+    assert memories[0].memory_type == "state"
+    # TTL 类型（state 默认 90 天）必须仍然生效。
+    assert memories[0].expires_at is not None
+
+
+def test_recovery_processes_more_than_one_page_of_pending_tasks() -> None:
+    """待恢复任务超过一页时必须全部重放，不能只处理前 200 条。"""
+    repository = InMemoryMemoryRepository()
+    service = MemoryService(
+        repository=repository, backend=FakeMemoryBackend(), l3_write_mode="async"
+    )
+    total = 205
+    for index in range(total):
+        round_id = f"r-page-{index:03d}"
+        entry = repository.save_round(make_append(round_id=round_id, content=f"第 {index} 轮"))
+        repository.update_l1(entry)
+        repository.save_task(
+            TaskEntry(
+                task_id=f"memory-extract:{round_id}",
+                request_id=f"req-{round_id}",
+                op_type=OperationType.WRITE_ROUND,
+                scope={
+                    "user_id": "user-1",
+                    "session_id": "session-1",
+                    "session_scope_id": "session-1",
+                    "long_term_scope_id": "thinkback",
+                    "round_id": round_id,
+                },
+                status=TaskStatus.RUNNING,
+            )
+        )
+
+    recovered = service.recover_pending_writes()
+
+    assert recovered == total
+    assert len(repository.active_memories("user-1", "thinkback")) == total
+
+
 def test_erase_purges_engine_history_with_backend_ids_and_scope() -> None:
     """erase 必须把被删的后端 ID 与作用域交给引擎侧清理（历史 + 原始消息）。"""
 
