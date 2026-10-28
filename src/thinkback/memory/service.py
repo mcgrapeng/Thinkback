@@ -308,6 +308,16 @@ class MemoryService:
         # L2 保持拼接式降级实现；启用时复用 L3 后台线程池。
         # P2#7 遗忘 decay：默认不构造（开关在 dependencies 侧按配置注入）。
         self._decay_sweeper = decay_sweeper
+
+        def _reserve_l2_capacity(wait_seconds: float | None = None) -> None:
+            """L2 与 L3 共用同一个队列预算。
+
+            L2 走的是 append 请求线程，所以拿不到就延后（wait_seconds=0），
+            绝不在这里等：等 5 秒会把 append 变成慢请求。
+            """
+
+            self._l3.reserve_write_slot(wait_seconds)
+
         self._l2_refresher: L2BackgroundRefresher | None = (
             L2BackgroundRefresher(
                 repository=repository,
@@ -315,9 +325,7 @@ class MemoryService:
                 executor=self._l3.executor,
                 refresh_interval_rounds=l2_refresh_interval_rounds,
                 on_refreshed=lambda _u, _s: None,  # V2.1：cache 已删，no-op
-                # L2 与 L3 共用同一个队列预算：否则新会话突发会绕过
-                # max_pending_tasks 直接压到 LLM 上。
-                reserve_capacity=self._l3.reserve_write_slot,
+                reserve_capacity=_reserve_l2_capacity,
                 release_capacity=self._l3.release_write_slot,
             )
             if l2_summary_composer is not None
@@ -569,6 +577,9 @@ L2 更新 (缓存失效)
         l3_slot_reserved = False
         # 任务行可能还没建出来（get_task 就失败了），except 分支要能容忍 task 为 None。
         task: TaskEntry | None = None
+        # attempt=0 表示「这次没登记执行尝试」（命中 write-gate 的轮次不会
+        # 走 L3 写入），终态写不做 attempt 守卫。
+        attempt = 0
         # 槽位预留与后续所有可能抛异常的调用必须在同一个 try 里：预留之后、
         # try 之前的任何一次异常（get_task / _check_retry_budget / save_task）
         # 都会让 release_write_slot 永远不执行 —— 槽位只进不出。
@@ -702,16 +713,24 @@ L2 更新 (缓存失效)
                         round_id=request.round_id,
                         l3_events=l3_events,
                     )
-                l3_events = self._run_l3_write(
-                    messages=[
-                        {"role": message.role.value, "content": message.content}
-                        for message in request.messages
-                    ],
-                    user_id=request.user_id,
-                    memory_scope_id=l3_scope_id,
-                    source_refs=[{"session_id": request.session_id, "round_id": request.round_id}],
-                    request_metadata=effective_metadata,
-                    prefetched_events=prefetched_events,
+                # 同步写入同样要有心跳与 attempt：慢的同步写入超过孤儿阈值
+                # 会被读路径回收成 failed，随后又被终态写翻回 COMPLETED。
+                attempt = self._begin_task_attempt(task.task_id)
+                l3_events = self._run_with_task_heartbeat(
+                    task.task_id,
+                    lambda: self._run_l3_write(
+                        messages=[
+                            {"role": message.role.value, "content": message.content}
+                            for message in request.messages
+                        ],
+                        user_id=request.user_id,
+                        memory_scope_id=l3_scope_id,
+                        source_refs=[
+                            {"session_id": request.session_id, "round_id": request.round_id}
+                        ],
+                        request_metadata=effective_metadata,
+                        prefetched_events=prefetched_events,
+                    ),
                 )
                 current_round = self.repository.get_round(request.round_id)
                 round_deleted = (
@@ -772,7 +791,7 @@ L2 更新 (缓存失效)
         self._mutate_task_with_retry(
             task.task_id,
             lambda current_task: self._finalize_append_task(
-                current_task, request.round_id, l3_events
+                current_task, request.round_id, l3_events, attempt
             ),
             log_context={"stage": "append_final"},
             # 终态写必须严格：CAS 耗尽时抛错，让 append 返回 5xx，
@@ -1032,13 +1051,19 @@ L2 更新 (缓存失效)
             raise TaskLockExhaustedError(str(task_id), attempts)
         return None
 
-    @staticmethod
     def _finalize_append_task(
-        task: TaskEntry, round_id: str, l3_events: list[dict[str, Any]]
+        self, task: TaskEntry, round_id: str, l3_events: list[dict[str, Any]], attempt: int
     ) -> None:
         """S3: append 终态 mutate 回调。set 绝对值；与 ``_mutate_task_with_retry``
-        配合，跨副本 CAS 冲突时重读快照重放。"""
+        配合，跨副本 CAS 冲突时重读快照重放。
 
+        attempt 守卫：任务若已被回收并由别人重试（attempt 号变了），
+        旧执行者不得把状态写回 COMPLETED——那会造成「RUNNING → FAILED →
+        COMPLETED」的翻转，客户端据此重试就会重复写。
+        """
+
+        if not self._task_is_current_attempt(task, attempt):
+            return
         task.status = TaskStatus.COMPLETED
         task.result = {
             "round_id": round_id,
@@ -1238,7 +1263,11 @@ L2 更新 (缓存失效)
         这些记录，避免重复抽取、重复计费和产生两条冲突事实。
         """
         try:
-            rows = self.backend.get_all(user_id=user_id, memory_scope_id=memory_scope_id, limit=200)
+            # 上限放宽：namespace 里记忆很多时，按前 N 条找来源引用会漏掉那一轮，
+            # 重试就会重复抽取（多一条事实 + 多一次 LLM 费用）。
+            rows = self.backend.get_all(
+                user_id=user_id, memory_scope_id=memory_scope_id, limit=1000
+            )
         except Exception as exc:  # noqa: BLE001 - 对账失败不该挡住重试
             logger.bind(
                 user_id=user_id,
@@ -1316,8 +1345,13 @@ L2 更新 (缓存失效)
 
                 try:
                     self._mutate_task_with_retry(task_id, touch)
-                except Exception:  # noqa: BLE001 - 心跳失败不该影响主流程
-                    return
+                except Exception as exc:  # noqa: BLE001 - 心跳失败不该影响主流程
+                    # 一次 DB 抖动不能就此结束心跳：心跳停了，健康的长任务会被
+                    # 当成孤儿回收。下一次继续打。
+                    logger.bind(task_id=task_id, error_type=type(exc).__name__).warning(
+                        "memory task heartbeat failed"
+                    )
+                    continue
 
         thread = Thread(target=_beat, daemon=True, name=f"task-heartbeat-{task_id}")
         thread.start()
@@ -2060,6 +2094,11 @@ L2 更新 (缓存失效)
             self._assert_operation_scope_matches(existing_task, task_scope, operation_name="erase")
             if existing_task.status is TaskStatus.COMPLETED:
                 return self._existing_erase_response(existing_task)
+            if existing_task.status in {TaskStatus.RUNNING, TaskStatus.DEAD_LETTER}:
+                # 另一个执行者可能正在做（RUNNING）或预算已耗尽（DEAD_LETTER）：
+                # 不碰它的进度，只回报真实状态——抢着跑会把它的阶段记账搅乱。
+                return self._erase_in_progress_response(existing_task)
+            # FAILED / PENDING：上一个执行者已经不在了，按计划续跑。
             return self._run_erase_stages(request, existing_task)
 
         task = TaskEntry(
@@ -2073,9 +2112,10 @@ L2 更新 (缓存失效)
         task, task_claimed = self.repository.claim_task(task)
         self._assert_operation_scope_matches(task, task_scope, operation_name="erase")
         if not task_claimed:
+            # 抢不到：另一个写入者已经占了这一轮。
             if task.status is TaskStatus.COMPLETED:
                 return self._existing_erase_response(task)
-            return self._run_erase_stages(request, task)
+            return self._erase_in_progress_response(task)
 
         plan = self._plan_erase(request, l3_scope_id, session_scope_id)
         task.result = {"plan": plan, "done_stages": []}
@@ -2211,6 +2251,17 @@ L2 更新 (缓存失效)
     ) -> DeleteMemoryResponse:
         """按计划执行擦除阶段。中途失败重试时从已完成阶段之后继续。"""
         plan = dict(task.result.get("plan") or {})
+        if not plan:
+            # 计划缺失 = 上一个执行者死在「claim 成功、计划落库之前」。
+            # 计划是在任何副作用之前写的，所以此刻还没有删过任何东西：
+            # 按当前状态重算一次并落库，绝不能拿空计划假装擦完了。
+            plan = self._plan_erase(
+                request,
+                self._long_term_scope_id(request),
+                self._session_scope_id(request),
+            )
+            task.result = {"plan": plan, "done_stages": []}
+            self.repository.save_task(task)
         done = set(task.result.get("done_stages") or [])
         scope_value = str(plan.get("scope") or request.scope.value)
         namespace = str(plan.get("namespace") or self._long_term_scope_id(request))
@@ -2321,6 +2372,15 @@ L2 更新 (缓存失效)
     def _existing_erase_response(self, task: TaskEntry) -> DeleteMemoryResponse:
         return DeleteMemoryResponse(
             status="completed",
+            task_id=task.task_id,
+            affected_memories=int(task.result.get("affected_memories", 0) or 0),
+            summary_state=SummaryState.DIRTY,
+        )
+
+    def _erase_in_progress_response(self, task: TaskEntry) -> DeleteMemoryResponse:
+        """擦除正在别处进行：如实回报运行中，不伪造完成。"""
+        return DeleteMemoryResponse(
+            status="running",
             task_id=task.task_id,
             affected_memories=int(task.result.get("affected_memories", 0) or 0),
             summary_state=SummaryState.DIRTY,

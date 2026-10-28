@@ -54,7 +54,7 @@ class L2BackgroundRefresher:
         executor: ThreadPoolExecutor,
         refresh_interval_rounds: int = 5,
         on_refreshed: OnSummaryRefreshed | None = None,
-        reserve_capacity: Callable[[], None] | None = None,
+        reserve_capacity: Callable[..., None] | None = None,
         release_capacity: Callable[[], None] | None = None,
         max_tracked_scopes: int = 4096,
     ) -> None:
@@ -123,9 +123,10 @@ class L2BackgroundRefresher:
 
         # 容量闸门：与 L3 共用队列预算，队列满时保留拼接摘要并延后，
         # 不排队（否则新会话突发会绕过 max_pending_tasks 压垮 LLM）。
+        # 不等待：这里跑在 append 请求线程里，等 5 秒会把 append 变慢。
         if self._reserve_capacity is not None:
             try:
-                self._reserve_capacity()
+                self._reserve_capacity(0)
             except Exception as exc:  # noqa: BLE001 - 队列满只是延后
                 logger.bind(
                     user_id=user_id,
@@ -135,6 +136,12 @@ class L2BackgroundRefresher:
                 return
 
         with self._state_lock:
+            if scope in self._pending_scopes:
+                # 容量闸门期间另一个 append 也判定该刷新：它先抢到，本作用域
+                # 不能再提交一次（两次 LLM 刷新会互相覆盖摘要）。
+                if self._release_capacity is not None:
+                    self._release_capacity()
+                return
             self._append_counters[scope] = 0
             self._pending_scopes.add(scope)
 

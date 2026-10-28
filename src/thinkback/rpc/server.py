@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+from threading import Thread
 
 import grpc
 from grpc_reflection.v1alpha import reflection
@@ -82,6 +83,23 @@ def serve(
     )
     server.start()
     logger.info("grpc server started", address=address)
+
+    # 崩溃恢复与 HTTP 入口一致：独立 gRPC 进程也要重放未完成的 L3 写入，
+    # 否则这个部署形态下那批长期记忆会永久缺失。
+    def _recover() -> None:
+        try:
+            recovered = service.recover_pending_writes()
+        except Exception as exc:  # noqa: BLE001 - 恢复失败不该挡住服务
+            logger.bind(error_type=type(exc).__name__).warning(
+                "memory pending write recovery failed on startup"
+            )
+            return
+        if recovered:
+            logger.bind(recovered_count=recovered).warning(
+                "memory pending writes recovered on startup"
+            )
+
+    Thread(target=_recover, name="pending-write-recovery", daemon=True).start()
 
     def _shutdown(signum: int, _frame: object) -> None:
         """SIGTERM/SIGINT 处理：先 graceful stop，再由 ``wait_for_termination`` 返回。"""

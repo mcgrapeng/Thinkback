@@ -63,10 +63,15 @@ class L3WriteExecutor:
         self._write_futures: set[Future[Any]] = set()
         self._cleanup_futures: set[Future[Any]] = set()
 
-    def reserve_write_slot(self) -> None:
-        """为后台 L3 写入预留一个队列槽位，队列满时快速失败。"""
+    def reserve_write_slot(self, wait_seconds: float | None = None) -> None:
+        """为后台 L3 写入预留一个队列槽位，队列满时快速失败。
 
-        acquired = self._capacity.acquire(timeout=self.queue_wait_seconds)
+        ``wait_seconds`` 为 0 时不等待（拿不到就失败）：L2 刷新走的是
+        append 请求线程，等 5 秒会把 append 变成慢请求。
+        """
+
+        timeout = self.queue_wait_seconds if wait_seconds is None else wait_seconds
+        acquired = self._capacity.acquire(timeout=timeout)
         if not acquired:
             pending = self.pending_write_count()
             logger.bind(
