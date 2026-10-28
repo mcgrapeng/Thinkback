@@ -33,6 +33,7 @@ from thinkback.domain.ports import (
     MemoryBackend,
     MemoryRepository,
 )
+from thinkback.domain.prompts import DEFAULT_EXTRACTION_INSTRUCTIONS, build_extraction_prompt
 from thinkback.domain.recall_policy import dedupe_and_clip
 from thinkback.domain.safety import (
     messages_are_restricted_or_unsafe,
@@ -115,8 +116,11 @@ _RESERVED_METADATA_KEYS = frozenset(
     {
         "backend_categories",
         "data_classification",
+        "extraction_prompt_version",
+        "extractor",
         "force_extract",
         "memory_type",
+        "policy_version",
         "source_text",
         "source_timestamp",
         "source_type",
@@ -378,10 +382,16 @@ class MemoryService:
 
     @staticmethod
     def _resolve_type_name(request: Any) -> str:
-        """请求声明的记忆类型：请求字段 > metadata > 默认 profile。"""
+        """请求声明的记忆类型：请求字段 > metadata > 默认 profile。
+
+        请求字段是类型**名**（v2 契约放开自定义类型），可以是内置枚举值，
+        也可以是 profile 里注册的行业类型名。
+        """
         declared = getattr(request, "memory_type", None)
         if isinstance(declared, MemoryType):
             return declared.value
+        if isinstance(declared, str) and declared.strip():
+            return declared.strip()
         metadata = getattr(request, "metadata", None) or {}
         raw = metadata.get("memory_type")
         if isinstance(raw, str) and raw:
@@ -1591,9 +1601,12 @@ L2 更新 (缓存失效)
                 "memory l3 write skipped: type has no extractor"
             )
             return [{"event": "SKIP", "reason": "type_not_extractable"}]
-        if not type_spec.allows_role("user"):
+        # 来源角色由类型策略决定（spec §4.2 / ADR-0008）：assistant 的话不是
+        # 用户事实来源，tool 事件只有类型显式接受时才参与抽取。
+        allowed_roles = set(type_spec.source_roles)
+        if not any(str(message.get("role", "")) in allowed_roles for message in messages):
             run_log.bind(memory_type=type_spec.name).info(
-                "memory l3 write skipped: type does not accept user role"
+                "memory l3 write skipped: no message role allowed for type"
             )
             return [{"event": "SKIP", "reason": "role_not_allowed_for_type"}]
         if self._source_refs_excluded(user_id, memory_scope_id, source_refs):
@@ -1611,13 +1624,28 @@ L2 更新 (缓存失效)
         ):
             run_log.bind(reason="pre_extract_gate_failed").info("memory l3 write skipped")
             return [{"event": "SKIP", "reason": "pre_extract_gate_failed"}]
+        # 抽取指令：全局默认 + 类型指令，服务侧拼好后传给引擎（ADR-0014）。
+        # 产生这条事实的策略版本一并记下，策略变更后仍能解释它的来源
+        # （ADR-0009）。
+        extraction_prompt = build_extraction_prompt(
+            DEFAULT_EXTRACTION_INSTRUCTIONS,
+            type_spec.extraction_prompt_text,
+        )
+        write_metadata = {
+            **request_metadata,
+            "policy_version": self._type_registry(memory_scope_id).version,
+            "extraction_prompt_version": type_spec.extraction_prompt_version or "default",
+            "extractor": type_spec.extractor,
+        }
         l3_events = self._add_l3_from_messages(
             messages,
             user_id=user_id,
             memory_scope_id=memory_scope_id,
             source_refs=source_refs,
-            request_metadata=request_metadata,
+            request_metadata=write_metadata,
             expiration_date=self._expiration_date(type_spec),
+            extraction_prompt=extraction_prompt,
+            allowed_roles=allowed_roles,
             prefetched_events=prefetched_events,
         )
         run_log.bind(l3_event_count=len(l3_events)).info("memory l3 write completed")
@@ -4366,6 +4394,8 @@ L2 更新 (缓存失效)
         source_refs: list[dict[str, str]],
         request_metadata: dict[str, Any],
         expiration_date: str | None = None,
+        extraction_prompt: str | None = None,
+        allowed_roles: set[str] | None = None,
         prefetched_events: list[dict[str, Any]] | None = None,
     ) -> list[dict[str, Any]]:
         """调用 L3 后端提取长期记忆，并把返回事件交给本地索引。
@@ -4443,14 +4473,14 @@ L2 更新 (缓存失效)
         )
         add_log.info("memory l3 add started")
         l3_metadata = self._l3_metadata(source_refs, request_metadata)
-        # 只有用户消息能成为「用户事实」的来源。assistant 的回答留在 L1 原文里，
-        # 但不能进 mem0 抽取输入，也不能拿去做 source_text 交叉校验 ——
-        # 否则助手的一次幻觉会被当成事实来源，长期自我强化。
-        trusted_messages = [
-            message for message in messages if message.get("role") == MessageRole.USER.value
-        ]
+        # 来源角色由类型策略决定（spec §4.2 / ADR-0008）。默认只有 user：
+        # assistant 的回答留在 L1 原文里，但不该进抽取输入，也不能拿去做
+        # source_text 交叉校验 —— 否则助手的一次幻觉会被当成事实来源，长期
+        # 自我强化。tool 事件只有类型显式接受时才参与。
+        roles = allowed_roles or {MessageRole.USER.value}
+        trusted_messages = [message for message in messages if message.get("role") in roles]
         if not trusted_messages:
-            add_log.info("memory l3 add skipped: no trusted user source")
+            add_log.info("memory l3 add skipped: no trusted source role")
             return []
         source_text = " ".join(
             message.get("content", "").strip()
@@ -4474,6 +4504,7 @@ L2 更新 (缓存失效)
                 metadata=l3_metadata,
                 infer=self.mem0_infer_facts,
                 expiration_date=expiration_date,
+                prompt=extraction_prompt,
             )
         if self._source_refs_excluded(user_id, memory_scope_id, source_refs):
             self.backend.delete_many(
@@ -5316,6 +5347,12 @@ L2 更新 (缓存失效)
             metadata["source_timestamp"] = source_timestamp
         if request_metadata.get("source_text"):
             metadata["source_text"] = str(request_metadata["source_text"])
+        # 产生这条事实的策略版本（ADR-0009）：策略或引擎变更后仍能解释它，
+        # 也能判断哪些记忆需要重建。
+        for key in ("policy_version", "extraction_prompt_version", "extractor"):
+            value = request_metadata.get(key)
+            if value:
+                metadata[key] = str(value)
         # 调用方的自定义业务属性：放进 custom_metadata 子字典保留。
         # 此前这些键被直接丢掉，企业无法按自己的字段过滤或审计记忆。
         custom = {

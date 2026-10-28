@@ -8402,6 +8402,7 @@ def test_assistant_assertion_does_not_become_user_fact() -> None:
             metadata=None,
             infer=True,
             expiration_date=None,
+            prompt=None,
         ):  # type: ignore[no-untyped-def]
             self.received.append(messages)
             return super().add(
@@ -8569,7 +8570,15 @@ class _CountingSearchBackend(FakeMemoryBackend):
         self.fixed_memory = fixed_memory
 
     def add(
-        self, messages, *, user_id, memory_scope_id, metadata=None, infer=True, expiration_date=None
+        self,
+        messages,
+        *,
+        user_id,
+        memory_scope_id,
+        metadata=None,
+        infer=True,
+        expiration_date=None,
+        prompt=None,
     ):  # type: ignore[no-untyped-def]
         if self.fixed_memory is None:
             return super().add(
@@ -8868,6 +8877,7 @@ class _CapturingAddBackend(FakeMemoryBackend):
         metadata=None,
         infer=True,
         expiration_date=None,
+        prompt=None,
     ):
         self.add_calls.append(
             {

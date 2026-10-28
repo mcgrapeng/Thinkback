@@ -15,9 +15,9 @@ describe("IntegrationPage", () => {
     renderPage();
 
     expect(screen.getByText("业务端点")).toBeInTheDocument();
-    expect(screen.getAllByText("/memory/append").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("/memory/recall").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("/memory/erase").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("/v2/memory/events").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("/v2/memory/recall").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("/v2/memory/erase").length).toBeGreaterThan(0);
     expect(screen.queryByText("/v1/memory/append")).not.toBeInTheDocument();
     expect(screen.queryByText("API Keys")).not.toBeInTheDocument();
   });

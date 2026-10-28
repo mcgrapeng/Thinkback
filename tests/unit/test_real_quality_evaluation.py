@@ -819,7 +819,7 @@ def test_post_json_retries_transient_http_failure(monkeypatch) -> None:
 
     response = _post_json(
         "http://127.0.0.1:18082",
-        "/memory/append",
+        "/v2/memory/events",
         {"hello": "world"},
         request_metrics=metrics,
         max_attempts=2,
@@ -858,7 +858,7 @@ def test_post_json_retries_transient_network_timeout(monkeypatch) -> None:
 
     response = _post_json(
         "http://127.0.0.1:18082",
-        "/memory/append",
+        "/v2/memory/events",
         {"hello": "world"},
         request_metrics=metrics,
         max_attempts=2,
@@ -881,7 +881,7 @@ def test_post_json_records_non_transient_network_failure(monkeypatch) -> None:
     try:
         _post_json(
             "http://127.0.0.1:18082",
-            "/memory/append",
+            "/v2/memory/events",
             {"hello": "world"},
             request_metrics=metrics,
             max_attempts=1,

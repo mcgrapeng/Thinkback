@@ -61,10 +61,10 @@ thinkback 是 Thinkback 域内的内部记忆服务，部署在 VPC 或可信内
 
 | 版本 | 业务范围 | 对外端点 | 闭环验证口径 |
 | --- | --- | --- | --- |
-| **V1（基线）** | 写入轮次 + L1/L2 + L3（mem0）+ 单条/会话/全部删除 | `POST /memory/{append,recall,delete}`、`GET /memory/tasks/{id}`、`GET /memory/l3/background-status` | 写 → 读 → 删 → 再读已无；跨会话 L3 可召回；`/health/ready` 仅在 `development` 且未配 `OPENAI_API_KEY` 时自动跳过 L3 依赖，生产缺失必须 not_ready |
-| **V1.1（当前增补）** | 长期记忆最小管理：列出、查询、编辑；删除继续复用 V1 delete | `GET /memory/items`、`GET /memory/items/{memory_id}`、`POST /memory/update`，并保留 V1 端点 | 列表 → 编辑 → 召回为新值；召回返回业务 `memory_id` 可直接用于编辑或删除；管理响应不暴露 `memory_scope_id`、backend id 或 source refs |
+| **V1（基线）** | 写入轮次 + L1/L2 + L3（mem0）+ 单条/会话/全部删除 | `POST /v2/memory/{append,recall,delete}`、`GET /v2/memory/tasks/{id}`、`GET /v2/memory/l3/background-status` | 写 → 读 → 删 → 再读已无；跨会话 L3 可召回；`/health/ready` 仅在 `development` 且未配 `OPENAI_API_KEY` 时自动跳过 L3 依赖，生产缺失必须 not_ready |
+| **V1.1（当前增补）** | 长期记忆最小管理：列出、查询、编辑；删除继续复用 V1 delete | `GET /v2/memory/items`、`GET /v2/memory/items/{memory_id}`、`POST /v2/memory/update`，并保留 V1 端点 | 列表 → 编辑 → 召回为新值；召回返回业务 `memory_id` 可直接用于编辑或删除；管理响应不暴露 `memory_scope_id`、backend id 或 source refs |
 | **V2** | service.py 拆分（写/读/删/任务）；删除 sync 写入模式；删除硬编码槽位词表、自实现中英分词、restricted_or_unsafe 关键词拦截；统一 `memory_scope_id` 同名双义；清理死代码（`RebuildMemory*` schemas、`service.rebuild()`、所有 `_rebuild_*` / tombstone 系列方法） | 不变 | 业务行为不退化；service.py < 800 行；`ins_memory` 状态收敛为 `ACTIVE / DELETED` |
-| **V3** | 仅在真实运营痛点出现后推进：外部历史源回放需求 → 加 `POST /memory/rebuild`；按真实流量分布扩展或调整 P0 槽位词表；按真实流量调整并发参数 | 视需求加 `POST /memory/rebuild` | 历史源回放可恢复一致性 |
+| **V3** | 仅在真实运营痛点出现后推进：外部历史源回放需求 → 加 `POST /v2/memory/rebuild`；按真实流量分布扩展或调整 P0 槽位词表；按真实流量调整并发参数 | 视需求加 `POST /v2/memory/rebuild` | 历史源回放可恢复一致性 |
 | **终版** | 强治理：写入栅栏 / 删除墓碑 CAS / 衰减分片 / 人工治理台 / 线上 SLO | 视需求 | 强一致审计 |
 
 每版必须满足：
@@ -180,7 +180,7 @@ Thinkback 记忆服务负责：
 当前 `MEMORY_L3_WRITE_MODE=async` 时，append 会同步完成可靠轮次、L1/L2
 和P0 槽位索引，L3 Mem0 抽取进入后台执行器。
 因此 append 响应成功不等于 L3 Mem0 抽取已经完成；需要看 `ins_memory_task`、
-`l3_events` 和 `/memory/l3/background-status` 判断后台进度。
+`l3_events` 和 `/v2/memory/l3/background-status` 判断后台进度。
 
 安全准入在写入早期执行。
 系统提示词、内部控制指令、工具回显、密钥凭证、越权诱导和高风险注入内容不能进入 L2/L3，
@@ -197,7 +197,7 @@ Thinkback 记忆服务负责：
 ### 3.1 append 流程图(async 模式)
 
 ```text
-client POST /memory/append
+client POST /v2/memory/events
   ↓
 get_round(round_id) ?
   ├─ existing & fingerprint 不一致 → raise round_id conflict (409)
@@ -234,7 +234,7 @@ _complete_async_l3_write(task_id):
 召回入口：
 
 ```text
-POST /memory/recall
+POST /v2/memory/recall
   user_id
   session_id
   query
@@ -260,7 +260,7 @@ POST /memory/recall
 ### 4.1 recall 流程图
 
 ```text
-client POST /memory/recall
+client POST /v2/memory/recall
   ↓
 intent ∈ {SENSITIVE} ?     ← 当前 V1 fail-closed 集合,详见 schemas.RecallIntent
   └─ Yes → raise ValueError(403 fail-closed)
@@ -326,7 +326,7 @@ V1.1 补齐最小管理能力：
 如果目标记忆已被后续编辑或删除，旧 update 的 `operation_id` 重试会返回冲突，而不是返回后续正文并伪装成旧操作的 `already_done`。
 V1.1 不提供 CAS、版本号、人工审核、批量合并或强审计语义。
 
-V1 不对外暴露 `POST /memory/rebuild` HTTP 端点：
+V1 不对外暴露 `POST /v2/memory/rebuild` HTTP 端点：
 
 - 重建是治理 / 运维能力，不是业务调用方应该触发的常规链路；按"内部服务、最小公开面"的取舍，V1 不把它放进公开 API。
 - `MemoryService.rebuild()` 业务方法保留，作为内部能力供运维脚本、真实质量回归脚本和后续版本以 Python 级调用使用。
@@ -345,7 +345,7 @@ V1 不对外暴露 `POST /memory/rebuild` HTTP 端点：
 ### 5.1 delete 流程图
 
 ```text
-client POST /memory/delete  {scope, operation_id, user_id, [memory_id], [session_id]}
+client POST /v2/memory/delete  {scope, operation_id, user_id, [memory_id], [session_id]}
   ↓
 validate_delete_required_identifiers
   ├─ scope=memory & 无 memory_id  → 400 memory_id is required

@@ -70,22 +70,13 @@ def append_payload() -> dict:
         "request_id": "req-r1",
         "user_id": "user-1",
         "session_id": "session-1",
-        "round_id": "round-1",
-        "messages": [
-            {
-                "message_id": "m1",
-                "role": "user",
-                "content": "我不喜欢被催睡觉",
-                "timestamp": "2026-05-04T10:00:00Z",
-            },
-            {
-                "message_id": "m2",
-                "role": "assistant",
-                "content": "我会记住这个边界。",
-                "timestamp": "2026-05-04T10:00:03Z",
-            },
-        ],
-        "source_timestamp": "2026-05-04T10:00:03Z",
+        "event": {
+            "event_id": "round-1",
+            "source": "chat_round",
+            "role": "user",
+            "payload": "我不喜欢被催睡觉",
+            "occurred_at": "2026-05-04T10:00:03Z",
+        },
     }
 
 
@@ -141,12 +132,12 @@ async def test_recall_uses_dedicated_worker_pool_when_write_pool_is_full(
     monkeypatch.setattr(memory_api.settings, "memory_api_worker_wait_seconds", 0.001)
 
     try:
-        append_response = client.post("/memory/append", json=append_payload())
+        append_response = client.post("/v2/memory/events", json=append_payload())
         # 写预算只压写路径：recall 用回默认预算。读写各有独立的信号量与线程池，
         # 共用同一个旋钮会让 recall 的线程交接也只剩 1ms，机器一忙就误报 503。
         monkeypatch.setattr(memory_api.settings, "memory_api_worker_wait_seconds", 5.0)
         recall_response = client.post(
-            "/memory/recall",
+            "/v2/memory/recall",
             json={
                 "user_id": "user-1",
                 "session_id": "session-1",
@@ -229,13 +220,13 @@ def test_append_recall_delete_task_api(client, monkeypatch) -> None:
     service = MemoryService(repository=InMemoryMemoryRepository(), backend=FakeMemoryBackend())
     monkeypatch.setattr("thinkback.api.dependencies._memory_service", service)
 
-    append_response = client.post("/memory/append", json=append_payload())
+    append_response = client.post("/v2/memory/events", json=append_payload())
 
     assert append_response.status_code == 200
     assert append_response.json()["status"] == "completed"
 
     recall_response = client.post(
-        "/memory/recall",
+        "/v2/memory/recall",
         json={
             "user_id": "user-1",
             "session_id": "session-1",
@@ -248,7 +239,7 @@ def test_append_recall_delete_task_api(client, monkeypatch) -> None:
 
     memory_id = next(iter(service.repository.memories))
     delete_response = client.post(
-        "/memory/delete",
+        "/v2/memory/delete",
         json={
             "request_id": "delete-1",
             "user_id": "user-1",
@@ -262,7 +253,7 @@ def test_append_recall_delete_task_api(client, monkeypatch) -> None:
     assert delete_response.json()["summary_state"] == "dirty"
 
     delete_task_id = delete_response.json()["task_id"]
-    task_response = client.get(f"/memory/tasks/{delete_task_id}")
+    task_response = client.get(f"/v2/memory/tasks/{delete_task_id}")
 
     assert task_response.status_code == 200
     assert task_response.json()["status"] == "completed"
@@ -273,17 +264,17 @@ def test_memory_management_routes_list_get_update_and_hide_internal_fields(
 ) -> None:
     service = MemoryService(repository=InMemoryMemoryRepository(), backend=FakeMemoryBackend())
     monkeypatch.setattr("thinkback.api.dependencies._memory_service", service)
-    assert client.post("/memory/append", json=append_payload()).status_code == 200
+    assert client.post("/v2/memory/events", json=append_payload()).status_code == 200
     memory_id = next(
         memory.memory_id
         for memory in service.repository.active_memories("user-1", "thinkback")
         if "sleep reminder" in memory.memory_text
     )
 
-    list_response = client.get("/memory/items", params={"user_id": "user-1"})
-    get_response = client.get(f"/memory/items/{memory_id}", params={"user_id": "user-1"})
+    list_response = client.get("/v2/memory/items", params={"user_id": "user-1"})
+    get_response = client.get(f"/v2/memory/items/{memory_id}", params={"user_id": "user-1"})
     update_response = client.post(
-        "/memory/update",
+        "/v2/memory/update",
         json={
             "request_id": "update-1",
             "user_id": "user-1",
@@ -306,7 +297,7 @@ def test_memory_management_routes_list_get_update_and_hide_internal_fields(
     assert update_response.json()["status"] == "completed"
     assert update_response.json()["memory"]["content"] == "User does not want sleep reminders"
 
-    task_response = client.get(f"/memory/tasks/{update_response.json()['task_id']}")
+    task_response = client.get(f"/v2/memory/tasks/{update_response.json()['task_id']}")
     assert task_response.status_code == 200
     assert task_response.json()["op_type"] == "update_memory"
     assert task_response.json()["status"] == "completed"
@@ -317,7 +308,7 @@ def test_memory_management_update_missing_memory_returns_404(client, monkeypatch
     monkeypatch.setattr("thinkback.api.dependencies._memory_service", service)
 
     response = client.post(
-        "/memory/update",
+        "/v2/memory/update",
         json={
             "request_id": "update-1",
             "user_id": "user-1",
@@ -337,7 +328,7 @@ def test_memory_routes_return_200_without_any_authentication_header(monkeypatch)
     monkeypatch.setattr("thinkback.api.dependencies._memory_service", service)
     with TestClient(create_app(run_startup_tasks=False)) as test_client:
         response = test_client.post(
-            "/memory/recall",
+            "/v2/memory/recall",
             json={
                 "user_id": "user-1",
                 "session_id": "session-1",
@@ -348,13 +339,14 @@ def test_memory_routes_return_200_without_any_authentication_header(monkeypatch)
     assert response.status_code == 200
 
 
-def test_append_rejects_extra_fields_inside_messages(client, monkeypatch) -> None:
+def test_append_rejects_extra_fields_inside_event(client, monkeypatch) -> None:
+    """事件体里的未知字段直接拒绝（extra=forbid）。"""
     service = MemoryService(repository=InMemoryMemoryRepository(), backend=FakeMemoryBackend())
     monkeypatch.setattr("thinkback.api.dependencies._memory_service", service)
     payload = append_payload()
-    payload["messages"][0]["memory_scope_id"] = "thinkback"
+    payload["event"]["unexpected_field"] = "x"
 
-    response = client.post("/memory/append", json=payload)
+    response = client.post("/v2/memory/events", json=payload)
 
     assert response.status_code == 422
     assert "Extra inputs are not permitted" in str(response.json()["detail"])
@@ -364,10 +356,10 @@ def test_append_round_conflict_returns_409(client, monkeypatch) -> None:
     service = MemoryService(repository=InMemoryMemoryRepository(), backend=FakeMemoryBackend())
     monkeypatch.setattr("thinkback.api.dependencies._memory_service", service)
     payload = append_payload()
-    assert client.post("/memory/append", json=payload).status_code == 200
-    payload["messages"][0]["content"] = "我喜欢被提醒早睡"
+    assert client.post("/v2/memory/events", json=payload).status_code == 200
+    payload["event"]["payload"] = "我喜欢被提醒早睡"
 
-    response = client.post("/memory/append", json=payload)
+    response = client.post("/v2/memory/events", json=payload)
 
     assert response.status_code == 409
     assert "round_id conflict" in response.json()["detail"]
@@ -378,7 +370,7 @@ def test_delete_missing_memory_id_returns_400(client, monkeypatch) -> None:
     monkeypatch.setattr("thinkback.api.dependencies._memory_service", service)
 
     response = client.post(
-        "/memory/delete",
+        "/v2/memory/delete",
         json={
             "request_id": "delete-1",
             "user_id": "user-1",
@@ -399,7 +391,7 @@ def test_delete_scope_irrelevant_identifier_returns_422(client, monkeypatch) -> 
     monkeypatch.setattr("thinkback.api.dependencies._memory_service", service)
 
     response = client.post(
-        "/memory/delete",
+        "/v2/memory/delete",
         json={
             "request_id": "delete-1",
             "user_id": "user-1",
@@ -425,7 +417,7 @@ def test_removed_intent_field_is_rejected(client, monkeypatch) -> None:
     monkeypatch.setattr("thinkback.api.dependencies._memory_service", service)
 
     response = client.post(
-        "/memory/recall",
+        "/v2/memory/recall",
         json={
             "user_id": "user-1",
             "session_id": "session-1",
@@ -441,7 +433,7 @@ def test_mem0_provider_failure_returns_502_not_unhandled_500(client, monkeypatch
     service = MemoryService(repository=InMemoryMemoryRepository(), backend=FailingProviderBackend())
     monkeypatch.setattr("thinkback.api.dependencies._memory_service", service)
 
-    response = client.post("/memory/append", json=append_payload())
+    response = client.post("/v2/memory/events", json=append_payload())
 
     assert response.status_code == 502
     assert "mem0 library add failed" in response.json()["detail"]
@@ -450,7 +442,7 @@ def test_mem0_provider_failure_returns_502_not_unhandled_500(client, monkeypatch
 def test_l3_background_queue_saturation_returns_503(client, monkeypatch) -> None:
     monkeypatch.setattr("thinkback.api.dependencies._memory_service", SaturatedMemoryService())
 
-    response = client.post("/memory/append", json=append_payload())
+    response = client.post("/v2/memory/events", json=append_payload())
 
     assert response.status_code == 503
     assert "l3 background queue full" in response.json()["detail"]
@@ -466,7 +458,7 @@ async def test_memory_api_worker_saturation_returns_503(client, monkeypatch) -> 
     monkeypatch.setattr(memory_api.settings, "memory_api_worker_wait_seconds", 0.01)
 
     try:
-        response = client.post("/memory/append", json=append_payload())
+        response = client.post("/v2/memory/events", json=append_payload())
     finally:
         slots.release()
 
@@ -499,7 +491,7 @@ async def test_memory_api_worker_timeout_does_not_poison_limiter(monkeypatch) ->
 def test_l3_background_status_route_returns_queue_state(client, monkeypatch) -> None:
     monkeypatch.setattr("thinkback.api.dependencies._memory_service", StatusMemoryService())
 
-    response = client.get("/memory/l3/background-status")
+    response = client.get("/v2/memory/l3/background-status")
 
     assert response.status_code == 200
     assert response.json() == {
@@ -567,7 +559,7 @@ def test_update_memory_with_restricted_content_returns_403_fail_closed(client, m
     monkeypatch.setattr("thinkback.api.dependencies._memory_service", service)
 
     response = client.post(
-        "/memory/update",
+        "/v2/memory/update",
         json={
             "request_id": "update-fc",
             "user_id": "user-1",

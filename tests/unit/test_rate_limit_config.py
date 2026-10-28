@@ -22,7 +22,7 @@ def _app(rate_limit_per_minute: int, burst: int) -> FastAPI:
         burst=burst,
     )
 
-    @app.get("/memory/ping")
+    @app.get("/v2/memory/ping")
     async def ping() -> dict[str, bool]:
         return {"ok": True}
 
@@ -32,10 +32,10 @@ def _app(rate_limit_per_minute: int, burst: int) -> FastAPI:
 def test_burst_exhausted_requests_are_rejected() -> None:
     """突发额度用完后必须 429（而不是无限放行）。"""
     with TestClient(_app(rate_limit_per_minute=600, burst=2)) as client:
-        assert client.get("/memory/ping").status_code == 200
-        assert client.get("/memory/ping").status_code == 200
+        assert client.get("/v2/memory/ping").status_code == 200
+        assert client.get("/v2/memory/ping").status_code == 200
 
-        rejected = client.get("/memory/ping")
+        rejected = client.get("/v2/memory/ping")
         assert rejected.status_code == 429
         assert rejected.json()["error"]["code"] == "TB-1007"
         assert rejected.headers["X-RateLimit-Limit"] == "600"
@@ -45,7 +45,7 @@ def test_configured_limit_is_applied() -> None:
     """配置的额度生效：调高后不再被限流挡住。"""
     with TestClient(_app(rate_limit_per_minute=600_000, burst=10_000)) as client:
         for _ in range(20):
-            assert client.get("/memory/ping").status_code == 200
+            assert client.get("/v2/memory/ping").status_code == 200
 
 
 def test_settings_default_keeps_production_limits() -> None:

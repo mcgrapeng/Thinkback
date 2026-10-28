@@ -15,7 +15,7 @@ This runbook helps operators debug and recover Thinkback in production.
 
 ## L3 queue overflow
 
-**Symptom**: `POST /memory/append` returns 503.
+**Symptom**: `POST /v2/memory/events` returns 503.
 
 **Fix**:
 1. Increase `MEMORY_L3_EXECUTOR_WORKERS` (default 16)
