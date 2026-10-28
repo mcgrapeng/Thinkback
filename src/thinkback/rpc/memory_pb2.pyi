@@ -72,6 +72,7 @@ class OperationType(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     OPERATION_TYPE_DELETE_ALL: _ClassVar[OperationType]
     OPERATION_TYPE_REBUILD_L2: _ClassVar[OperationType]
     OPERATION_TYPE_REBUILD_L3: _ClassVar[OperationType]
+    OPERATION_TYPE_ERASE: _ClassVar[OperationType]
 
 class RecallIntent(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     __slots__ = ()
@@ -121,6 +122,7 @@ OPERATION_TYPE_DELETE_SESSION: OperationType
 OPERATION_TYPE_DELETE_ALL: OperationType
 OPERATION_TYPE_REBUILD_L2: OperationType
 OPERATION_TYPE_REBUILD_L3: OperationType
+OPERATION_TYPE_ERASE: OperationType
 RECALL_INTENT_CHAT: RecallIntent
 RECALL_INTENT_SENSITIVE: RecallIntent
 DELETE_SCOPE_MEMORY: DeleteScope
@@ -356,6 +358,112 @@ class DeleteResponse(_message.Message):
         summary_state: _Optional[_Union[SummaryState, str]] = ...,
     ) -> None: ...
 
+class SuppressRequest(_message.Message):
+    __slots__ = (
+        "request_id",
+        "user_id",
+        "scope",
+        "operation_id",
+        "memory_id",
+        "session_id",
+        "namespace",
+    )
+    REQUEST_ID_FIELD_NUMBER: _ClassVar[int]
+    USER_ID_FIELD_NUMBER: _ClassVar[int]
+    SCOPE_FIELD_NUMBER: _ClassVar[int]
+    OPERATION_ID_FIELD_NUMBER: _ClassVar[int]
+    MEMORY_ID_FIELD_NUMBER: _ClassVar[int]
+    SESSION_ID_FIELD_NUMBER: _ClassVar[int]
+    NAMESPACE_FIELD_NUMBER: _ClassVar[int]
+    request_id: str
+    user_id: str
+    scope: DeleteScope
+    operation_id: str
+    memory_id: str
+    session_id: str
+    namespace: str
+    def __init__(
+        self,
+        request_id: _Optional[str] = ...,
+        user_id: _Optional[str] = ...,
+        scope: _Optional[_Union[DeleteScope, str]] = ...,
+        operation_id: _Optional[str] = ...,
+        memory_id: _Optional[str] = ...,
+        session_id: _Optional[str] = ...,
+        namespace: _Optional[str] = ...,
+    ) -> None: ...
+
+class SuppressResponse(_message.Message):
+    __slots__ = ("status", "task_id", "affected_memories", "summary_state")
+    STATUS_FIELD_NUMBER: _ClassVar[int]
+    TASK_ID_FIELD_NUMBER: _ClassVar[int]
+    AFFECTED_MEMORIES_FIELD_NUMBER: _ClassVar[int]
+    SUMMARY_STATE_FIELD_NUMBER: _ClassVar[int]
+    status: str
+    task_id: str
+    affected_memories: int
+    summary_state: SummaryState
+    def __init__(
+        self,
+        status: _Optional[str] = ...,
+        task_id: _Optional[str] = ...,
+        affected_memories: _Optional[int] = ...,
+        summary_state: _Optional[_Union[SummaryState, str]] = ...,
+    ) -> None: ...
+
+class EraseRequest(_message.Message):
+    __slots__ = (
+        "request_id",
+        "user_id",
+        "scope",
+        "operation_id",
+        "memory_id",
+        "session_id",
+        "namespace",
+    )
+    REQUEST_ID_FIELD_NUMBER: _ClassVar[int]
+    USER_ID_FIELD_NUMBER: _ClassVar[int]
+    SCOPE_FIELD_NUMBER: _ClassVar[int]
+    OPERATION_ID_FIELD_NUMBER: _ClassVar[int]
+    MEMORY_ID_FIELD_NUMBER: _ClassVar[int]
+    SESSION_ID_FIELD_NUMBER: _ClassVar[int]
+    NAMESPACE_FIELD_NUMBER: _ClassVar[int]
+    request_id: str
+    user_id: str
+    scope: DeleteScope
+    operation_id: str
+    memory_id: str
+    session_id: str
+    namespace: str
+    def __init__(
+        self,
+        request_id: _Optional[str] = ...,
+        user_id: _Optional[str] = ...,
+        scope: _Optional[_Union[DeleteScope, str]] = ...,
+        operation_id: _Optional[str] = ...,
+        memory_id: _Optional[str] = ...,
+        session_id: _Optional[str] = ...,
+        namespace: _Optional[str] = ...,
+    ) -> None: ...
+
+class EraseResponse(_message.Message):
+    __slots__ = ("status", "task_id", "affected_memories", "summary_state")
+    STATUS_FIELD_NUMBER: _ClassVar[int]
+    TASK_ID_FIELD_NUMBER: _ClassVar[int]
+    AFFECTED_MEMORIES_FIELD_NUMBER: _ClassVar[int]
+    SUMMARY_STATE_FIELD_NUMBER: _ClassVar[int]
+    status: str
+    task_id: str
+    affected_memories: int
+    summary_state: SummaryState
+    def __init__(
+        self,
+        status: _Optional[str] = ...,
+        task_id: _Optional[str] = ...,
+        affected_memories: _Optional[int] = ...,
+        summary_state: _Optional[_Union[SummaryState, str]] = ...,
+    ) -> None: ...
+
 class ListMemoriesRequest(_message.Message):
     __slots__ = ("user_id", "include_deleted", "namespace")
     USER_ID_FIELD_NUMBER: _ClassVar[int]
@@ -380,6 +488,7 @@ class ManagedMemoryItem(_message.Message):
         "data_classification",
         "memory_type",
         "backend_categories",
+        "memory_type_name",
     )
     MEMORY_ID_FIELD_NUMBER: _ClassVar[int]
     CONTENT_FIELD_NUMBER: _ClassVar[int]
@@ -388,6 +497,7 @@ class ManagedMemoryItem(_message.Message):
     DATA_CLASSIFICATION_FIELD_NUMBER: _ClassVar[int]
     MEMORY_TYPE_FIELD_NUMBER: _ClassVar[int]
     BACKEND_CATEGORIES_FIELD_NUMBER: _ClassVar[int]
+    MEMORY_TYPE_NAME_FIELD_NUMBER: _ClassVar[int]
     memory_id: str
     content: str
     status: MemoryStatus
@@ -395,6 +505,7 @@ class ManagedMemoryItem(_message.Message):
     data_classification: DataClassification
     memory_type: MemoryType
     backend_categories: _containers.RepeatedScalarFieldContainer[str]
+    memory_type_name: str
     def __init__(
         self,
         memory_id: _Optional[str] = ...,
@@ -404,6 +515,7 @@ class ManagedMemoryItem(_message.Message):
         data_classification: _Optional[_Union[DataClassification, str]] = ...,
         memory_type: _Optional[_Union[MemoryType, str]] = ...,
         backend_categories: _Optional[_Iterable[str]] = ...,
+        memory_type_name: _Optional[str] = ...,
     ) -> None: ...
 
 class ListMemoriesResponse(_message.Message):
@@ -454,6 +566,7 @@ class UpdateMemoryRequest(_message.Message):
         "content",
         "memory_type",
         "namespace",
+        "memory_type_name",
     )
     REQUEST_ID_FIELD_NUMBER: _ClassVar[int]
     USER_ID_FIELD_NUMBER: _ClassVar[int]
@@ -462,6 +575,7 @@ class UpdateMemoryRequest(_message.Message):
     CONTENT_FIELD_NUMBER: _ClassVar[int]
     MEMORY_TYPE_FIELD_NUMBER: _ClassVar[int]
     NAMESPACE_FIELD_NUMBER: _ClassVar[int]
+    MEMORY_TYPE_NAME_FIELD_NUMBER: _ClassVar[int]
     request_id: str
     user_id: str
     operation_id: str
@@ -469,6 +583,7 @@ class UpdateMemoryRequest(_message.Message):
     content: str
     memory_type: MemoryType
     namespace: str
+    memory_type_name: str
     def __init__(
         self,
         request_id: _Optional[str] = ...,
@@ -478,6 +593,7 @@ class UpdateMemoryRequest(_message.Message):
         content: _Optional[str] = ...,
         memory_type: _Optional[_Union[MemoryType, str]] = ...,
         namespace: _Optional[str] = ...,
+        memory_type_name: _Optional[str] = ...,
     ) -> None: ...
 
 class UpdateMemoryResponse(_message.Message):
@@ -562,7 +678,16 @@ class GetTaskRequest(_message.Message):
     def __init__(self, task_id: _Optional[str] = ...) -> None: ...
 
 class TaskResponse(_message.Message):
-    __slots__ = ("task_id", "request_id", "op_type", "status", "scope", "last_error", "result")
+    __slots__ = (
+        "task_id",
+        "request_id",
+        "op_type",
+        "status",
+        "scope",
+        "last_error",
+        "result",
+        "retry_count",
+    )
     TASK_ID_FIELD_NUMBER: _ClassVar[int]
     REQUEST_ID_FIELD_NUMBER: _ClassVar[int]
     OP_TYPE_FIELD_NUMBER: _ClassVar[int]
@@ -570,6 +695,7 @@ class TaskResponse(_message.Message):
     SCOPE_FIELD_NUMBER: _ClassVar[int]
     LAST_ERROR_FIELD_NUMBER: _ClassVar[int]
     RESULT_FIELD_NUMBER: _ClassVar[int]
+    RETRY_COUNT_FIELD_NUMBER: _ClassVar[int]
     task_id: str
     request_id: str
     op_type: OperationType
@@ -577,6 +703,7 @@ class TaskResponse(_message.Message):
     scope: str
     last_error: str
     result: str
+    retry_count: int
     def __init__(
         self,
         task_id: _Optional[str] = ...,
@@ -586,6 +713,7 @@ class TaskResponse(_message.Message):
         scope: _Optional[str] = ...,
         last_error: _Optional[str] = ...,
         result: _Optional[str] = ...,
+        retry_count: _Optional[int] = ...,
     ) -> None: ...
 
 class L3BackgroundStatusRequest(_message.Message):

@@ -104,6 +104,20 @@ from thinkback.memory.task_state import is_dead_letter, is_finalized, is_retryab
 # 这里多留 40 轮余量以容忍被排除（已删除/被取代）的轮次占位。
 SUMMARY_ROUNDS_WINDOW = 50
 
+# 请求 metadata 里的保留键：由 Thinkback 自己解释（类型、分类、来源、
+# 抽取开关等）。其余键视为调用方的自定义业务属性，原样保留。
+_RESERVED_METADATA_KEYS = frozenset(
+    {
+        "backend_categories",
+        "data_classification",
+        "force_extract",
+        "memory_type",
+        "source_text",
+        "source_timestamp",
+        "source_type",
+    }
+)
+
 
 class _BackendDeleteSync:
     """H-3: sync 模式下 backend.delete 的延迟执行包装。
@@ -2751,6 +2765,12 @@ L2 更新 (缓存失效)
         if memory is None:
             raise ValueError("memory not found")
         self._validate_local_p0_memory_update(memory, request.content)
+        # 记忆类型：自定义类型按类型注册表校验（未注册直接报错），
+        # 内置枚举类型走既有路径。
+        resolved_memory_type = self._resolve_updated_memory_type(request)
+        # 未指定新类型时保持原类型（None = 不改）。
+        if resolved_memory_type is None:
+            resolved_memory_type = getattr(memory, "memory_type", None)
 
         task = existing_task or TaskEntry(
             task_id=f"memory-update:{request.operation_id}",
@@ -2792,6 +2812,7 @@ L2 更新 (缓存失效)
                 memory,
                 request=request,
                 l3_scope_id=l3_scope_id,
+                resolved_memory_type=resolved_memory_type,
             )
         except Exception as exc:
             captured_exc = exc
@@ -3447,7 +3468,8 @@ L2 更新 (缓存失效)
         )
 
     def _managed_memory_item(self, memory: Any) -> ManagedMemoryItem:
-        memory_type = self._enum_or_none(MemoryType, getattr(memory, "memory_type", None))
+        raw_memory_type = getattr(memory, "memory_type", None)
+        memory_type = self._enum_or_none(MemoryType, raw_memory_type)
         return ManagedMemoryItem(
             memory_id=str(memory.memory_id),
             content=str(memory.memory_text),
@@ -3467,8 +3489,35 @@ L2 更新 (缓存失效)
                 )
             ),
             memory_type=MemoryType(memory_type) if memory_type else None,
+            # 自定义类型（state/commitment/行业类型）不在内置枚举里，
+            # 原样带出类型名，调用方才知道这条记忆属于哪一类。
+            memory_type_name=str(raw_memory_type) if raw_memory_type else None,
             backend_categories=list(getattr(memory, "backend_categories", []) or []),
         )
+
+    def _resolve_updated_memory_type(self, request: UpdateMemoryRequest) -> str | None:
+        """更新时的记忆类型名。
+
+        ``memory_type_name`` 优先（自定义类型走这条），必须在该 namespace 的
+        类型注册表里已注册；``memory_type``（内置枚举）其次。都没给就保持
+        原类型不变。
+        """
+        type_name = getattr(request, "memory_type_name", None)
+        if type_name:
+            namespace = self._long_term_scope_id(request)
+            try:
+                spec = self._type_registry(namespace).get(str(type_name))
+            except KeyError as exc:
+                # 未注册类型是调用方的错误，不是内部故障。
+                raise ValueError(str(exc)) from exc
+            if spec.review_required:
+                raise ValueError(
+                    f"memory type {type_name!r} requires review; no approval path is configured"
+                )
+            return str(type_name)
+        if request.memory_type is not None:
+            return request.memory_type.value
+        return None
 
     def _apply_memory_update(
         self,
@@ -3476,6 +3525,7 @@ L2 更新 (缓存失效)
         *,
         request: UpdateMemoryRequest,
         l3_scope_id: str,
+        resolved_memory_type: str | None = None,
     ) -> tuple[Any, list[Any]]:
         # H-3: 锁内只做本地索引计算 + 收集 backend.update 回调；返回的
         # pending_backend_writes 由调用方在 _index_mutation_lock 锁外执行。
@@ -3546,9 +3596,7 @@ L2 更新 (缓存失效)
                 memory_text=request.content,
                 source_type=SourceType.MANUAL_FIX.value,
                 data_classification=current.data_classification,
-                memory_type=request.memory_type.value
-                if request.memory_type
-                else current.memory_type,
+                memory_type=resolved_memory_type,
                 backend_categories=current.backend_categories,
                 metadata=metadata,
                 valid_at=update_valid_at,
@@ -5216,7 +5264,7 @@ L2 更新 (缓存失效)
     def _l3_metadata(
         self, source_refs: list[dict[str, str]], request_metadata: dict[str, Any]
     ) -> dict[str, Any]:
-        metadata = {
+        metadata: dict[str, Any] = {
             "source_refs": source_refs,
             "source_type": self._enum_value(
                 SourceType,
@@ -5242,6 +5290,15 @@ L2 更新 (缓存失效)
             metadata["source_timestamp"] = source_timestamp
         if request_metadata.get("source_text"):
             metadata["source_text"] = str(request_metadata["source_text"])
+        # 调用方的自定义业务属性：放进 custom_metadata 子字典保留。
+        # 此前这些键被直接丢掉，企业无法按自己的字段过滤或审计记忆。
+        custom = {
+            str(key): value
+            for key, value in request_metadata.items()
+            if key not in _RESERVED_METADATA_KEYS
+        }
+        if custom:
+            metadata["custom_metadata"] = custom
         return metadata
 
     @staticmethod

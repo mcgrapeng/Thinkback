@@ -54,6 +54,18 @@ class MemoryServiceStub(object):
             response_deserializer=memory__pb2.DeleteResponse.FromString,
             _registered_method=True,
         )
+        self.Suppress = channel.unary_unary(
+            "/memory.MemoryService/Suppress",
+            request_serializer=memory__pb2.SuppressRequest.SerializeToString,
+            response_deserializer=memory__pb2.SuppressResponse.FromString,
+            _registered_method=True,
+        )
+        self.Erase = channel.unary_unary(
+            "/memory.MemoryService/Erase",
+            request_serializer=memory__pb2.EraseRequest.SerializeToString,
+            response_deserializer=memory__pb2.EraseResponse.FromString,
+            _registered_method=True,
+        )
         self.ListMemories = channel.unary_unary(
             "/memory.MemoryService/ListMemories",
             request_serializer=memory__pb2.ListMemoriesRequest.SerializeToString,
@@ -113,6 +125,18 @@ class MemoryServiceServicer(object):
         context.set_details("Method not implemented!")
         raise NotImplementedError("Method not implemented!")
 
+    def Suppress(self, request, context):
+        """逻辑下架：不可召回，保留原文与墓碑。"""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details("Method not implemented!")
+        raise NotImplementedError("Method not implemented!")
+
+    def Erase(self, request, context):
+        """物理擦除：原文不可恢复。"""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details("Method not implemented!")
+        raise NotImplementedError("Method not implemented!")
+
     def ListMemories(self, request, context):
         """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
@@ -166,6 +190,16 @@ def add_MemoryServiceServicer_to_server(servicer, server):
             servicer.Delete,
             request_deserializer=memory__pb2.DeleteRequest.FromString,
             response_serializer=memory__pb2.DeleteResponse.SerializeToString,
+        ),
+        "Suppress": grpc.unary_unary_rpc_method_handler(
+            servicer.Suppress,
+            request_deserializer=memory__pb2.SuppressRequest.FromString,
+            response_serializer=memory__pb2.SuppressResponse.SerializeToString,
+        ),
+        "Erase": grpc.unary_unary_rpc_method_handler(
+            servicer.Erase,
+            request_deserializer=memory__pb2.EraseRequest.FromString,
+            response_serializer=memory__pb2.EraseResponse.SerializeToString,
         ),
         "ListMemories": grpc.unary_unary_rpc_method_handler(
             servicer.ListMemories,
@@ -288,6 +322,66 @@ class MemoryService(object):
             "/memory.MemoryService/Delete",
             memory__pb2.DeleteRequest.SerializeToString,
             memory__pb2.DeleteResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True,
+        )
+
+    @staticmethod
+    def Suppress(
+        request,
+        target,
+        options=(),
+        channel_credentials=None,
+        call_credentials=None,
+        insecure=False,
+        compression=None,
+        wait_for_ready=None,
+        timeout=None,
+        metadata=None,
+    ):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            "/memory.MemoryService/Suppress",
+            memory__pb2.SuppressRequest.SerializeToString,
+            memory__pb2.SuppressResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True,
+        )
+
+    @staticmethod
+    def Erase(
+        request,
+        target,
+        options=(),
+        channel_credentials=None,
+        call_credentials=None,
+        insecure=False,
+        compression=None,
+        wait_for_ready=None,
+        timeout=None,
+        metadata=None,
+    ):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            "/memory.MemoryService/Erase",
+            memory__pb2.EraseRequest.SerializeToString,
+            memory__pb2.EraseResponse.FromString,
             options,
             channel_credentials,
             insecure,

@@ -151,6 +151,42 @@ class MemoryServicer(memory_pb2_grpc.MemoryServiceServicer):
             _handle_error(exc, context)
             raise RuntimeError("unreachable: _handle_error must abort")  # pragma: no cover
 
+    def Suppress(
+        self, request: pb.SuppressRequest, context: grpc.ServicerContext
+    ) -> pb.SuppressResponse:
+        """逻辑下架：不可召回，保留原文与墓碑。"""
+        try:
+            resp = self._svc.suppress_memory(to_delete_request(request))
+            kw: dict[str, Any] = {
+                "status": resp.status,
+                "task_id": resp.task_id,
+                "affected_memories": resp.affected_memories,
+            }
+            if resp.summary_state is not None:
+                kw["summary_state"] = _SUMMARY_STATE_TO_PB[resp.summary_state]
+            return pb.SuppressResponse(**kw)
+        except Exception as exc:
+            logger.bind(rpc="Suppress", error=str(exc)).warning("grpc suppress failed")
+            _handle_error(exc, context)
+            raise RuntimeError("unreachable: _handle_error must abort")  # pragma: no cover
+
+    def Erase(self, request: pb.EraseRequest, context: grpc.ServicerContext) -> pb.EraseResponse:
+        """物理擦除：原文不可恢复。"""
+        try:
+            resp = self._svc.erase(to_delete_request(request))
+            kw: dict[str, Any] = {
+                "status": resp.status,
+                "task_id": resp.task_id,
+                "affected_memories": resp.affected_memories,
+            }
+            if resp.summary_state is not None:
+                kw["summary_state"] = _SUMMARY_STATE_TO_PB[resp.summary_state]
+            return pb.EraseResponse(**kw)
+        except Exception as exc:
+            logger.bind(rpc="Erase", error=str(exc)).warning("grpc erase failed")
+            _handle_error(exc, context)
+            raise RuntimeError("unreachable: _handle_error must abort")  # pragma: no cover
+
     def ListMemories(
         self, request: pb.ListMemoriesRequest, context: grpc.ServicerContext
     ) -> pb.ListMemoriesResponse:

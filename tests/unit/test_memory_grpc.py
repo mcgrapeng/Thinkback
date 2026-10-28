@@ -359,6 +359,81 @@ def test_get_task_returns_task_snapshot(stub: memory_pb2_grpc.MemoryServiceStub)
     assert resp.status
 
 
+def test_get_task_reports_retry_count(stub: memory_pb2_grpc.MemoryServiceStub) -> None:
+    """任务查询必须带重试次数：客户端据此判断是否接近重试预算上限。"""
+    appended = stub.Append(_append_request("round-retry-count"))
+    resp = stub.GetTask(pb.GetTaskRequest(task_id=appended.task_id))
+    assert resp.retry_count >= 0
+
+
+def test_erase_task_is_queryable_over_grpc(stub: memory_pb2_grpc.MemoryServiceStub) -> None:
+    """擦除任务必须能通过 gRPC 查询：此前 op_type 缺 ERASE，转换直接 KeyError。"""
+    stub.Append(_append_request("round-erase-grpc"))
+    listed = stub.ListMemories(pb.ListMemoriesRequest(user_id="u1", include_deleted=True))
+    target = next(item for item in listed.items if item.content)
+
+    resp = stub.Erase(
+        pb.EraseRequest(
+            request_id="req-erase-grpc",
+            user_id="u1",
+            scope=pb.DELETE_SCOPE_MEMORY,
+            operation_id="op-erase-grpc",
+            memory_id=target.memory_id,
+        )
+    )
+    assert resp.status in {"completed", "already_done"}
+    assert resp.task_id
+
+    task = stub.GetTask(pb.GetTaskRequest(task_id=resp.task_id))
+    assert task.status
+    assert task.op_type == pb.OPERATION_TYPE_ERASE
+
+
+def test_suppress_over_grpc(stub: memory_pb2_grpc.MemoryServiceStub) -> None:
+    """逻辑下架在 gRPC 上与 HTTP 等价。"""
+    stub.Append(_append_request("round-suppress-grpc"))
+    listed = stub.ListMemories(pb.ListMemoriesRequest(user_id="u1", include_deleted=True))
+    target = next(item for item in listed.items if item.content)
+
+    resp = stub.Suppress(
+        pb.SuppressRequest(
+            request_id="req-suppress-grpc",
+            user_id="u1",
+            scope=pb.DELETE_SCOPE_MEMORY,
+            operation_id="op-suppress-grpc",
+            memory_id=target.memory_id,
+        )
+    )
+    assert resp.status in {"completed", "already_done"}
+    assert resp.task_id
+
+
+def test_custom_memory_type_name_survives_proto_conversion() -> None:
+    """自定义类型名必须原样穿过 gRPC 协议：枚举字段装不下行业类型。"""
+    from thinkback.memory.schemas import (
+        DataClassification,
+        ListMemoriesResponse,
+        ManagedMemoryItem,
+        MemoryStatus,
+        SourceType,
+    )
+    from thinkback.rpc.converters import list_response_to_pb
+
+    item = ManagedMemoryItem(
+        memory_id="m1",
+        content="我的猫叫豆包",
+        status=MemoryStatus.ACTIVE,
+        source_type=SourceType.CHAT_ROUND,
+        data_classification=DataClassification.PERSONAL,
+        memory_type=None,
+        memory_type_name="process_preference",
+    )
+    converted = list_response_to_pb(
+        ListMemoriesResponse(status="ok", items=[item])  # type: ignore[arg-type]
+    )
+    assert converted.items[0].memory_type_name == "process_preference"
+
+
 # ---------------------------------------------------------------------------
 # server 生命周期
 # ---------------------------------------------------------------------------
