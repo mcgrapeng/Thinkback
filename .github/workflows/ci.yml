@@ -56,8 +56,8 @@ jobs:
       - name: Install dependencies
         run: uv sync --frozen
       - name: Unit tests
-        # 显式跳过"需要真实依赖"的脚本级用例，避免无凭证暴露缺 infra 红灯
-        run: uv run pytest tests/unit/ --ignore=tests/unit/test_real_quality_evaluation.py --ignore=tests/unit/test_runtime_boundaries.py -q
+        # tests/unit 全是确定性用例：不触真实 PG / Milvus / LLM，不需要任何凭证。
+        run: uv run pytest tests/unit/ -q
 
   supply-chain-audit:
     name: pip-audit (CVE gate)

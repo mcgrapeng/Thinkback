@@ -48,7 +48,10 @@ coverage:
 	uv run --group dev pytest --cov=thinkback --cov-report=term-missing --cov-report=xml -v
 	@uv run --group dev python -c "import xml.etree.ElementTree as ET;f=float('$(COVERAGE_FLOOR)');r=float(ET.parse('coverage.xml').getroot().get('line-rate',0))*100;print(f'行覆盖率 {r:.1f}%，观测水位 {f:.0f}%（非阻断）')" || echo "覆盖率报告不可用（非阻断）"
 
-check: format-check lint typecheck mutation-audit eval
+# 完成定义：格式 / lint / 类型 / 单元测试 / 变异审计 / 评测 全绿。
+# 单元测试进 check：否则单测红着 check 照样绿 —— 门禁漏门。
+# 全程离线确定：不触真实 PG / Milvus / LLM，不需要任何凭证。
+check: format-check lint typecheck test mutation-audit eval
 
 # 前端组件测试（vitest，确定性无网络）
 test-ui:
@@ -79,10 +82,14 @@ audit:
 load-smoke:
 	k6 run tests/load/smoke.k6.js
 
-# 变异测试审计：范围见 pyproject [tool.mutmut]，结果用 mutmut results 查看
+# 变异测试审计：范围见 pyproject [tool.mutmut]。
+# mutmut 3.8 即使有存活变异体也退出 0 —— 光跑 mutmut 不算门禁。
+# 末步拿 tests/eval/mutation_survivors.json（已验收存活 + 理由）比对，
+# 出现**新增**存活 / 无测试变异体即失败。
 mutation-audit:
 	uv run --group dev mutmut run --max-children 8
 	uv run --group dev mutmut results
+	uv run --group dev python tests/eval/check_mutation_survivors.py
 
 # 本地开发：后端 7002 / 前端 7001 起步，占用自动顺延（script/dev.py）
 dev:

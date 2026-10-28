@@ -38,7 +38,15 @@ from thinkback.memory.schemas import (
 )
 from thinkback.memory.service import MemoryService
 
-router = APIRouter(prefix="/admin/api", tags=["admin"], responses=COMMON_ERROR_RESPONSES)
+router = APIRouter(
+    prefix="/admin/api",
+    tags=["admin"],
+    # 401：Bearer token 校验失败；503：ADMIN_TOKEN 未配置（fail-closed）。
+    responses={
+        **COMMON_ERROR_RESPONSES,
+        401: {"description": "管理面 Bearer token 校验失败"},
+    },
+)
 
 
 def require_admin_token(authorization: Annotated[str, Header()] = "") -> None:
