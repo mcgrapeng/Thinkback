@@ -1,7 +1,7 @@
 """L1 短期回合的进程内缓存（mixin）。
 
 缓存最近 N 轮对话，用于快速召回，避免每次都走数据库查询。
-按 (user_id, memory_scope_id, session_id) 多维索引。
+按 (user_id, namespace, memory_scope_id, session_id) 多维索引。
 
 短期记忆的持久化仍在 PostgreSQL（ins_summary_round_journal）；
 本缓存只是进程内读加速，缓存丢失不影响正确性。
@@ -13,7 +13,7 @@ import time
 from threading import Lock
 
 from thinkback.domain.entities import JournalEntry
-from thinkback.domain.keys import scope_key
+from thinkback.domain.keys import DEFAULT_NAMESPACE, namespace_scope_key
 
 # L1 短期记忆窗口：保留最近 N 个完整轮次。
 L1_CACHE_LIMIT = 10
@@ -30,7 +30,7 @@ class L1CacheMixin:
     """L1 短期回合的内存缓存层
 
     缓存最近 N 轮对话，用于快速召回，避免每次都走数据库查询。
-    按 (user_id, memory_scope_id, session_id) 多维索引。
+    按 (user_id, namespace, memory_scope_id, session_id) 多维索引。
 
     N-5: 所有访问受 _l1_lock 保护，避免多线程并发 update_l1/clear_l1 出现
     读-改-写竞态丢数据。子类需要保证 _l1_lock 字段已设置（dataclass 子类
@@ -58,16 +58,23 @@ class L1CacheMixin:
         """
         self._l1_lock = Lock()
 
+    @staticmethod
+    def _l1_cache_key(user_id: str, memory_scope_id: str, session_id: str, namespace: str) -> str:
+        """缓存键：必须含 namespace，否则同 session_id 的两个 namespace 互相命中。"""
+        return f"{namespace_scope_key(user_id, namespace, memory_scope_id)}:{session_id}"
+
     def update_l1(self, entry: JournalEntry, limit: int = 10) -> None:
         """更新 L1 缓存，保留最近 N 条回合
 
         工作流：
-        1. 构造缓存键 "{user_id}:{memory_scope_id}:{session_id}"
+        1. 构造缓存键 "{user_id}:{namespace}:{scope}:{session_id}"
         2. 移除重复的 round_id（避免重复计算）
         3. 追加新回合
         4. 只保留最近 limit 条（其余自动淘汰）
         """
-        key = f"{scope_key(entry.user_id, entry.memory_scope_id)}:{entry.session_id}"
+        key = self._l1_cache_key(
+            entry.user_id, entry.memory_scope_id, entry.session_id, entry.namespace
+        )
         with self._l1_lock:
             existing = [
                 cached_entry
@@ -78,31 +85,47 @@ class L1CacheMixin:
             self.l1_cache[key] = existing[-limit:]
             self._l1_timestamps()[key] = time.monotonic()
 
-    def clear_l1(self, user_id: str, memory_scope_id: str, session_id: str | None = None) -> None:
+    def clear_l1(
+        self,
+        user_id: str,
+        memory_scope_id: str,
+        session_id: str | None = None,
+        *,
+        namespace: str = DEFAULT_NAMESPACE,
+    ) -> None:
         """清空 L1 缓存。删除时调用，确保不返回已删除的旧数据
 
         参数：
-          session_id: 为 None 时清空整个 memory_scope_id 下的所有会话；
+          session_id: 为 None 时清空整个 (namespace, memory_scope_id) 下的所有会话；
                       为值时只清空该会话
+          namespace: 命名空间维度；不同 namespace 的同名 session 互不影响
         """
-        prefix = scope_key(user_id, memory_scope_id)
+        prefix = namespace_scope_key(user_id, namespace, memory_scope_id)
         with self._l1_lock:
             stamps = self._l1_timestamps()
             if session_id:
-                self.l1_cache.pop(f"{prefix}:{session_id}", None)
-                stamps.pop(f"{prefix}:{session_id}", None)
+                key = f"{prefix}:{session_id}"
+                self.l1_cache.pop(key, None)
+                stamps.pop(key, None)
                 return
             for key in list(self.l1_cache):
                 if key.startswith(f"{prefix}:"):
                     self.l1_cache.pop(key, None)
                     stamps.pop(key, None)
 
-    def get_l1(self, user_id: str, memory_scope_id: str, session_id: str) -> list[JournalEntry]:
+    def get_l1(
+        self,
+        user_id: str,
+        memory_scope_id: str,
+        session_id: str,
+        *,
+        namespace: str = DEFAULT_NAMESPACE,
+    ) -> list[JournalEntry]:
         """读取 L1 缓存。从缓存中查询最近 N 轮回合
 
         返回格式：[JournalEntry, ...]（按时间序列，可为空）
         """
-        key = f"{scope_key(user_id, memory_scope_id)}:{session_id}"
+        key = self._l1_cache_key(user_id, memory_scope_id, session_id, namespace)
         with self._l1_lock:
             entries = self.l1_cache.get(key)
             if not entries:

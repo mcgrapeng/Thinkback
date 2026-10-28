@@ -22,6 +22,20 @@ def scope_key(user_id: str, memory_scope_id: str) -> str:
     return f"{user_id}:{memory_scope_id}"
 
 
+# 未指定 namespace 时的默认作用域。L1/L2 的隔离维度是
+# (user, namespace, session)：namespace 是独立字段，不与 scope_id 拼接。
+DEFAULT_NAMESPACE = "thinkback"
+
+
+def namespace_scope_key(user_id: str, namespace: str, memory_scope_id: str) -> str:
+    """用户-命名空间-范围维度的组合键。
+
+    用于进程内缓存（L1 缓存、摘要字典）这类没有列约束的键：隔离维度必须
+    包含 namespace，否则同 session_id 在不同 namespace 下会互相命中。
+    """
+    return f"{user_id}:{namespace}:{memory_scope_id}"
+
+
 # 影响执行行为的 metadata 键：同 round 但改这些键，不能当成同一次写入。
 BEHAVIORAL_METADATA_KEYS = (
     "force_extract",

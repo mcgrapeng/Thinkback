@@ -22,6 +22,7 @@ from thinkback.domain.entities import (
     TaskEntry,
 )
 from thinkback.domain.enums import SummaryState
+from thinkback.domain.keys import DEFAULT_NAMESPACE
 
 if TYPE_CHECKING:
     from thinkback.memory.schemas import AppendMemoryRequest
@@ -43,12 +44,36 @@ class MemoryRepository(Protocol):
     def update_l1(self, entry: JournalEntry, limit: int = 10) -> None: ...
 
     def clear_l1(
-        self, user_id: str, memory_scope_id: str, session_id: str | None = None
-    ) -> None: ...
+        self,
+        user_id: str,
+        memory_scope_id: str,
+        session_id: str | None = None,
+        *,
+        namespace: str = DEFAULT_NAMESPACE,
+    ) -> None:
+        """清掉 L1 缓存/轮次。
 
-    def get_l1(self, user_id: str, memory_scope_id: str, session_id: str) -> list[JournalEntry]: ...
+        ``namespace`` 是 L1 的隔离维度：同一 session_id 在不同 namespace
+        下是两份互不可见的记忆空间，清缓存不能跨 namespace。
+        """
+        ...
 
-    def upsert_summary_from_journal(self, user_id: str, memory_scope_id: str) -> SummaryEntry: ...
+    def get_l1(
+        self,
+        user_id: str,
+        memory_scope_id: str,
+        session_id: str,
+        *,
+        namespace: str = DEFAULT_NAMESPACE,
+    ) -> list[JournalEntry]:
+        """读 L1 轮次（按 namespace 隔离）。"""
+        ...
+
+    def upsert_summary_from_journal(
+        self, user_id: str, memory_scope_id: str, *, namespace: str = DEFAULT_NAMESPACE
+    ) -> SummaryEntry:
+        """按 journal 重建 L2 摘要（按 namespace 隔离）。"""
+        ...
 
     def upsert_summary_from_rounds(
         self,
@@ -61,6 +86,7 @@ class MemoryRepository(Protocol):
         structured_sections: dict[str, str] | None = None,
         preserve_llm: bool = False,
         expected_row_version: int | None = None,
+        namespace: str = DEFAULT_NAMESPACE,
     ) -> SummaryEntry:
         """``preserve_llm=True`` 时，若当前摘要已是 llm 版则跳过 concat 覆盖。
 
@@ -69,12 +95,28 @@ class MemoryRepository(Protocol):
 
         ``expected_row_version`` 非 None 时是乐观锁：只有当前行版本仍等于它
         才写入，否则不写并返回当前行（调用方据此判断自己被覆盖了）。
+
+        ``namespace`` 是 L2 的隔离维度：不同 namespace 的同名 session
+        不得共用一条摘要行。
         """
         ...
 
-    def get_summary(self, user_id: str, memory_scope_id: str) -> SummaryEntry | None: ...
+    def get_summary(
+        self, user_id: str, memory_scope_id: str, *, namespace: str = DEFAULT_NAMESPACE
+    ) -> SummaryEntry | None:
+        """读 L2 摘要（按 namespace 隔离）。"""
+        ...
 
-    def mark_summary(self, user_id: str, memory_scope_id: str, state: SummaryState) -> None: ...
+    def mark_summary(
+        self,
+        user_id: str,
+        memory_scope_id: str,
+        state: SummaryState,
+        *,
+        namespace: str = DEFAULT_NAMESPACE,
+    ) -> None:
+        """置摘要状态（按 namespace 隔离）。"""
+        ...
 
     def list_rounds(
         self,
@@ -85,23 +127,38 @@ class MemoryRepository(Protocol):
         limit: int | None = None,
         descending: bool = False,
         include_pending: bool = False,
+        namespace: str = DEFAULT_NAMESPACE,
     ) -> list[JournalEntry]:
         """列出轮次。``include_pending=True`` 时同时返回 ``pending_append`` 的轮次。
 
         删除屏障要用到在飞轮次（sync 模式下它们是 ``pending_append``，
         默认的 active 过滤会漏掉），所以这个维度必须可显式打开。
+
+        ``namespace`` 是 L1 的隔离维度：不同 namespace 的同名 session
+        不得互相看到对方的轮次。
         """
         ...
 
     def list_user_rounds(
-        self, user_id: str, *, include_pending: bool = False
+        self, user_id: str, *, include_pending: bool = False, namespace: str | None = None
     ) -> list[JournalEntry]:
-        """列出该用户的全部轮次；``include_pending`` 语义同 :meth:`list_rounds`。"""
+        """列出该用户的全部轮次；``include_pending`` 语义同 :meth:`list_rounds`。
+
+        ``namespace`` 非 None 时只返回该 namespace 的轮次（跨 namespace
+        删除/重建必须按 namespace 分区）。
+        """
         ...
 
     def mark_rounds_deleted(
-        self, user_id: str, memory_scope_id: str, session_id: str | None = None
-    ) -> int: ...
+        self,
+        user_id: str,
+        memory_scope_id: str,
+        session_id: str | None = None,
+        *,
+        namespace: str = DEFAULT_NAMESPACE,
+    ) -> int:
+        """批量墓碑化轮次（按 namespace 隔离）。"""
+        ...
 
     def mark_round_deleted(self, round_id: str) -> bool: ...
 
@@ -164,16 +221,20 @@ class MemoryRepository(Protocol):
         memory_scope_id: str,
         session_id: str | None = None,
         round_ids: list[str] | None = None,
+        *,
+        namespace: str = DEFAULT_NAMESPACE,
     ) -> int:
         """物理删除 L1 轮次原文行（erase 语义）。返回删除行数。
 
         ``round_ids`` 非空时只删这些轮次（单条记忆擦除时用）；否则删该
-        scope 下的全部轮次。
+        scope 下的全部轮次。``namespace`` 限定隔离范围。
         """
         ...
 
-    def clear_summary(self, user_id: str, memory_scope_id: str) -> None:
-        """清空 L2 会话摘要正文（erase 语义）。"""
+    def clear_summary(
+        self, user_id: str, memory_scope_id: str, *, namespace: str = DEFAULT_NAMESPACE
+    ) -> None:
+        """清空 L2 会话摘要正文（erase 语义，按 namespace 隔离）。"""
         ...
 
     def mark_memory_suppressed(self, memory_id: str) -> MemoryIndexEntry | None:
