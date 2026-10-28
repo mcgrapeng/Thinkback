@@ -11,6 +11,8 @@ on:
       - "main"
       - "dev"
   workflow_dispatch:
+  schedule:
+    - cron: "0 3 * * *"
 
 jobs:
   lint-and-typecheck:
@@ -99,3 +101,87 @@ jobs:
       - uses: actions/checkout@v4
       - name: Build docker image (no push)
         run: docker build -t thinkback:ci-${{ github.sha }} .
+
+  mutation-and-eval:
+    name: mutation audit + self-contained evaluation
+    needs: lint-and-typecheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install uv
+        run: pip install uv
+      - name: Cache venv
+        uses: actions/cache@v4
+        with:
+          path: .venv
+          key: uv-${{ runner.os }}-${{ hashFiles('uv.lock') }}
+      - name: Install dependencies
+        run: uv sync --frozen
+      - name: Mutation audit (no new survivors allowed)
+        run: uv run --group dev mutmut run --max-children 8
+      - name: Mutation survivor baseline
+        run: uv run --group dev python tests/eval/check_mutation_survivors.py
+      - name: Self-contained evaluation + baseline
+        run: uv run --group dev python tests/script/run_self_contained_evaluation.py
+      - name: Evaluation baseline
+        run: uv run --group dev python tests/script/eval/check_baseline.py
+      - name: Vertical evaluation + baseline
+        run: uv run --group dev python tests/script/eval/run_semiconductor_evaluation.py
+      - name: Vertical evaluation baseline
+        run: uv run --group dev python tests/script/eval/check_baseline.py --report-dir docs/memory/report/semiconductor --baseline tests/eval/baseline_semiconductor.json
+
+  web-gates:
+    name: admin console (build + unit + e2e + audit)
+    needs: lint-and-typecheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install frontend dependencies
+        working-directory: web
+        run: npm ci
+      - name: npm audit (high severity blocks)
+        working-directory: web
+        run: npm audit --audit-level=high
+      - name: Frontend unit tests
+        working-directory: web
+        run: npm run test-ui
+      - name: Frontend production build
+        working-directory: web
+        run: npm run build
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install uv
+        run: pip install uv
+      - name: Install dependencies
+        run: uv sync --frozen
+      - name: Install playwright browsers
+        run: uv run --group dev playwright install --with-deps chromium
+      - name: End-to-end smoke
+        run: uv run --group dev pytest tests/e2e -v
+
+  nightly-full:
+    name: nightly (full local gates + real-stack scripts)
+    needs: [lint-and-typecheck, unit-tests, mutation-and-eval, web-gates]
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install uv
+        run: pip install uv
+      - name: Install dependencies
+        run: uv sync --frozen
+      - name: Full local gate
+        run: make check
+      - name: Contract fuzz
+        run: uv run --group dev pytest tests/fuzz -q
+

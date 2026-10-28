@@ -37,6 +37,8 @@ dev = [
     "hypothesis>=6.168.5",
     "pytest-testmon>=2.2.0",
     "pip-audit>=2.10.1",
+    # e2e 驱动：声明为 dev 依赖，`make test-e2e` 才在干净环境可跑。
+    "playwright>=1.49.0",
     "schemathesis>=4.30.1",
 ]
 

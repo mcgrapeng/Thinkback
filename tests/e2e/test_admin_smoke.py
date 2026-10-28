@@ -29,8 +29,10 @@ def test_navigation_walk_memories_and_integration(page: Page, frontend_url: str)
     assert "/memories" in page.url
 
     page.get_by_role("link", name="接入协议").click()
-    page.get_by_text("API Keys").first.wait_for(timeout=15_000)
+    # 当前契约：业务面免鉴权（内网部署），没有 API Key 管理。
+    page.get_by_text("业务面免鉴权").first.wait_for(timeout=15_000)
     assert "/integration" in page.url
+    assert page.get_by_text("API Keys").count() == 0
 
 
 def test_memories_journey_lists_mock_rows(page: Page, frontend_url: str) -> None:
