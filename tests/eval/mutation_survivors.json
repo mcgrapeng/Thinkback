@@ -95,26 +95,7 @@
     "thinkback.memory.decay.xǁMemoryDecaySweeperǁmaybe_submit__mutmut_6": "覆盖缺口：后台清扫提交到 executor 的实参未被断言。",
     "thinkback.memory.decay.xǁMemoryDecaySweeperǁmaybe_submit__mutmut_7": "覆盖缺口：后台清扫提交到 executor 的实参未被断言。",
     "thinkback.memory.decay.xǁMemoryDecaySweeperǁmaybe_submit__mutmut_8": "覆盖缺口：后台清扫提交到 executor 的实参未被断言。",
-    "thinkback.memory.decay.xǁMemoryDecaySweeperǁmaybe_submit__mutmut_9": "覆盖缺口：后台清扫提交到 executor 的实参未被断言。",
-    "thinkback.memory.repositories._l1_cache.xǁL1CacheMixinǁclear_l1__mutmut_10": "覆盖缺口：清理 L1 缓存时的键与 default 参数未被断言（清空后没有回读断言）。",
-    "thinkback.memory.repositories._l1_cache.xǁL1CacheMixinǁclear_l1__mutmut_12": "覆盖缺口：清理 L1 缓存时的键与 default 参数未被断言（清空后没有回读断言）。",
-    "thinkback.memory.repositories._l1_cache.xǁL1CacheMixinǁclear_l1__mutmut_15": "覆盖缺口：清理 L1 缓存时的键与 default 参数未被断言（清空后没有回读断言）。",
-    "thinkback.memory.repositories._l1_cache.xǁL1CacheMixinǁclear_l1__mutmut_17": "覆盖缺口：清理 L1 缓存时的键与 default 参数未被断言（清空后没有回读断言）。",
-    "thinkback.memory.repositories._l1_cache.xǁL1CacheMixinǁclear_l1__mutmut_18": "覆盖缺口：清理 L1 缓存时的键与 default 参数未被断言（清空后没有回读断言）。",
-    "thinkback.memory.repositories._l1_cache.xǁL1CacheMixinǁclear_l1__mutmut_20": "覆盖缺口：清理 L1 缓存时的键与 default 参数未被断言（清空后没有回读断言）。",
-    "thinkback.memory.repositories._l1_cache.xǁL1CacheMixinǁclear_l1__mutmut_7": "覆盖缺口：清理 L1 缓存时的键与 default 参数未被断言（清空后没有回读断言）。",
-    "thinkback.memory.repositories._l1_cache.xǁL1CacheMixinǁclear_l1__mutmut_9": "覆盖缺口：清理 L1 缓存时的键与 default 参数未被断言（清空后没有回读断言）。",
-    "thinkback.memory.repositories._l1_cache.xǁL1CacheMixinǁget_l1__mutmut_11": "覆盖缺口：L1 缓存 TTL 边界与过期清理路径未被断言。",
-    "thinkback.memory.repositories._l1_cache.xǁL1CacheMixinǁget_l1__mutmut_14": "覆盖缺口：L1 缓存 TTL 边界与过期清理路径未被断言。",
-    "thinkback.memory.repositories._l1_cache.xǁL1CacheMixinǁget_l1__mutmut_15": "覆盖缺口：L1 缓存 TTL 边界与过期清理路径未被断言。",
-    "thinkback.memory.repositories._l1_cache.xǁL1CacheMixinǁget_l1__mutmut_16": "覆盖缺口：L1 缓存 TTL 边界与过期清理路径未被断言。",
-    "thinkback.memory.repositories._l1_cache.xǁL1CacheMixinǁget_l1__mutmut_17": "覆盖缺口：L1 缓存 TTL 边界与过期清理路径未被断言。",
-    "thinkback.memory.repositories._l1_cache.xǁL1CacheMixinǁget_l1__mutmut_18": "覆盖缺口：L1 缓存 TTL 边界与过期清理路径未被断言。",
-    "thinkback.memory.repositories._l1_cache.xǁL1CacheMixinǁget_l1__mutmut_19": "覆盖缺口：L1 缓存 TTL 边界与过期清理路径未被断言。",
-    "thinkback.memory.repositories._l1_cache.xǁL1CacheMixinǁget_l1__mutmut_20": "覆盖缺口：L1 缓存 TTL 边界与过期清理路径未被断言。"
+    "thinkback.memory.decay.xǁMemoryDecaySweeperǁmaybe_submit__mutmut_9": "覆盖缺口：后台清扫提交到 executor 的实参未被断言。"
   },
-  "accepted_no_tests": {
-    "thinkback.memory.repositories._l1_cache.xǁL1CacheMixinǁclose__mutmut_1": "无测试：L1CacheMixin.close 是 no-op 方法，没有用例覆盖它。",
-    "thinkback.memory.repositories._l1_cache.xǁL1CacheMixinǁclose__mutmut_2": "无测试：L1CacheMixin.close 是 no-op 方法，没有用例覆盖它。"
-  }
+  "accepted_no_tests": {}
 }
