@@ -47,10 +47,12 @@ def test_lifespan_shuts_down_l3_executor(monkeypatch) -> None:
 
     monkeypatch.setattr(dependencies, "_memory_service", tracking_service, raising=False)
 
-    # Construct a FastAPI app that uses the production `_lifespan` and drive it.
+    # Construct a FastAPI app that uses the production lifespan and drive it.
+    # 跳过启动期的基础设施任务（迁移/Milvus/恢复）：本用例要验证的是**关停**
+    # 流程，不该依赖真实 PG。
     from fastapi import FastAPI
 
-    test_app = FastAPI(lifespan=app_module._lifespan)
+    test_app = FastAPI(lifespan=app_module._build_lifespan(run_startup_tasks=False))
 
     async def _drive() -> None:
         async with test_app.router.lifespan_context(test_app):

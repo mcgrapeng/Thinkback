@@ -1,7 +1,7 @@
 """thinkback FastAPI application factory."""
 
 from collections.abc import AsyncGenerator, Awaitable, Callable
-from contextlib import asynccontextmanager
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from threading import Thread
 from time import perf_counter, time
 
@@ -42,151 +42,175 @@ OPENAPI_TAGS = [
 ]
 
 
-@asynccontextmanager
-async def _lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: ARG001
-    """FastAPI 生命周期管理。
+def _build_lifespan(
+    *, run_startup_tasks: bool
+) -> Callable[[FastAPI], AbstractAsyncContextManager[None]]:
+    """按开关构造 lifespan。
 
-    启动阶段：
-    1. 运行 Alembic 迁移，确保数据库结构已对齐；
-    2. lazy-create Milvus 数据库（避免 mem0 在写时碰到 code=800）；
-    3. 如启用 gRPC，则启动内置 gRPC server 并开启 reflection。
-
-    退出阶段：
-    1. 排空 L3 后台队列；
-    2. 关闭 L3 executor（仅当 service 自身拥有时）；
-    3. 关闭 SqlAlchemyMemoryRepository 的 worker 事件循环；
-    4. 关闭 gRPC server（带 grace）；
-    5. 释放 asyncpg 连接池。
-
-    任何步骤失败都不应阻塞其它步骤 —— 全部用 try/except + warning 兜底。
+    ``run_startup_tasks=False``（单测用）：跳过迁移、Milvus 建库与启动恢复，
+    也不起内嵌 gRPC server。单测必须能在没有 PG / Milvus / LLM 的机器上跑。
     """
 
-    logger.info("memory service lifespan startup started")
-    # 进程启动时刻（Overview 服务身份卡需要：uptime）
-    import thinkback.api.app as _app_module
+    @asynccontextmanager
+    async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: ARG001
+        """FastAPI 生命周期管理。
 
-    _app_module.PROCESS_STARTED_AT = time()
+        启动阶段：
+        1. 运行 Alembic 迁移，确保数据库结构已对齐；
+        2. lazy-create Milvus 数据库（避免 mem0 在写时碰到 code=800）；
+        3. 如启用 gRPC，则启动内置 gRPC server 并开启 reflection。
 
-    # Run database migrations on startup
-    from thinkback.infra.database.migration import run_migrations_serialized_async
+        退出阶段：
+        1. 排空 L3 后台队列；
+        2. 关闭 L3 executor（仅当 service 自身拥有时）；
+        3. 关闭 SqlAlchemyMemoryRepository 的 worker 事件循环；
+        4. 关闭 gRPC server（带 grace）；
+        5. 释放 asyncpg 连接池。
 
-    try:
-        # 带 advisory lock：部署里最多三个进程会同时跑 DDL（lifespan + 迁移 Job
-        # + 多副本），alembic 默认不加锁，并发迁移会撞「already exists」或死锁。
-        await run_migrations_serialized_async()
-        logger.info("memory service database migrations applied")
-    except Exception as exc:
-        logger.error(f"Failed to run database migrations: {exc}")
-        raise
+        任何步骤失败都不应阻塞其它步骤 —— 全部用 try/except + warning 兜底。
+        """
 
-    # Make sure the configured Milvus database exists; mem0 won't create it
-    # itself and would otherwise fail every append with code 800 once it tries
-    # to write. Best-effort: log a warning if the lazy-create fails so the
-    # service still boots in degraded mode.
-    from thinkback.infra.milvus import ensure_milvus_database
+        logger.info("memory service lifespan startup started")
+        # 进程启动时刻（Overview 服务身份卡需要：uptime）
+        import thinkback.api.app as _app_module
 
-    ensure_milvus_database(
-        milvus_url=settings.milvus_url,
-        milvus_database=settings.milvus_database,
-        milvus_token=settings.milvus_password or None,
-    )
+        _app_module.PROCESS_STARTED_AT = time()
 
-    # 启动恢复：回收上一个进程实例被硬杀时遗留的孤儿 running 任务，
-    # 避免 GetTask 客户端永远轮询。内部已按阈值做条件回收并吞掉失败。
-    from thinkback.api.dependencies import get_memory_service
+        if run_startup_tasks:
+            # Run database migrations on startup
+            from thinkback.infra.database.migration import run_migrations_serialized_async
 
-    # 服务单例在 lifespan 内**同步**构造：构造只碰 PG 引擎与 Mem0 客户端，
-    # 不发网络请求，代价可忽略。不这样做的话单例由后台线程懒构造，
-    # 启动完成时可能还没建好 —— 首个请求会与恢复线程竞争同一个单例。
-    service = get_memory_service()
+            try:
+                # 带 advisory lock：部署里最多三个进程会同时跑 DDL（lifespan + 迁移 Job
+                # + 多副本），alembic 默认不加锁，并发迁移会撞「already exists」或死锁。
+                await run_migrations_serialized_async()
+                logger.info("memory service database migrations applied")
+            except Exception as exc:
+                logger.error(f"Failed to run database migrations: {exc}")
+                raise
 
-    # 已接受（async 返回 accepted）但没写完的 L3 写入：按 journal 重放，
-    # 否则进程崩溃后那条长期记忆会永久缺失。必须在孤儿回收之前跑：
-    # 回收会把超龄 RUNNING 标成 failed，回收后就认不出「待重放」的工作了。
-    #
-    # 放后台线程：重放最多 200 次 LLM 抽取，卡在 lifespan 里会让就绪探针
-    # 超时 → Pod 被判定不健康 → CrashLoopBackOff（要恢复的 Pod 自己起不来）。
-    def _recover_pending_writes() -> None:
-        # 用 lifespan 已构造好的实例：后台线程里再调 get_memory_service()
-        # 会在服务关闭后把单例重新造出来（关停后仍持有仓储）。
+            # Make sure the configured Milvus database exists; mem0 won't create it
+            # itself and would otherwise fail every append with code 800 once it tries
+            # to write. Best-effort: log a warning if the lazy-create fails so the
+            # service still boots in degraded mode.
+            from thinkback.infra.milvus import ensure_milvus_database
+
+            ensure_milvus_database(
+                milvus_url=settings.milvus_url,
+                milvus_database=settings.milvus_database,
+                milvus_token=settings.milvus_password or None,
+            )
+        else:
+            # 单测模式：不碰任何外部依赖。关停流程照常执行（排空队列、
+            # 关 executor、重置单例），否则测试里的后台线程会泄漏。
+            logger.info("memory service lifespan startup tasks skipped")
+
+        # 启动恢复：回收上一个进程实例被硬杀时遗留的孤儿 running 任务，
+        # 避免 GetTask 客户端永远轮询。内部已按阈值做条件回收并吞掉失败。
+        from thinkback.api.dependencies import get_memory_service
+
+        # 服务单例在 lifespan 内**同步**构造：构造只碰 PG 引擎与 Mem0 客户端，
+        # 不发网络请求，代价可忽略。不这样做的话单例由后台线程懒构造，
+        # 启动完成时可能还没建好 —— 首个请求会与恢复线程竞争同一个单例。
+        service = get_memory_service()
+
+        # 已接受（async 返回 accepted）但没写完的 L3 写入：按 journal 重放，
+        # 否则进程崩溃后那条长期记忆会永久缺失。必须在孤儿回收之前跑：
+        # 回收会把超龄 RUNNING 标成 failed，回收后就认不出「待重放」的工作了。
+        #
+        # 放后台线程：重放最多 200 次 LLM 抽取，卡在 lifespan 里会让就绪探针
+        # 超时 → Pod 被判定不健康 → CrashLoopBackOff（要恢复的 Pod 自己起不来）。
+        def _recover_pending_writes() -> None:
+            # 用 lifespan 已构造好的实例：后台线程里再调 get_memory_service()
+            # 会在服务关闭后把单例重新造出来（关停后仍持有仓储）。
+            try:
+                recovered = service.recover_pending_writes()
+            except Exception as exc:  # noqa: BLE001 - 恢复失败不该挡住启动
+                logger.bind(error_type=type(exc).__name__).warning(
+                    "memory pending write recovery failed on startup"
+                )
+                return
+            if recovered:
+                logger.bind(recovered_count=recovered).warning(
+                    "memory pending writes recovered on startup"
+                )
+            # 回收排在重放之后：回收会把超龄 RUNNING 标成 failed，认不出
+            # 「待重放」的工作了。
+            try:
+                reclaimed = service.reclaim_orphan_running_tasks()
+            except Exception as exc:  # noqa: BLE001 - 回收失败不该挡住启动
+                logger.bind(error_type=type(exc).__name__).warning(
+                    "memory orphan running task reclaim failed on startup"
+                )
+                return
+            if reclaimed:
+                logger.bind(reclaimed_count=len(reclaimed)).warning(
+                    "memory orphan running tasks reclaimed on startup"
+                )
+
+        if run_startup_tasks:
+            Thread(
+                target=_recover_pending_writes, name="pending-write-recovery", daemon=True
+            ).start()
+
+        grpc_server = None
+        if run_startup_tasks and settings.grpc_enabled:
+            from thinkback.rpc.server import create_server
+
+            grpc_server, address = create_server(
+                service,
+                host=settings.grpc_host,
+                port=settings.grpc_port,
+                max_workers=settings.grpc_max_workers,
+                max_concurrent_rpcs=settings.grpc_max_concurrent_rpcs or None,
+            )
+            grpc_server.start()
+            logger.bind(address=address).info("grpc server started")
+        logger.info("memory service lifespan startup completed")
+        yield
+        # Drain in-flight L3 background tasks before shutting down executors,
+        # so async-mode append/delete/rebuild tasks don't get stuck in RUNNING.
+        # Then explicitly shutdown the L3 executor (for owned executors) so
+        # SIGTERM exits promptly instead of hanging on idle workers.
+        from thinkback.api.dependencies import _memory_service, reset_memory_service
+
+        if _memory_service is not None:
+            _memory_service.drain_l3_background_tasks(timeout=30)
+            _memory_service.shutdown_l3_executor(wait=False)
+            logger.info("memory l3 background tasks drained")
+            # 防御性关闭 SqlAlchemyMemoryRepository 的 worker 事件循环，
+            # 避免 daemon=True 丢弃 in-flight run_coroutine_threadsafe 任务、
+            # 导致 DB session 未 close 而泄漏。
+            try:
+                _memory_service.repository.close(timeout=5.0)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(f"memory repository close failed: {exc}")
+        if grpc_server is not None:
+            grpc_server.stop(grace=settings.grpc_shutdown_grace_seconds)
+            logger.info("grpc server stopped")
+
+        from thinkback.infra.database.engine import engine as db_engine
+        from thinkback.infra.database.engine import readiness_engine
+
         try:
-            recovered = service.recover_pending_writes()
-        except Exception as exc:  # noqa: BLE001 - 恢复失败不该挡住启动
-            logger.bind(error_type=type(exc).__name__).warning(
-                "memory pending write recovery failed on startup"
-            )
-            return
-        if recovered:
-            logger.bind(recovered_count=recovered).warning(
-                "memory pending writes recovered on startup"
-            )
-        # 回收排在重放之后：回收会把超龄 RUNNING 标成 failed，认不出
-        # 「待重放」的工作了。
-        try:
-            reclaimed = service.reclaim_orphan_running_tasks()
-        except Exception as exc:  # noqa: BLE001 - 回收失败不该挡住启动
-            logger.bind(error_type=type(exc).__name__).warning(
-                "memory orphan running task reclaim failed on startup"
-            )
-            return
-        if reclaimed:
-            logger.bind(reclaimed_count=len(reclaimed)).warning(
-                "memory orphan running tasks reclaimed on startup"
-            )
-
-    Thread(target=_recover_pending_writes, name="pending-write-recovery", daemon=True).start()
-
-    grpc_server = None
-    if settings.grpc_enabled:
-        from thinkback.rpc.server import create_server
-
-        grpc_server, address = create_server(
-            service,
-            host=settings.grpc_host,
-            port=settings.grpc_port,
-            max_workers=settings.grpc_max_workers,
-            max_concurrent_rpcs=settings.grpc_max_concurrent_rpcs or None,
-        )
-        grpc_server.start()
-        logger.bind(address=address).info("grpc server started")
-    logger.info("memory service lifespan startup completed")
-    yield
-    # Drain in-flight L3 background tasks before shutting down executors,
-    # so async-mode append/delete/rebuild tasks don't get stuck in RUNNING.
-    # Then explicitly shutdown the L3 executor (for owned executors) so
-    # SIGTERM exits promptly instead of hanging on idle workers.
-    from thinkback.api.dependencies import _memory_service, reset_memory_service
-
-    if _memory_service is not None:
-        _memory_service.drain_l3_background_tasks(timeout=30)
-        _memory_service.shutdown_l3_executor(wait=False)
-        logger.info("memory l3 background tasks drained")
-        # 防御性关闭 SqlAlchemyMemoryRepository 的 worker 事件循环，
-        # 避免 daemon=True 丢弃 in-flight run_coroutine_threadsafe 任务、
-        # 导致 DB session 未 close 而泄漏。
-        try:
-            _memory_service.repository.close(timeout=5.0)
+            await db_engine.dispose()
+            await readiness_engine.dispose()
+            logger.info("database engine connection pool disposed")
         except Exception as exc:  # noqa: BLE001
-            logger.warning(f"memory repository close failed: {exc}")
-    if grpc_server is not None:
-        grpc_server.stop(grace=settings.grpc_shutdown_grace_seconds)
-        logger.info("grpc server stopped")
+            logger.warning(f"database engine dispose failed: {exc}")
 
-    from thinkback.infra.database.engine import engine as db_engine
-    from thinkback.infra.database.engine import readiness_engine
+        # 最后一步：重置服务单例。旧单例的 repository/executor 均已关闭，
+        # 残留会让同进程的下一次生命周期（测试逐用例 app、开发期 reload）
+        # 在 startup 复用已关闭仓储而静默失效。
+        reset_memory_service()
+        logger.info("memory service singleton reset")
 
-    try:
-        await db_engine.dispose()
-        await readiness_engine.dispose()
-        logger.info("database engine connection pool disposed")
-    except Exception as exc:  # noqa: BLE001
-        logger.warning(f"database engine dispose failed: {exc}")
+    return lifespan
 
-    # 最后一步：重置服务单例。旧单例的 repository/executor 均已关闭，
-    # 残留会让同进程的下一次生命周期（测试逐用例 app、开发期 reload）
-    # 在 startup 复用已关闭仓储而静默失效。
-    reset_memory_service()
-    logger.info("memory service singleton reset")
+
+# 生产 lifespan（跑迁移/建库/恢复/起 gRPC）。保留这个名字：外部代码与测试
+# 直接构造 FastAPI(lifespan=...) 时用它。
+_lifespan = _build_lifespan(run_startup_tasks=True)
 
 
 def _register_request_middleware(app: FastAPI) -> None:
@@ -238,7 +262,7 @@ def _declare_readiness_overload_response(app: FastAPI) -> None:
             }
 
 
-def create_app() -> FastAPI:
+def create_app(*, run_startup_tasks: bool = True) -> FastAPI:
     """创建并配置 FastAPI 应用实例。
 
     流程：
@@ -247,6 +271,11 @@ def create_app() -> FastAPI:
     3. 注册 trace_id 中间件；
     4. include health + memory 路由；
     5. 添加根路径的 ``/`` 探活接口。
+
+    ``run_startup_tasks=False`` 跳过迁移、Milvus 建库与启动恢复这三件
+    碰外部依赖的事，并不起内嵌 gRPC server。单测用它构造应用：单测必须
+    不依赖真实 PG / Milvus / LLM，否则同一份代码在有数据库的机器上绿、
+    在 CI 上红。
     """
 
     configure_logging()
@@ -257,7 +286,7 @@ def create_app() -> FastAPI:
         debug=settings.debug,
     ).info("memory service app creation started")
     app = FastAPI(
-        lifespan=_lifespan,
+        lifespan=_build_lifespan(run_startup_tasks=run_startup_tasks),
         title=f"{settings.app_name} Memory Service API",
         summary="Thinkback 记忆服务接口文档",
         version=settings.app_version,

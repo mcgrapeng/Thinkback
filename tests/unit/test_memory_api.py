@@ -335,7 +335,7 @@ def test_memory_routes_return_200_without_any_authentication_header(monkeypatch)
     """记忆服务是内部服务，不做调用方鉴权；无 header 也必须可访问。"""
     service = MemoryService(repository=InMemoryMemoryRepository(), backend=FakeMemoryBackend())
     monkeypatch.setattr("thinkback.api.dependencies._memory_service", service)
-    with TestClient(create_app()) as test_client:
+    with TestClient(create_app(run_startup_tasks=False)) as test_client:
         response = test_client.post(
             "/memory/recall",
             json={
