@@ -8,7 +8,7 @@
     "thinkback.domain.keys.x_fingerprint__mutmut_14": "等价变异：codec 名大小写不敏感，utf-8 与 UTF-8 同义。",
     "thinkback.domain.keys.x_request_fingerprint__mutmut_10": "覆盖缺口：behavior_metadata 的取值是否进入指纹未被断言。",
     "thinkback.domain.keys.x_request_fingerprint__mutmut_11": "覆盖缺口：behavior_metadata 的取值是否进入指纹未被断言。",
-    "thinkback.domain.keys.x_request_fingerprint__mutmut_16": "等价变异：codec 名大小写不敏感，utf-8 与 UTF-8 同义。",
+    "thinkback.domain.keys.x_request_fingerprint__mutmut_18": "等价变异：codec 名大小写不敏感，utf-8 与 UTF-8 同义。",
     "thinkback.domain.keys.x_request_fingerprint__mutmut_2": "等价变异：canonical payload 的键名只影响 hash 值本身；指纹契约是相等性而非具体值。",
     "thinkback.domain.keys.x_request_fingerprint__mutmut_3": "等价变异：同上（键名大小写）。",
     "thinkback.domain.keys.x_request_fingerprint__mutmut_4": "等价变异：同上（role 键名）。",
