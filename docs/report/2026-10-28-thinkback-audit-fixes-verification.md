@@ -56,24 +56,33 @@
 
 ## 本轮验证命令
 
-终验在 HEAD `5c1f9c0`（`make check` 全链跑通）：
+终验在 HEAD `2b1cc09`（`make check` 全链跑通）：
 
 | 命令 | 结果 |
 | --- | --- |
-| `make format-check` | 293 files already formatted |
+| `make format-check` | 295 files already formatted |
 | `make lint` | All checks passed! |
 | `make typecheck` | Success: no issues found in 63 source files |
 | `make test`（隔离本机 OPENAI_API_KEY 与代理） | **885 passed**, 1 warning |
-| `make mutation-audit` | 当前存活 112 / 无测试 2，与已验收基线一致，无新增 |
+| `make mutation-audit` | 当前存活 110 / 无测试 2，与已验收基线一致，无新增 |
 | `make eval` | 通用基线达标 + 半导体自包含基线达标 |
 | `make test-fuzz` | 通过 |
 | `make audit` | No known vulnerabilities found |
 | `make test-ui` | 22 个用例通过；`tsc --noEmit` 与 `vite build` 通过 |
 | `alembic upgrade head`（本地 PostgreSQL） | 迁移 20261028_0015 应用成功 |
 
+审计 18 条反例的定向复跑：32 条对应回归测试一次性全绿（覆盖上表每一行的
+测试）。
+
 过程中门禁自己抓出并修掉的两个真实回归（都是本轮引入的）：
 1. L2 记录 scope 状态时清零 append 计数 → 在飞刷新写入成功时 trailing 刷新丢失（`8ebb64f`）；
 2. 行为 metadata 取值未进指纹断言 → 变异审计新增 2 个存活变异体（`e15556b`）。
+
+自审另外改掉两处升级/诚实性风险：
+1. namespace 不进请求指纹（`c333db4`）：指纹是已落库哈希，改算法会让升级前的
+   轮次重放时误报 409；namespace 由 journal 字段单独判定。
+2. 治理台暴露 TTL 到期时刻（`2b1cc09`）：治理台保留过期条目（否则擦不掉），
+   但必须让运营看得出它已到期。
 
 ## 未在本轮验证的边界
 
