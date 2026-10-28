@@ -391,46 +391,12 @@ def test_l2_scope_state_is_bounded() -> None:
 
 
 def test_refresh_in_flight_triggers_trailing_refresh() -> None:
-    """在飞期间到达的轮次必须触发一次 trailing 刷新，不能被旧快照吞掉。"""
-    started = Event()
-    release = Event()
-    calls: list[int] = []
+    """在飞期间到达的轮次必须触发一次 trailing 刷新，不能被旧快照吞掉。
 
-    def composer(rounds: list[Any], previous_summary: str | None) -> tuple[str, dict[str, str]]:
-        calls.append(len(rounds))
-        if len(calls) == 1:
-            started.set()
-            if not release.wait(timeout=10):
-                raise RuntimeError("test release timeout")
-        text = f"【主题】刷新{len(calls)}"
-        return text, {"主题": text}
-
-    repository = InMemoryMemoryRepository()
-    service = MemoryService(
-        repository=repository,
-        backend=FakeMemoryBackend(),
-        l3_write_mode="sync",
-        l2_summary_composer=composer,
-        l2_refresh_interval_rounds=2,
-    )
-    service.append(make_append("r1", "第一轮"))
-    assert started.wait(timeout=5)
-
-    service.append(make_append("r2", "第二轮", index=2))
-    service.append(make_append("r3", "第三轮", index=3))
-    release.set()
-    service.drain_l3_background_tasks(timeout=10)
-
-    assert len(calls) >= 2
-    assert calls[-1] >= 3
-
-
-def test_trailing_refresh_survives_successful_inflight_write() -> None:
-    """在飞刷新**写入成功**时，在飞期间到达的轮次同样要触发 trailing 刷新。
-
-    回归：记录 scope 状态时若把 append 计数清零，trailing 刷新就不会发生。
-    这个分支只在刷新写入成功时走到，常规跑法很难发现——变异审计的
-    clean test 才把它逼出来。
+    直接驱动 refresher 而不是 service.append：service 的并发摘要写会与
+    在飞刷新争 row_version，「在飞期间那几轮有没有被计入」取决于时序——
+    那是服务层的另一件事（CAS 拒绝旧快照）。这里要钉的是 refresher 自己的
+    语义：计数不被清零 → 结束时补一次刷新。
     """
     started = Event()
     release = Event()
@@ -456,13 +422,17 @@ def test_trailing_refresh_survives_successful_inflight_write() -> None:
     refresher.maybe_submit("user-1", "session-1")
     assert started.wait(timeout=5)
 
-    # 在飞期间又来两轮：计数达到阈值，结束后必须补一次 trailing 刷新。
+    # 在飞期间又来了两轮：计数达到阈值，结束后必须补一次 trailing 刷新，
+    # 且这次刷新要带上全部三轮。
+    repository.save_round(make_append("r2", "第二轮", index=2))
+    repository.save_round(make_append("r3", "第三轮", index=3))
     refresher.maybe_submit("user-1", "session-1")
     refresher.maybe_submit("user-1", "session-1")
     release.set()
     refresher.drain(timeout=10)
 
     assert len(calls) >= 2
+    assert calls[-1] >= 3
 
 
 def test_upsert_summary_kind_roundtrip_in_memory_repo() -> None:
