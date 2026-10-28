@@ -552,6 +552,66 @@ def test_l1_cache_clear_l1_without_session_clears_scope_and_isolates_users() -> 
     ]
 
 
+def test_l1_cache_key_separates_users_and_scopes() -> None:
+    """缓存键必须同时含 user_id 与 scope：任一维度漏掉都会跨维度串味。"""
+    repository = InMemoryMemoryRepository()
+    repository.update_l1(
+        _make_l1_entry(round_id="r-1", user_id="user-1", scope_id="scope-1", session_id="s-1"),
+        limit=10,
+    )
+
+    # 同 session / 同 namespace，但 user 不同 → 不能命中
+    assert repository.get_l1("user-other", "scope-1", "s-1") == []
+    # 同 user / 同 session，但 scope 不同 → 不能命中
+    assert repository.get_l1("user-1", "scope-2", "s-1") == []
+    # 本人本 scope → 必须命中
+    assert [entry.round_id for entry in repository.get_l1("user-1", "scope-1", "s-1")] == ["r-1"]
+
+
+def test_l1_cache_clear_l1_removes_timestamp_bookkeeping() -> None:
+    """清缓存必须同时清掉 TTL 时间戳：残留时间戳会让缓存条目「有主无名」。"""
+    repository = InMemoryMemoryRepository()
+    repository.update_l1(
+        _make_l1_entry(round_id="r-1", user_id="user-1", scope_id="scope-1", session_id="s-1"),
+        limit=10,
+    )
+    repository.update_l1(
+        _make_l1_entry(round_id="r-2", user_id="user-1", scope_id="scope-1", session_id="s-2"),
+        limit=10,
+    )
+
+    repository.clear_l1("user-1", "scope-1", "s-1")
+
+    stamps = repository._l1_timestamps()
+    assert not any(key.endswith(":s-1") for key in stamps), f"时间戳残留：{sorted(stamps)}"
+
+    # 整 scope 清空：时间戳也要一起清
+    repository.clear_l1("user-1", "scope-1")
+    stamps = repository._l1_timestamps()
+    assert not any("scope-1" in key for key in stamps), f"时间戳残留：{sorted(stamps)}"
+
+
+def test_l1_cache_expired_entry_is_dropped_with_timestamp(monkeypatch) -> None:
+    """TTL 过期：条目与时间戳一起清掉，不留孤儿时间戳。"""
+    repository = InMemoryMemoryRepository()
+    repository.update_l1(
+        _make_l1_entry(round_id="r-1", user_id="user-1", scope_id="scope-1", session_id="s-1"),
+        limit=10,
+    )
+    key = next(iter(repository.l1_cache))
+    assert key in repository._l1_timestamps()
+
+    monkeypatch.setattr(
+        "thinkback.memory.repositories._l1_cache.time.monotonic",
+        lambda: 0.0,
+    )
+    repository._l1_timestamps()[key] = -10_000.0  # 远超 TTL
+
+    assert repository.get_l1("user-1", "scope-1", "s-1") == []
+    assert key not in repository.l1_cache
+    assert key not in repository._l1_timestamps()
+
+
 def test_l1_cache_update_l1_deduplicates_and_caps_by_limit() -> None:
     repository = InMemoryMemoryRepository()
     for index in range(4):
