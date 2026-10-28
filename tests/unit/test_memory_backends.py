@@ -7,6 +7,7 @@ from typing import Any
 import pytest
 from loguru import logger
 
+from thinkback.domain.ports import MEMORY_LIST_PAGE_LIMIT
 from thinkback.memory.backends import FakeMemoryBackend
 
 
@@ -384,7 +385,10 @@ def test_mem0_library_backend_maps_add_search_update_delete_and_scoped_delete_al
         (
             "get_all",
             (),
-            {"filters": {"user_id": "user-1", "agent_id": "thinkback"}, "limit": 10000},
+            {
+                "filters": {"user_id": "user-1", "agent_id": "thinkback"},
+                "limit": MEMORY_LIST_PAGE_LIMIT,
+            },
         ),
         ("delete", ("m1",), {}),
         ("delete", ("m2",), {}),
@@ -627,7 +631,12 @@ def test_mem0_library_backend_supports_legacy_entity_scope_kwargs() -> None:
         (
             "get_all",
             (),
-            {"user_id": "user-1", "agent_id": "thinkback", "limit": 10000, "filters": None},
+            {
+                "user_id": "user-1",
+                "agent_id": "thinkback",
+                "limit": MEMORY_LIST_PAGE_LIMIT,
+                "filters": None,
+            },
         ),
         ("delete", ("m1",), {}),
     ]
@@ -676,7 +685,10 @@ def test_mem0_library_backend_supports_top_k_mem0_versions() -> None:
         (
             "get_all",
             (),
-            {"filters": {"user_id": "user-1", "agent_id": "thinkback"}, "top_k": 10000},
+            {
+                "filters": {"user_id": "user-1", "agent_id": "thinkback"},
+                "top_k": MEMORY_LIST_PAGE_LIMIT,
+            },
         ),
         ("delete", ("m1",), {}),
     ]
