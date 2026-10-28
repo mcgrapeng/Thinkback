@@ -18,7 +18,7 @@ Requires `Authorization: Bearer <ADMIN_TOKEN>`. Not configured means 503 (fail-c
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| `POST` | `/v2/memory/events` | Write a `user → assistant` round; triggers L1/L2/L3 updates |
+| `POST` | `/v2/memory/events` | Write one source event; `event_id` is the idempotency anchor |
 | `POST` | `/v2/memory/recall` | Retrieve relevant memories (L1/L2/L3) |
 | `POST` | `/v2/memory/delete` | Scoped delete (`MEMORY` / `SESSION` / `ALL`), tombstone kept |
 | `POST` | `/v2/memory/suppress` | Take memories out of recall, keep the text and the tombstone |
