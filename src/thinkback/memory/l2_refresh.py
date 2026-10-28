@@ -227,6 +227,12 @@ class L2BackgroundRefresher:
         )
         refresh_log.debug("memory l2 llm refresh started")
         try:
+            # 乐观锁版本必须在**读轮次之前**取。顺序反了的话，删除恰好落在
+            # 「读完轮次」与「读版本」之间时，拿到的是删除之后的新版本号，
+            # CAS 反而成功，已删原文被写回 ACTIVE 摘要。
+            expected_row_version = self._summary_row_version(
+                user_id, session_scope_id, namespace=namespace
+            )
             # 排除集按用户聚合：L3 记忆在长期 scope，轮次在会话 scope；
             # 按 scope 过滤会漏掉已删除/已遗忘的事实 → LLM 摘要把原文复活。
             excluded_refs = self._repository.excluded_source_refs_for_user(user_id)
@@ -240,16 +246,23 @@ class L2BackgroundRefresher:
             previous_summary = self._previous_llm_summary(
                 user_id, session_scope_id, namespace=namespace
             )
-            # 乐观锁：带着当前版本去写。删除、状态变更、别人的写入都会让
-            # 版本 +1，于是这份旧快照写不进来（不会把 DIRTY 改回 ACTIVE）。
-            current = self._repository.get_summary(user_id, session_scope_id, namespace=namespace)
-            expected_row_version = current.row_version if current is not None else None
             if not rounds:
                 refresh_log.debug("memory l2 llm refresh skipped: no active rounds")
                 return
             summary_text, structured_sections = self._composer(rounds, previous_summary)
             if not summary_text or not summary_text.strip():
                 raise RuntimeError("l2 llm composer returned empty summary")
+            # 写入前复核排除集：composer 期间发生的删除（删除屏障墓碑化轮次）
+            # 必须让本次刷新放弃，否则摘要里会带回已删原文。
+            current_excluded = self._repository.excluded_source_refs_for_user(user_id)
+            resurrected = [
+                entry for entry in rounds if (entry.session_id, entry.round_id) in current_excluded
+            ]
+            if resurrected:
+                refresh_log.bind(
+                    resurrected_round_count=len(resurrected),
+                ).warning("memory l2 llm refresh skipped: sources deleted during refresh")
+                return
             written = self._repository.upsert_summary_from_rounds(
                 user_id,
                 session_scope_id,
@@ -283,6 +296,13 @@ class L2BackgroundRefresher:
             refresh_log.bind(error_type=type(exc).__name__).warning(
                 "memory l2 llm refresh failed: keeping concat summary"
             )
+
+    def _summary_row_version(
+        self, user_id: str, session_scope_id: str, *, namespace: str = DEFAULT_NAMESPACE
+    ) -> int | None:
+        """当前摘要行版本（乐观锁基准）。行不存在时返回 None。"""
+        summary = self._repository.get_summary(user_id, session_scope_id, namespace=namespace)
+        return summary.row_version if summary is not None else None
 
     def _previous_llm_summary(
         self, user_id: str, session_scope_id: str, *, namespace: str = DEFAULT_NAMESPACE

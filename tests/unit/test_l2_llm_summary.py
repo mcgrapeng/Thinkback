@@ -223,6 +223,56 @@ def test_deleted_rounds_excluded_from_llm_refresh() -> None:
     assert round_count == len(contents)
 
 
+def test_delete_between_rounds_read_and_version_read_cannot_resurrect_summary() -> None:
+    """删除落在「读完轮次」与「读版本号」之间时，旧快照不得写回 ACTIVE。
+
+    这个窗口此前没有保护：刷新先读轮次、后读 row_version。删除恰好落在
+    两者之间时，读到的是删除之后的新版本号，CAS 反而成功，已删原文被
+    写回 ACTIVE 摘要。
+
+    这里用仓储覆写把删除钉在「读版本」这一刻：读取版本时执行删除，
+    版本号随之 +1，正好命中那个窗口。
+    """
+    deleted = Event()
+
+    class _DeleteOnVersionRead(InMemoryMemoryRepository):
+        """读摘要行的瞬间执行删除，稳定命中 TOCTOU 窗口。"""
+
+        def get_summary(self, *args: Any, **kwargs: Any) -> Any:
+            summary = super().get_summary(*args, **kwargs)
+            if not deleted.is_set():
+                deleted.set()
+                # 删除：轮次墓碑化 + 摘要置 DIRTY + row_version +1。
+                super().mark_rounds_deleted("user-1", "session-1", "session-1")
+                if summary is not None:
+                    summary.summary_state = SummaryState.DIRTY
+                    summary.row_version += 1
+            return summary
+
+    def _composer(rounds: list[Any], previous_summary: str | None) -> tuple[str, dict[str, str]]:
+        text = "【主题】RESURRECTED-MARKER"
+        return text, {"主题": text}
+
+    repository = _DeleteOnVersionRead()
+    service = MemoryService(
+        repository=repository,
+        backend=FakeMemoryBackend(),
+        l3_write_mode="sync",
+        l2_summary_composer=_composer,
+        l2_refresh_interval_rounds=1,
+    )
+    service.append(make_append("r1", "SECRET-MARKER"))
+    service.drain_l3_background_tasks(timeout=5)
+
+    summary = repository.get_summary("user-1", "session-1")
+    assert summary is not None
+    assert deleted.is_set(), "删除必须落在读版本的那一刻"
+    # 旧刷新不得把摘要写回 ACTIVE，也不得落成 llm 版。
+    assert summary.summary_state is not SummaryState.ACTIVE
+    assert summary.summary_kind != "llm"
+    assert "【主题】" not in summary.summary_text
+
+
 def test_pending_scope_not_resubmitted_while_in_flight() -> None:
     """在飞去重：刷新阻塞期间连续 append 不重复提交（阻塞 composer 消除竞态）。"""
     from threading import Event
