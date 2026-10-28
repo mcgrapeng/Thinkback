@@ -79,8 +79,15 @@ def query_conflict_slots(query: str) -> list[str]:
         slots.append("current_work_status")
 
     # M-3 修复：要求第一人称自指，避免 "how to communicate" 之类元问题误触发。
+    # 「用户」也算自指：治理台与第三方接入的提问都是第三人称口径
+    # （"用户希望你怎么给建议？"），只认「我」会让这类提问完全落不到槽位，
+    # 源规范化出来的 P0 记忆（只在本地索引、不在向量库）就永远召不回来。
     _first_person_for_comm = (
-        re.search(r"(?:我|我的|我们|\bme\b|\bmy\b|\bmyself\b|\bi\s|\bi\b)", normalized) is not None
+        re.search(
+            r"(?:我|我的|我们|用户|\bme\b|\bmy\b|\bmyself\b|\bi\s|\bi\b)",
+            normalized,
+        )
+        is not None
     )
     asks_communication_preference = bool(_first_person_for_comm) and (
         "怎么给建议" in normalized

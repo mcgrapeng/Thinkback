@@ -29,6 +29,8 @@ def memory_conflict_slot(memory_text: str) -> str | None:
     nickname_markers = (
         "叫我",
         "称呼",
+        # 第三人称偏好措辞：模型抽出的中文昵称多是「喜欢别人叫他X」。
+        "别人叫",
         "preferred name",
         "prefers to be called",
         "prefers to be addressed as",

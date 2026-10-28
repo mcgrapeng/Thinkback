@@ -342,6 +342,11 @@ def _nearest_rank_ms(ordered_samples: list[float], percentile: float) -> int:
 
 
 def _duplicate_active_rate(active_memory_snapshots: list[MemorySnapshot]) -> float:
+    """同一槽位出现多个活跃值的比例。
+
+    单值槽位（昵称、宠物名、住址、生日…）出现两个活跃值就是冲突：用户的猫
+    不能既叫麻薯又叫露露。这正是要抓的「重复活跃」。
+    """
     active = [
         snapshot
         for snapshot in active_memory_snapshots
@@ -354,8 +359,7 @@ def _duplicate_active_rate(active_memory_snapshots: list[MemorySnapshot]) -> flo
         slot = _memory_conflict_slot_for_report(snapshot.memory_text)
         if slot is None:
             continue
-        slot_key = slot
-        slot_counts[slot_key] = slot_counts.get(slot_key, 0) + 1
+        slot_counts[slot] = slot_counts.get(slot, 0) + 1
     duplicate_count = sum(count - 1 for count in slot_counts.values() if count > 1)
     return duplicate_count / len(active)
 
@@ -506,6 +510,33 @@ def _wait_for_l3_drain(
     return last_status
 
 
+def _await_task(
+    base_url: str,
+    task_id: str,
+    *,
+    timeout_seconds: float = 300.0,
+    poll_interval_seconds: float = 0.5,
+) -> dict[str, Any]:
+    """等后台任务到终态。
+
+    async 写入模式下 ``/memory/append`` 立刻返回 accepted，事实真正落到 L3
+    是后台任务做的。评测要看到「写完之后」的召回，所以必须等任务终态。
+    """
+    deadline = time.monotonic() + timeout_seconds
+    last: dict[str, Any] = {}
+    while time.monotonic() < deadline:
+        last = _get_json(base_url, f"/memory/tasks/{task_id}")
+        if str(last.get("status", "")) in {
+            "completed",
+            "already_done",
+            "failed",
+            "dead_letter",
+        }:
+            return last
+        time.sleep(poll_interval_seconds)
+    return last
+
+
 def _get_json(
     base_url: str,
     path: str,
@@ -628,8 +659,17 @@ def _append_round(
         latency_metrics=latency_metrics,
         operation="append",
     )
-    if response.get("status") not in {"completed", "already_done"}:
-        raise RuntimeError(f"append round {index} failed: {response}")
+    status = response.get("status")
+    if status in {"completed", "already_done"}:
+        return
+    if status == "accepted":
+        # async 模式：事实由后台任务写入，等它落终态再继续评测。
+        task = _await_task(base_url, str(response.get("task_id", "")))
+        task_status = str(task.get("status", ""))
+        if task_status not in {"completed", "already_done"}:
+            raise RuntimeError(f"append round {index} task not completed: {task}")
+        return
+    raise RuntimeError(f"append round {index} failed: {response}")
 
 
 def _recall(
