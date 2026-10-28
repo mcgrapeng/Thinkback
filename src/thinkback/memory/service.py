@@ -27,7 +27,12 @@ from thinkback.domain.classification import (
 from thinkback.domain.entities import memory_is_expired
 from thinkback.domain.errors import TaskLockExhaustedError, TaskStaleWriteError
 from thinkback.domain.memory_types import MemoryTypeRegistry, MemoryTypeSpec, default_registry
-from thinkback.domain.ports import HistorySource, MemoryBackend, MemoryRepository
+from thinkback.domain.ports import (
+    MEMORY_LIST_PAGE_LIMIT,
+    HistorySource,
+    MemoryBackend,
+    MemoryRepository,
+)
 from thinkback.domain.recall_policy import dedupe_and_clip
 from thinkback.domain.safety import (
     messages_are_restricted_or_unsafe,
@@ -2490,7 +2495,9 @@ L2 更新 (缓存失效)
         """
         try:
             remaining = self.backend.get_all(
-                user_id=user_id, memory_scope_id=memory_scope_id, limit=10000
+                user_id=user_id,
+                memory_scope_id=memory_scope_id,
+                limit=MEMORY_LIST_PAGE_LIMIT,
             )
         except Exception as exc:  # noqa: BLE001 - 复核失败按「未能证明已删」处理
             logger.bind(
@@ -2502,6 +2509,15 @@ L2 更新 (缓存失效)
         present = {str(item.get("id", "")) for item in remaining}
         if scope_all:
             return sorted(present) if present else []
+        if len(remaining) >= MEMORY_LIST_PAGE_LIMIT:
+            # 一页取满：后面还有没列出来的记录，无法证明目标已删。
+            # 宁可让擦除任务失败重试，也不谎报「已擦除」。
+            logger.bind(
+                user_id=user_id,
+                memory_scope_id=memory_scope_id,
+                page_size=len(remaining),
+            ).warning("erase backend verification inconclusive: page limit reached")
+            return sorted(target_ids)
         return sorted(memory_id for memory_id in target_ids if memory_id in present)
 
     def _erased_message_texts(

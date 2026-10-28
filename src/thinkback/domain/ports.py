@@ -24,6 +24,13 @@ from thinkback.domain.entities import (
 from thinkback.domain.enums import SummaryState
 from thinkback.domain.keys import DEFAULT_NAMESPACE
 
+# ``MemoryBackend.get_all`` 的单页上限。
+# mem0 的 get_all 内部按 top_k * 4 取数，而 Milvus 单次 query 的结果窗口
+# 上限是 16384：top_k 超过 4096 会直接报错（"invalid max query result
+# window"）。服务层与后端实现共用这一个数，避免「服务以为取全了、后端只
+# 取了一半」这种静默截断。
+MEMORY_LIST_PAGE_LIMIT = 4096
+
 if TYPE_CHECKING:
     from thinkback.memory.schemas import AppendMemoryRequest
 

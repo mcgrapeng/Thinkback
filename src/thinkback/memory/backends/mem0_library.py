@@ -19,6 +19,8 @@ from typing import Any
 
 from loguru import logger
 
+from thinkback.domain.ports import MEMORY_LIST_PAGE_LIMIT
+
 THINKBACK_OPENAI_EMBEDDER_CLASS = (
     "thinkback.memory.embeddings.OpenAICompatibleEmbeddingNoDimensions"
 )
@@ -481,7 +483,7 @@ class Mem0LibraryMemoryBackend:
         result = self._call(
             "get_all",
             **self._scope_kwargs("get_all", user_id=user_id, memory_scope_id=memory_scope_id),
-            **self._limit_kwargs("get_all", limit),
+            **self._limit_kwargs("get_all", min(limit, MEMORY_LIST_PAGE_LIMIT)),
         )
         return self._results(result)
 
@@ -530,7 +532,7 @@ class Mem0LibraryMemoryBackend:
         - ``limit=10000`` 是单页上限：单页删完后继续翻页，直到取空或
           达到安全页数上限，保证 "删除用户全部数据" 不在向量库留残骸。
         """
-        page_limit = 10000
+        page_limit = MEMORY_LIST_PAGE_LIMIT
         max_pages = 100  # 单调用最多清 100 万条，防止异常数据量下的无限循环
         deleted = 0
         candidate_count = 0
