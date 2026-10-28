@@ -25,6 +25,10 @@ THINKBACK_OPENAI_EMBEDDER_CLASS = (
     "thinkback.memory.embeddings.OpenAICompatibleEmbeddingNoDimensions"
 )
 
+# 只读操作：不需要 LLM 抽取，只要 embedding + 向量检索。
+# 它们用独立的并发预算，避免被慢速写路径（LLM 抽取）饿死。
+_READ_OPERATIONS = frozenset({"search", "get_all", "get"})
+
 # P1b（mem0 v2 升级）：v2 的 custom_instructions 以「## Custom Instructions」
 # 段拼进 user prompt（system prompt 由 v2 自带的 ADDITIVE_EXTRACTION_PROMPT
 # 承担，质量规范远比 0.1.x 丰富）。thinkback 追加约束：
@@ -190,7 +194,13 @@ class Mem0LibraryMemoryBackend:
         self._memory_factory = memory_factory
         self._memory_client_lock = RLock()
         self.max_concurrent_calls = max_concurrent_calls
+        # 读、写两把独立的并发预算。
+        # 写路径要打 LLM（抽取，慢），读路径只要 embedding + 向量检索（快）。
+        # 共用一把信号量时，写积压会把读饿死：实测 4 路并发写入时 add 耗时
+        # 76s，排在后面的 search 等了 69s，召回直接 503。召回在助手的
+        # 关键路径上，不能被后台写入队列拖死，所以读有自己的一份额度。
         self._call_capacity = BoundedSemaphore(max_concurrent_calls)
+        self._read_capacity = BoundedSemaphore(max_concurrent_calls)
         # 集合一致性级别只需提升一次（进程级；提到 Strong 后才记完成）。
         self._consistency_ensured = False
 
@@ -725,6 +735,23 @@ class Mem0LibraryMemoryBackend:
                 self._memory_client = self._build_memory_client()
             return self._memory_client
 
+    def warmup(self) -> None:
+        """启动期预热：把 mem0 客户端提前构造出来。
+
+        客户端是懒构造的，而 ``Memory.from_config`` 要 3-4 秒（建 embedder、
+        向量库与 LLM 客户端）。放在启动期做，首个用户请求就不用等这 4 秒。
+        预热失败不阻塞启动：真正用到时还会再构造一次。
+        """
+        started = time.monotonic()
+        try:
+            _ = self.memory_client
+        except Exception as exc:  # noqa: BLE001 - 预热失败不该挡住服务启动
+            logger.bind(error_type=type(exc).__name__).warning("memory backend warmup failed")
+            return
+        logger.bind(
+            elapsed_ms=round((time.monotonic() - started) * 1000, 1),
+        ).info("memory backend warmup completed")
+
     def _build_memory_client(self) -> Any:
         # S7: mem0 v2 把 "事实抽取明细"（add/update/delete 的审计链路）
         # 落本地 SQLite (history_db_path)。多副本部署下每个副本的 history.db
@@ -819,7 +846,7 @@ class Mem0LibraryMemoryBackend:
         call_log.info("memory backend call started")
         try:
             method = getattr(self.memory_client, operation)
-            with self._call_capacity, _mem0_inline_threadpool():
+            with self._capacity_for(operation), _mem0_inline_threadpool():
                 result = method(*args, **kwargs)
             call_log.bind(**self._result_summary(result)).info("memory backend call completed")
             return result
@@ -829,6 +856,12 @@ class Mem0LibraryMemoryBackend:
                 error_message=str(exc)[:200],
             ).warning("memory backend call failed")
             raise RuntimeError(f"mem0 library {operation} failed: {exc}") from exc
+
+    def _capacity_for(self, operation: str) -> BoundedSemaphore:
+        """按操作类型取并发预算：读用自己的额度，不被写积压堵住。"""
+        if operation in _READ_OPERATIONS:
+            return self._read_capacity
+        return self._call_capacity
 
     @staticmethod
     def _result_summary(result: Any) -> dict[str, Any]:

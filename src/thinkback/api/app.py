@@ -114,6 +114,18 @@ def _build_lifespan(
         # 启动完成时可能还没建好 —— 首个请求会与恢复线程竞争同一个单例。
         service = get_memory_service()
 
+        # 预热后端客户端：mem0 客户端懒构造，``Memory.from_config`` 要 3-4 秒。
+        # 放在启动期做，首个用户请求就不用等这 4 秒（实测真实栈首个 append
+        # 延迟 4.5s，其中 3.7s 花在客户端构造上）。
+        warmup = getattr(getattr(service, "backend", None), "warmup", None)
+        if callable(warmup):
+            try:
+                warmup()
+            except Exception as exc:  # noqa: BLE001 - 预热失败不该挡住启动
+                logger.bind(error_type=type(exc).__name__).warning(
+                    "memory backend warmup failed on startup"
+                )
+
         # 已接受（async 返回 accepted）但没写完的 L3 写入：按 journal 重放，
         # 否则进程崩溃后那条长期记忆会永久缺失。必须在孤儿回收之前跑：
         # 回收会把超龄 RUNNING 标成 failed，回收后就认不出「待重放」的工作了。
@@ -311,7 +323,11 @@ def create_app(*, run_startup_tasks: bool = True) -> FastAPI:
 
     register_exception_handlers(app)
     app.add_middleware(IdempotencyMiddleware)
-    app.add_middleware(RateLimitMiddleware)
+    app.add_middleware(
+        RateLimitMiddleware,
+        rate_limit_per_minute=settings.memory_rate_limit_per_minute,
+        burst=settings.memory_rate_limit_burst,
+    )
 
     app.include_router(health_router)
     _declare_readiness_overload_response(app)

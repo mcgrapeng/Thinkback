@@ -55,10 +55,15 @@ def test_load_smoke_fails_on_correctness_checks() -> None:
     script = Path("tests/load/smoke.k6.js").read_text(encoding="utf-8")
     assert "checks:" in script
     assert "rate==1.0" in script
-    # 三个正确性断言必须还在：任务落终态、未降级、召回本轮事实。
+    # 正确性断言必须都在：任务落终态、未降级、召回本轮事实、L3 里召回到。
     assert "append task completed" in script
     assert "recall 未降级" in script
     assert "recall 命中本轮事实" in script
+    # L3 专项断言：只看「有没有召回到」会被 L2 拼接摘要兜底 —— L3 压根没
+    # 写进去也会显示通过，这条断言专门盯长期记忆。
+    assert "recall 命中 L3 长期记忆" in script
+    # 每轮唯一标记：round_id 复用会走幂等重试路径，测的是另一条路径。
+    assert "RUN_ID" in script
 
 
 def test_python_dependencies_include_playwright_for_e2e() -> None:

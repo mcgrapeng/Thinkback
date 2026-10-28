@@ -48,7 +48,14 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
     /memory/*、/admin/api/*、/health 等内部路径不走限流。
     """
 
-    def __init__(self, app: ASGIApp, exclude_paths: set[str] | None = None) -> None:
+    def __init__(
+        self,
+        app: ASGIApp,
+        exclude_paths: set[str] | None = None,
+        *,
+        rate_limit_per_minute: int = _RATE_LIMIT_PER_MINUTE,
+        burst: int = _RATE_LIMIT_BURST,
+    ) -> None:
         super().__init__(app)
         self.exclude_paths = exclude_paths or {
             "/health",
@@ -56,6 +63,8 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             "/redoc",
             "/openapi.json",
         }
+        self.rate_limit_per_minute = rate_limit_per_minute
+        self.burst = burst
         self.buckets: dict[str, TokenBucket] = defaultdict(
             lambda: TokenBucket(tokens=0, last_refill=0, rate_per_second=0, burst=0)
         )
@@ -86,7 +95,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         client_id = request.client.host if request.client and request.client.host else "unknown"
-        bucket = self._get_bucket(client_id, _RATE_LIMIT_PER_MINUTE, _RATE_LIMIT_BURST)
+        bucket = self._get_bucket(client_id, self.rate_limit_per_minute, self.burst)
         ok, wait = bucket.consume(1)
 
         if not ok:
@@ -103,7 +112,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                 },
                 headers={
                     "Retry-After": str(retry_after),
-                    "X-RateLimit-Limit": str(_RATE_LIMIT_PER_MINUTE),
+                    "X-RateLimit-Limit": str(self.rate_limit_per_minute),
                     "X-RateLimit-Remaining": "0",
                     "X-RateLimit-Reset": str(int(time.time()) + retry_after),
                 },
@@ -111,7 +120,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
         response: Response = await call_next(request)
         remaining = int(bucket.tokens)
-        response.headers["X-RateLimit-Limit"] = str(_RATE_LIMIT_PER_MINUTE)
+        response.headers["X-RateLimit-Limit"] = str(self.rate_limit_per_minute)
         response.headers["X-RateLimit-Remaining"] = str(max(0, remaining))
         response.headers["X-RateLimit-Reset"] = str(int(time.time()) + 60)
         return response
