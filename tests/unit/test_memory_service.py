@@ -38,6 +38,7 @@ def make_append(
     source_timestamp: str = "2026-05-04T10:00:03Z",
     round_index: int | None = None,
     metadata: dict | None = None,
+    namespace: str = "thinkback",
 ) -> AppendMemoryRequest:
     payload = {
         "request_id": f"req-{round_id}",
@@ -61,6 +62,7 @@ def make_append(
         "source_timestamp": source_timestamp,
         "round_index": round_index,
         "metadata": metadata or {},
+        "namespace": namespace,
     }
     return AppendMemoryRequest(**payload)
 
