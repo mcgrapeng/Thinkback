@@ -8,9 +8,11 @@ PG / Milvus / LLM。判定口径：响应状态码与结构符合 OpenAPI schema
 from __future__ import annotations
 
 import schemathesis
+from fastapi import FastAPI
 from hypothesis import HealthCheck, settings
 from schemathesis.config import (
     ChecksConfig,
+    NotAServerErrorConfig,
     PositiveDataAcceptanceConfig,
     ProjectConfig,
     ProjectsConfig,
@@ -23,11 +25,12 @@ from schemathesis.config._checks import (  # noqa: PLC2701 — 未公开导出�
 
 from thinkback.api import dependencies as dependencies_module
 from thinkback.api.app import create_app
+from thinkback.api.ratelimit import RateLimitMiddleware
 from thinkback.memory.backends import FakeMemoryBackend
 from thinkback.memory.repositories import InMemoryMemoryRepository
 from thinkback.memory.service import MemoryService
 
-# 三类已知豁免（弱区留痕，见 docs/report/testing-toolchain-audit.md）：
+# 四类已知豁免（弱区留痕，见 docs/report/testing-toolchain-audit.md）：
 # - allow_header_conformance：FastAPI 按 method 拆分路由，405 的 Allow 只含
 #   命中路由的方法集，Starlette 固有语义。
 # - positive_data_acceptance 放行 422：跨字段业务规则无法用 OpenAPI 表达
@@ -36,12 +39,18 @@ from thinkback.memory.service import MemoryService
 #   （minLength 等），确实不可表达再放宽。
 # - negative_data_rejection 关闭：pydantic 默认宽松 coercion（字符串数字/
 #   布尔被接受）是全模型约定，收紧为 strict 属 API 策略变更，列为 backlog。
+# - not_a_server_error 放行 503：503 是**契约内**的合法答案（限流过载 /
+#   管理面未配置 / 依赖未就绪），不是"服务炸了"。放行的只是这个检查，
+#   503 仍必须写进 OpenAPI——status_code_conformance 照查，契约不许撒谎。
 fuzz_config = SchemathesisConfig(
     projects=ProjectsConfig(
         default=ProjectConfig(
             checks=ChecksConfig(
                 allow_header_conformance=SimpleCheckConfig(enabled=False),
                 negative_data_rejection=NegativeDataRejectionConfig(enabled=False),
+                not_a_server_error=NotAServerErrorConfig(
+                    expected_statuses=["2xx", "3xx", "4xx", 503]
+                ),
                 positive_data_acceptance=PositiveDataAcceptanceConfig(
                     expected_statuses=["2xx", "3xx", 401, 403, 404, 409, 422, 429, "5xx"]
                 ),
@@ -50,9 +59,26 @@ fuzz_config = SchemathesisConfig(
     ),
 )
 
+
+def _build_fuzz_app() -> FastAPI:
+    """构造 fuzz 专用 app：摘掉限流中间件，其余中间件（幂等 / 错误标准化）保持原样。
+
+    隔离限流的原因：fuzz 的几十个用例共享同一个客户端 IP（testclient），
+    突发配额（600/分钟、突发 50）会在用例之间被耗尽，后面的用例拿到 429。
+    429 是真实存在的错误面（已写进 OpenAPI），但它由**限流**产生，与
+    **契约符合性**无关：这条用例要回答的是"schema 与实现是否一致"。
+    限流本身由 tests/unit/test_idempotency.py 等单测覆盖。
+    """
+
+    app = create_app()
+    app.user_middleware = [m for m in app.user_middleware if m.cls is not RateLimitMiddleware]
+    return app
+
+
 # schema 加载会经 TestClient 走一遍 lifespan（结束时 reset 单例）；
 # 加载完成后注入假服务，之后 fuzz 请求全部落在 in-memory 实现上。
-schema = schemathesis.openapi.from_asgi("/openapi.json", app=create_app(), config=fuzz_config)
+app = _build_fuzz_app()
+schema = schemathesis.openapi.from_asgi("/openapi.json", app=app, config=fuzz_config)
 
 dependencies_module._memory_service = MemoryService(
     repository=InMemoryMemoryRepository(),

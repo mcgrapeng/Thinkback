@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 from time import perf_counter, time
 
 from fastapi import FastAPI, Request, Response
+from fastapi.routing import APIRoute
 from loguru import logger
 
 from thinkback.api.health import router as health_router
@@ -193,6 +194,22 @@ def _register_request_middleware(app: FastAPI) -> None:
             clear_trace_id()
 
 
+def _declare_readiness_overload_response(app: FastAPI) -> None:
+    """把 ``/health/ready`` 的 503（依赖未就绪）写进 OpenAPI 契约。
+
+    就绪探针在数据库 / Milvus / Mem0 任一不可用时返回 503 让上游摘流——
+    这是**契约内的合法答案**。不写进 schema 的话，schemathesis 的
+    status_code_conformance 会判成"未声明状态码"（契约比实现窄）。
+    """
+
+    for route in app.routes:
+        if isinstance(route, APIRoute) and route.path == "/health/ready":
+            route.responses = {
+                **route.responses,
+                503: {"description": "依赖未就绪（数据库 / Milvus / Mem0 任一不可用），上游应摘流"},
+            }
+
+
 def create_app() -> FastAPI:
     """创建并配置 FastAPI 应用实例。
 
@@ -240,6 +257,7 @@ def create_app() -> FastAPI:
     app.add_middleware(RateLimitMiddleware)
 
     app.include_router(health_router)
+    _declare_readiness_overload_response(app)
     app.include_router(memory_router)
 
     # 治理台 M1：只读聚合端点（Bearer 可选鉴权），见 docs/管理后台设计方案。

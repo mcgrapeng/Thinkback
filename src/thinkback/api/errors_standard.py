@@ -41,13 +41,21 @@ class ErrorCode:
     OVERLOAD = "TB-2003"
 
 
-# 各业务 router 共用的错误响应文档。声明实际会返回的 4xx 状态码，
+# 各业务 router 共用的错误响应文档。声明实际会返回的 4xx/5xx 状态码，
 # OpenAPI 契约必须如实反映错误面（schemathesis 契约 fuzz 的
 # status_code_conformance 检查据此判定"未声明状态码"）。
+#
+# - 429：限流中间件按客户端 IP 限流（当前覆盖 /memory/* 业务面）。
+# - 503：服务过载（/memory/* 读写线程池排队超时）、管理面未配置
+#   （ADMIN_TOKEN 缺失）、依赖未就绪（/health/ready 探针）。
+# 业务 router 统一继承这份声明：多声明一个用不到的状态码只是契约变宽，
+# 少声明一个真实会返回的状态码则让契约 fuzz 直接报"未声明状态码"。
 COMMON_ERROR_RESPONSES: dict[int | str, dict[str, str]] = {
     400: {"description": "请求业务规则校验失败"},
     404: {"description": "资源不存在"},
     409: {"description": "幂等冲突或状态冲突"},
+    429: {"description": "请求频率超限，已被限流"},
+    503: {"description": "服务过载、依赖未就绪或管理面未配置"},
 }
 
 
