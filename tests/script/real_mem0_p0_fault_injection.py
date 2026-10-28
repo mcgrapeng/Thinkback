@@ -71,6 +71,10 @@ def build_library_fault_scenario_specs(closed_port: int | None = None) -> list[F
             name="postgres_unavailable",
             expected_dependency="database",
             env_overrides={
+                # 必须打 DATABASE_URL：配置里 DATABASE_URL 存在时它优先于
+                # POSTGRES_HOST/PORT，只改后者等于没注入（实测 readiness 仍
+                # 报 database ready，注入形同虚设）。
+                "DATABASE_URL": f"postgres://postgres:postgres@127.0.0.1:{blocked_port}/thinkback",
                 "POSTGRES_HOST": "127.0.0.1",
                 "POSTGRES_PORT": blocked_port,
             },
@@ -250,10 +254,11 @@ def _start_api_process(
     env_overrides: dict[str, str],
     log_path: Path,
 ) -> subprocess.Popen[str]:
-    env = os.environ.copy()
-    env.update(
-        {key: str(value) for key, value in dotenv_values(".env").items() if value is not None}
-    )
+    # 优先级：.env 打底 → 调用方环境覆盖 → 场景注入覆盖。
+    # .env 是本地配置且可能过期（例如 Milvus 换了端口），直接用它盖掉调用方
+    # 的环境会让脚本「配好了却连不上」，而且没有任何提示。
+    env = {key: str(value) for key, value in dotenv_values(".env").items() if value is not None}
+    env.update(os.environ)
     env.update(env_overrides)
     env["PYTHONPATH"] = "src"
     command = [

@@ -22,6 +22,10 @@ def extract_current_nickname(memory_text: str) -> str | None:
         r"\baddressed\s+as\s+'?([一-鿿A-Za-z0-9_-]{2,24})'?",
         r"(?:改成|改为|更正为|纠正为)\s*([一-鿿A-Za-z0-9_-]{2,24})",
         r"(?:叫我|称呼我)\s*([一-鿿A-Za-z0-9_-]{2,24})",
+        # 第三人称偏好措辞：模型抽出的中文往往是「用户喜欢别人叫他X」
+        # （而不是「叫我X」）。这类文本不识别成昵称槽位，纠正后旧昵称就
+        # 不会被 supersede，旧值继续留在画像里被召回。
+        r"(?:喜欢|希望|习惯|想要)?别人(?:喜欢|希望)?(?:叫我|叫他|叫她|称呼)\s*([一-鿿A-Za-z0-9_-]{2,24})",
         r"\b(?:user|they|them|me|my|their|i)\s+(?:should\s+)?(?:be\s+)?called\s+'?([一-鿿A-Za-z0-9_-]{2,24})'?",
         r"\b(?:call|called)\s+(?:me|the user|them)\s+'?([一-鿿A-Za-z0-9_-]{2,24})'?",
     )
@@ -44,6 +48,8 @@ def extract_current_nickname(memory_text: str) -> str | None:
         "addressed as",
         "叫我",
         "称呼",
+        # 第三人称偏好措辞（见 patterns 里的同款说明）。
+        "别人叫",
     )
     if not any(marker in lowered for marker in slot_markers):
         return None
@@ -157,6 +163,11 @@ def extract_current_work_status(memory_text: str) -> str | None:
         r"\baccepted\s+(.+?offer.+?)(?:[.;。]|$)",
         r"\bis\s+(.+?job opportunities)(?:[.;。]|$)",
         r"(?:工作状态|现在)\s*(?:是|为)?\s*([^。,.，]+)",
+        # 中文工作状态写法：模型抽出来的是「已经接受 X 的 offer，不再评估其它
+        # 工作机会」。不认这类措辞，这条记忆就拿不到 current_work_status 槽位，
+        # 与源规范化出的那条同槽位记忆变成两条并存的事实。
+        r"(?:已经|已|正式)?接受(?:了)?\s*([^。,.，]+?offer[^。,.，]*)",
+        r"(?:不再|停止|不用)评估(?:其它|其他)?(?:工作)?机会",
     )
     for pattern in patterns:
         matches = re.findall(pattern, normalized, flags=re.IGNORECASE)
@@ -219,6 +230,10 @@ def extract_communication_preference(memory_text: str) -> str | None:
         r"\bcommunication preference:\s*(.+?)(?:[.;。]|$)",
         r"(?:沟通偏好).*?(?:现在)?(?:更)?(?:想要|希望|要|偏好|喜欢)\s*([^。,.，]+?)(?:，?不需要|，?不要|，?不想|[。,.，]|$)",
         r"(?:沟通偏好|希望你|想要你)\s*([^。,.，]+)",
+        # 中文偏好写法：模型抽出来的是「希望得到简洁直接的建议，不需要先安慰」
+        # 这类句式。只认「沟通偏好」开头的写法时，这条记忆拿不到
+        # communication_preference 槽位，与源规范化出的那条同槽位记忆并存。
+        r"(?:希望|想要|更想要|更喜欢|希望被)(?:得到|被)?\s*([^。,.，]+?)(?:，?不需要|，?不要|，?不想|[。,.，]|$)",
     )
     for pattern in patterns:
         matches = re.findall(pattern, normalized, flags=re.IGNORECASE)

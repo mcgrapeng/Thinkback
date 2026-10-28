@@ -911,6 +911,7 @@ L2 更新 (缓存失效)
             memory_scope_id=l3_scope_id,
             source_refs=[{"session_id": request.session_id, "round_id": request.round_id}],
             request_metadata=request.metadata,
+            source_timestamp=request.source_timestamp,
         )
         return pending_backend_writes
 
@@ -4505,11 +4506,17 @@ L2 更新 (缓存失效)
         memory_scope_id: str,
         source_refs: list[dict[str, str]],
         request_metadata: dict[str, Any],
+        source_timestamp: datetime | None = None,
     ) -> list[Any]:
         """从原始回合中补齐 P0 关键槽位，降低后端抽取遗漏造成的召回风险。
 
         返回值：锁外待执行的 backend 写回调（_BackendDeleteSync 列表）。
         由调用方在持锁路径外通过 ``_run_backend_writes`` 执行。
+
+        ``source_timestamp`` 必须带上：冲突仲裁的来源游标按「时间戳来源」
+        分档（调用方给的 4 档 / 库里读出的 3 档），不带就只能退到 round_id
+        数字（1 档），于是这条源规范化记忆在任何 mem0 抽取记忆面前都算
+        「更旧」而被跳过 —— 用户纠正偏好后，新值反而进不了索引。
         """
 
         backfill_log = logger.bind(
@@ -4520,9 +4527,12 @@ L2 更新 (缓存失效)
             metadata_keys=self._metadata_key_summary(request_metadata),
         )
         backfill_log.info("memory p0 slot backfill started")
+        effective_metadata = dict(request_metadata)
+        if source_timestamp is not None:
+            effective_metadata["source_timestamp"] = source_timestamp.isoformat()
         l3_metadata = self._l3_metadata(
             source_refs,
-            {**request_metadata, "source_text": source_text},
+            {**effective_metadata, "source_text": source_text},
         )
         indexed_count = 0
         skipped_count = 0
