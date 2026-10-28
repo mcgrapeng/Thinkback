@@ -11,7 +11,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from thinkback.domain.enums import (
@@ -42,6 +42,9 @@ class JournalEntry:
       round_fingerprint: 消息内容的摘要指纹，用于冲突检测
       round_state: 状态机 [active|pending_append|deleted_tombstone]
       round_index: 可选的序号，用于排序或版本化
+      namespace: 该轮写入的长期记忆作用域（append 幂等的组成部分）
+      request_metadata: 该轮的生效请求元数据（记忆类型/分类等策略），
+        rebuild 回放时按它还原原始类型策略，而不是退回默认 profile
     """
 
     journal_id: str
@@ -54,6 +57,8 @@ class JournalEntry:
     round_fingerprint: str
     round_index: int | None = None
     round_state: str = "active"
+    namespace: str = "thinkback"
+    request_metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -114,6 +119,9 @@ class MemoryIndexEntry:
       memory_type: 记忆分类 [profile|preference|event|...]
       backend_categories: 后端自定义分类标签列表
       metadata: 任意附加元数据（不含密钥）
+      expires_at: TTL 到期时刻（None = 永不过期）
+      recorded_at: 本地记录该事实的时刻（与 valid_at 区分：
+        「事实何时为真」vs「我们何时记下」）
     """
 
     memory_id: str
@@ -134,6 +142,25 @@ class MemoryIndexEntry:
     # P2#7 遗忘信号：最近召回时刻与累计召回次数（None=从未被召回过）。
     last_recalled_at: datetime | None = None
     recall_count: int = 0
+    # TTL 到期时刻（None = 永不过期）。后端 Mem0 会隐藏过期记忆，本地索引
+    # 必须记同一份到期时间，否则过期事实会从本地召回/列表回流。
+    expires_at: datetime | None = None
+    # 记录时刻（本地索引写入这条事实的时刻）。
+    recorded_at: datetime | None = None
+
+
+def memory_is_expired(entry: Any, *, now: datetime | None = None) -> bool:
+    """本地索引行的 TTL 判定：``expires_at`` 非空且已到期。
+
+    naive 时间按 UTC 处理（asyncpg/SQLite 可能丢掉 tzinfo）。
+    """
+    expires_at = getattr(entry, "expires_at", None)
+    if expires_at is None:
+        return False
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=UTC)
+    deadline = now or datetime.now(UTC)
+    return bool(expires_at <= deadline)
 
 
 @dataclass

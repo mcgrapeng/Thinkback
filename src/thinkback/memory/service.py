@@ -20,6 +20,7 @@ from typing import Any, Literal
 from loguru import logger
 
 from thinkback.domain.classification import assert_storable, resolve_classification
+from thinkback.domain.entities import memory_is_expired
 from thinkback.domain.errors import TaskLockExhaustedError, TaskStaleWriteError
 from thinkback.domain.memory_types import MemoryTypeRegistry, MemoryTypeSpec, default_registry
 from thinkback.domain.ports import HistorySource, MemoryBackend, MemoryRepository
@@ -501,6 +502,9 @@ L2 更新 (缓存失效)
             effective_metadata["data_classification"] = type_spec.classification
         # 存库的类型名以注册表为准，避免「配置说是 state、存下来是 profile」。
         effective_metadata["memory_type"] = type_spec.name
+        # 来源时间进生效元数据：事实新旧按它判定（round_id 的字典序与新旧
+        # 无关），rebuild 回放也按它还原。
+        effective_metadata["source_timestamp"] = request.source_timestamp.isoformat()
         # 分类准入在最前面：SENSITIVE / RESTRICTED 连 L1 journal 都不落，
         # 也不会进入后续 LLM / embedding / Mem0 调用。
         assert_storable(resolve_classification(effective_metadata))
@@ -631,7 +635,9 @@ L2 更新 (缓存失效)
                     memory_scope_id=l3_scope_id,
                     source_refs=[{"session_id": request.session_id, "round_id": request.round_id}],
                 )
-            entry = existing or self.repository.save_round(request)
+            entry = existing or self.repository.save_round(
+                request, request_metadata=effective_metadata
+            )
             entry.memory_scope_id = session_scope_id
             if restricted_or_unsafe:
                 # 命中 write-gate：这轮**不写长期记忆**（L2/L3 都不写），
@@ -1696,6 +1702,9 @@ L2 更新 (缓存失效)
             indexed_memory = active_memory_by_backend_id.get(memory_id)
             if indexed_memory is None:
                 continue
+            # 过期事实不进上下文：后端会隐藏它，本地索引也必须挡住它。
+            if memory_is_expired(indexed_memory):
+                continue
             # P2#6 双时态兜底：失效时刻已定的记忆不再进入召回
             # （状态过滤之外的第二道闸，覆盖多副本竞争/遗留行）。
             if getattr(indexed_memory, "invalid_at", None) is not None:
@@ -2411,6 +2420,8 @@ L2 更新 (缓存失效)
                 self._managed_memory_item(memory)
                 for memory in memories
                 if self._is_manageable_memory(memory)
+                # 过期事实不再出现在列表里（后端已隐藏它，本地保持一致）。
+                and not memory_is_expired(memory)
             ],
         )
 
@@ -2683,6 +2694,20 @@ L2 更新 (缓存失效)
             summary_state=SummaryState.DIRTY,
         )
 
+    @staticmethod
+    def _replay_metadata(entry: JournalEntry) -> dict[str, Any]:
+        """rebuild 回放时该轮生效的请求元数据。
+
+        外部历史没有本地请求元数据时退回 profile 语义，但来源时间始终带上：
+        事实新旧按来源时间判定。
+        """
+        metadata = dict(entry.request_metadata or {})
+        metadata.setdefault("memory_type", MemoryType.PROFILE.value)
+        timestamp = getattr(entry, "source_timestamp", None)
+        if isinstance(timestamp, datetime):
+            metadata.setdefault("source_timestamp", timestamp.isoformat())
+        return metadata
+
     def _validate_local_p0_memory_update(self, memory: Any, content: str) -> None:
         backend_memory_id = str(getattr(memory, "backend_memory_id", ""))
         if not backend_memory_id.startswith("local-p0:"):
@@ -2853,6 +2878,9 @@ L2 更新 (缓存失效)
                     if self._messages_are_restricted_or_unsafe(messages):
                         continue
                     source_refs = [{"session_id": entry.session_id, "round_id": entry.round_id}]
+                    # 回放沿用该轮的生效类型策略（记忆类型/分类/TTL）：否则
+                    # rebuild 出来的全是默认 profile，state/event 的保留期也没了。
+                    replay_metadata = self._replay_metadata(entry)
                     if self.l3_write_mode == "async":
                         extract_task, should_submit = self._ensure_l3_extract_task(
                             request_id=self._bounded_internal_request_id(
@@ -2872,7 +2900,7 @@ L2 更新 (缓存失效)
                             user_id=request.user_id,
                             memory_scope_id=l3_scope_id,
                             source_refs=source_refs,
-                            request_metadata={},
+                            request_metadata=replay_metadata,
                         )
                         continue
                     self._run_l3_write(
@@ -2880,7 +2908,7 @@ L2 更新 (缓存失效)
                         user_id=request.user_id,
                         memory_scope_id=l3_scope_id,
                         source_refs=source_refs,
-                        request_metadata={},
+                        request_metadata=replay_metadata,
                     )
         except Exception as exc:
             captured_exc = exc
@@ -3975,6 +4003,9 @@ L2 更新 (缓存失效)
                 continue
             if getattr(memory, "invalid_at", None) is not None:
                 continue
+            # 过期事实不得从本地精确回填回流（后端已经隐藏它）。
+            if memory_is_expired(memory):
+                continue
             if not self._memory_context_allowed(memory, query):
                 continue
             if self._memory_conflict_slot(memory.memory_text) != query_slot:
@@ -4380,6 +4411,47 @@ L2 更新 (缓存失效)
             )
         self._run_backend_writes(pending_backend_writes, index_log=index_log)
 
+    def _index_lifecycle(
+        self, l3_metadata: dict[str, Any], memory_scope_id: str
+    ) -> tuple[datetime | None, datetime | None, datetime | None]:
+        """索引行的时间三元组：``(valid_at, expires_at, recorded_at)``。
+
+        - ``valid_at``：事实的**来源时间**（不是写入时刻）——「事实何时为真」；
+        - ``expires_at``：按记忆类型 TTL 算出的到期时刻（None = 永不过期）；
+        - ``recorded_at``：本地写下这条事实的时刻——「我们何时记下」。
+
+        后端 Mem0 会隐藏过期记忆，本地索引必须记同一份到期时间，否则过期
+        事实会从本地召回/列表回流。
+        """
+        recorded_at = datetime.now(UTC)
+        valid_at = self._parse_source_timestamp(l3_metadata.get("source_timestamp"))
+        expires_at: datetime | None = None
+        try:
+            spec = self._type_spec_from_metadata(l3_metadata, memory_scope_id)
+        except (KeyError, ValueError):
+            spec = None
+        if spec is not None:
+            expiration = self._expiration_date(spec)
+            if expiration:
+                # Mem0 的 expiration_date 是「这天之后失效」：按当天结束计。
+                expires_at = datetime.fromisoformat(expiration).replace(tzinfo=UTC) + timedelta(
+                    hours=23, minutes=59, seconds=59, microseconds=999999
+                )
+        return valid_at, expires_at, recorded_at
+
+    @staticmethod
+    def _parse_source_timestamp(value: Any) -> datetime | None:
+        """解析 ISO 来源时间；naive 按 UTC 处理。"""
+        if isinstance(value, datetime):
+            return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+        if not isinstance(value, str) or not value:
+            return None
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
+
     def _index_l3_event_locked(
         self,
         *,
@@ -4516,6 +4588,7 @@ L2 更新 (缓存失效)
         if not is_p0_supported:
             index_log.bind(reason="unsupported_by_source").info("memory l3 event indexing skipped")
             return pending_backend_writes
+        valid_at, expires_at, recorded_at = self._index_lifecycle(l3_metadata, memory_scope_id)
         if existing:
             self.repository.update_memory_index(
                 existing.memory_id,
@@ -4526,6 +4599,9 @@ L2 更新 (缓存失效)
                 memory_type=str(l3_metadata["memory_type"]),
                 backend_categories=backend_categories,
                 metadata=index_metadata,
+                valid_at=valid_at,
+                expires_at=expires_at,
+                recorded_at=recorded_at,
             )
             # 回写后端只在 canonical 无损时进行：原文命中多个 P0 槽位时
             # canonical 是有损折叠（生日/宠物被丢掉），回写会永久截断事实。
@@ -4558,6 +4634,9 @@ L2 更新 (缓存失效)
                         "p0_source_backfill": True,
                         "backend_materialized": True,
                     },
+                    valid_at=valid_at,
+                    expires_at=expires_at,
+                    recorded_at=recorded_at,
                 )
                 # 回写后端只在 canonical 无损时进行：原文命中多个 P0 槽位时
                 # canonical 是有损折叠（生日/宠物被丢掉），回写会永久截断事实。
@@ -4600,6 +4679,9 @@ L2 更新 (缓存失效)
             memory_type=str(l3_metadata["memory_type"]),
             backend_categories=backend_categories,
             metadata=index_metadata,
+            valid_at=valid_at,
+            expires_at=expires_at,
+            recorded_at=recorded_at,
         )
         # 回写后端只在 canonical 无损时进行：原文命中多个 P0 槽位时
         # canonical 是有损折叠（生日/宠物被丢掉），回写会永久截断事实。
@@ -4881,6 +4963,10 @@ L2 更新 (缓存失效)
         backend_categories = self._list_metadata_value(request_metadata.get("backend_categories"))
         if backend_categories:
             metadata["backend_categories"] = backend_categories
+        source_timestamp = request_metadata.get("source_timestamp")
+        if source_timestamp:
+            # 来源时间随事件一起落库：事实新旧按它判定，不靠 round_id 猜。
+            metadata["source_timestamp"] = source_timestamp
         if request_metadata.get("source_text"):
             metadata["source_text"] = str(request_metadata["source_text"])
         return metadata
@@ -4980,6 +5066,10 @@ L2 更新 (缓存失效)
     def _assert_round_matches_request(
         self, existing: JournalEntry, request: AppendMemoryRequest
     ) -> None:
+        if existing.namespace != request.namespace:
+            # 同一 round_id 在另一个 namespace 是另一次写入：显式冲突，
+            # 不能静默当成已写过的同一轮（那样第二个 namespace 会丢写）。
+            raise ValueError("round_id conflict: existing round belongs to a different namespace")
         if (
             existing.user_id != request.user_id
             or existing.memory_scope_id != self._session_scope_id(request)

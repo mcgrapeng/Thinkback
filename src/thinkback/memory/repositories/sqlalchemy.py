@@ -227,11 +227,16 @@ class SqlAlchemyMemoryRepository(L1CacheMixin):
             )
             return self._journal_from_record(record) if record else None
 
-    def save_round(self, request: AppendMemoryRequest) -> JournalEntry:
-        return self._run(self._save_round(request))
+    def save_round(
+        self, request: AppendMemoryRequest, *, request_metadata: dict[str, Any] | None = None
+    ) -> JournalEntry:
+        return self._run(self._save_round(request, request_metadata=request_metadata))
 
     @staticmethod
-    def _journal_entry_from_append_request(request: AppendMemoryRequest) -> JournalEntry:
+    def _journal_entry_from_append_request(
+        request: AppendMemoryRequest,
+        request_metadata: dict[str, Any] | None = None,
+    ) -> JournalEntry:
         messages = [
             {
                 "message_id": message.message_id,
@@ -251,6 +256,8 @@ class SqlAlchemyMemoryRepository(L1CacheMixin):
             messages=messages,
             source_timestamp=request.source_timestamp,
             round_fingerprint=request_fingerprint(request),
+            namespace=request.namespace,
+            request_metadata=dict(request_metadata or {}),
         )
 
     @staticmethod
@@ -266,10 +273,14 @@ class SqlAlchemyMemoryRepository(L1CacheMixin):
             messages=entry.messages,
             source_timestamp=entry.source_timestamp,
             round_state=entry.round_state,
+            namespace=entry.namespace,
+            request_metadata=dict(entry.request_metadata or {}),
         )
 
-    async def _save_round(self, request: AppendMemoryRequest) -> JournalEntry:
-        entry = self._journal_entry_from_append_request(request)
+    async def _save_round(
+        self, request: AppendMemoryRequest, *, request_metadata: dict[str, Any] | None = None
+    ) -> JournalEntry:
+        entry = self._journal_entry_from_append_request(request, request_metadata)
         async with self.session_factory() as session:
             existing = await session.scalar(
                 select(SummaryRoundJournalRecord).where(
@@ -662,6 +673,8 @@ class SqlAlchemyMemoryRepository(L1CacheMixin):
         backend_categories: list[str] | None = None,
         metadata: dict[str, Any] | None = None,
         valid_at: datetime | None = None,
+        expires_at: datetime | None = None,
+        recorded_at: datetime | None = None,
     ) -> MemoryIndexEntry:
         return self._run(
             self._add_memory_index(
@@ -676,6 +689,8 @@ class SqlAlchemyMemoryRepository(L1CacheMixin):
                 backend_categories=backend_categories,
                 metadata=metadata,
                 valid_at=valid_at,
+                expires_at=expires_at,
+                recorded_at=recorded_at,
             )
         )
 
@@ -693,6 +708,8 @@ class SqlAlchemyMemoryRepository(L1CacheMixin):
         backend_categories: list[str] | None = None,
         metadata: dict[str, Any] | None = None,
         valid_at: datetime | None = None,
+        expires_at: datetime | None = None,
+        recorded_at: datetime | None = None,
     ) -> MemoryIndexEntry:
         async with self.session_factory() as session:
             existing = await session.scalar(
@@ -713,6 +730,12 @@ class SqlAlchemyMemoryRepository(L1CacheMixin):
                 existing.memory_type = memory_type
                 existing.backend_categories = list(backend_categories or [])
                 existing.memory_metadata = dict(metadata or {})
+                if valid_at is not None:
+                    existing.valid_at = valid_at
+                if expires_at is not None:
+                    existing.expires_at = expires_at
+                if recorded_at is not None:
+                    existing.recorded_at = recorded_at
                 await session.commit()
                 await session.refresh(existing)
                 logger.bind(
@@ -725,6 +748,9 @@ class SqlAlchemyMemoryRepository(L1CacheMixin):
                 return self._memory_from_record(existing)
             # P2#6：未显式给定时以写入时刻为事实生效时刻
             effective_valid_at = valid_at or datetime.now(UTC)
+            # TTL 与记录时刻：后端会隐藏过期记忆，本地索引必须记同一份到期
+            # 时间，否则过期事实会从本地召回/列表回流。
+            effective_recorded_at = recorded_at or datetime.now(UTC)
             entry = MemoryIndexEntry(
                 memory_id=f"memory-{uuid4()}",
                 backend_memory_id=backend_memory_id,
@@ -738,6 +764,8 @@ class SqlAlchemyMemoryRepository(L1CacheMixin):
                 backend_categories=list(backend_categories or []),
                 metadata=dict(metadata or {}),
                 valid_at=effective_valid_at,
+                expires_at=expires_at,
+                recorded_at=effective_recorded_at,
             )
             session.add(
                 MemoryRecord(
@@ -754,6 +782,8 @@ class SqlAlchemyMemoryRepository(L1CacheMixin):
                     backend_categories=entry.backend_categories,
                     memory_metadata=entry.metadata,
                     valid_at=effective_valid_at,
+                    expires_at=entry.expires_at,
+                    recorded_at=entry.recorded_at,
                 )
             )
             try:
@@ -871,6 +901,8 @@ class SqlAlchemyMemoryRepository(L1CacheMixin):
         backend_categories: list[str] | None = None,
         metadata: dict[str, Any] | None = None,
         valid_at: datetime | None = None,
+        expires_at: datetime | None = None,
+        recorded_at: datetime | None = None,
     ) -> MemoryIndexEntry | None:
         return self._run(
             self._update_memory_index(
@@ -884,6 +916,8 @@ class SqlAlchemyMemoryRepository(L1CacheMixin):
                 backend_categories=backend_categories,
                 metadata=metadata,
                 valid_at=valid_at,
+                expires_at=expires_at,
+                recorded_at=recorded_at,
             )
         )
 
@@ -900,6 +934,8 @@ class SqlAlchemyMemoryRepository(L1CacheMixin):
         backend_categories: list[str] | None = None,
         metadata: dict[str, Any] | None = None,
         valid_at: datetime | None = None,
+        expires_at: datetime | None = None,
+        recorded_at: datetime | None = None,
     ) -> MemoryIndexEntry | None:
         async with self.session_factory() as session:
             record = await session.get(MemoryRecord, memory_id)
@@ -916,6 +952,10 @@ class SqlAlchemyMemoryRepository(L1CacheMixin):
             record.memory_metadata = dict(metadata or {})
             if valid_at is not None:
                 record.valid_at = valid_at
+            if expires_at is not None:
+                record.expires_at = expires_at
+            if recorded_at is not None:
+                record.recorded_at = recorded_at
             await session.commit()
             await session.refresh(record)
             return self._memory_from_record(record)
@@ -1567,6 +1607,8 @@ class SqlAlchemyMemoryRepository(L1CacheMixin):
             source_timestamp=record.source_timestamp,
             round_fingerprint=record.round_fingerprint,
             round_state=record.round_state,
+            namespace=getattr(record, "namespace", None) or "thinkback",
+            request_metadata=dict(getattr(record, "request_metadata", None) or {}),
         )
 
     @staticmethod
@@ -1604,6 +1646,8 @@ class SqlAlchemyMemoryRepository(L1CacheMixin):
             invalid_at=getattr(record, "invalid_at", None),
             last_recalled_at=getattr(record, "last_recalled_at", None),
             recall_count=int(getattr(record, "recall_count", 0) or 0),
+            expires_at=getattr(record, "expires_at", None),
+            recorded_at=getattr(record, "recorded_at", None),
         )
 
     @staticmethod
