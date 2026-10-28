@@ -1,28 +1,65 @@
 """记忆类型注册表：配置驱动「写什么、谁能写、留多久、怎么召回」。
 
-为什么需要它：固定槽位（昵称/宠物/地点/生日…）把「记忆类型」写死在代码里，
+为什么需要它：固定槽位（昵称/宠物名/地点/生日…）把「记忆类型」写死在代码里，
 换个垂类（如半导体：工艺节点、良率、设备、客户）就要改 Python。注册表把类型
 定义移到配置，代码只保留通用机制。
 
 边界（引擎优先原则）：
 - 抽取、检索、去重、过期都由 Mem0 负责，注册表不重复实现；
 - 注册表只决定「准入与策略」，不自己写行业正则或词表匹配逻辑。
+
+配置是**严格校验**的：未知字段、缺失必填项、非法取值一律拒绝生效，
+不静默回落默认值（ADR-0004 / D29）。写错字段名而静默忽略是最难查的一类
+配置问题，所以这里选择 fail-visible。
 """
 
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping
+import re
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any, Literal
+from typing import Literal
 
 from thinkback.domain.enums import DataClassification
 
 Extractor = Literal["mem0", "profile", "none"]
 Conflict = Literal["overwrite", "append", "none"]
 Retention = Literal["forever", "ttl"]
+RecallPath = Literal["fact", "instruction", "schedule"]
+
+#: 类型定义里允许出现的字段。出现其它字段一律拒绝（不静默忽略）。
+_TYPE_FIELDS = frozenset(
+    {
+        "layer",
+        "extractor",
+        "source_roles",
+        "conflict",
+        "retention",
+        "ttl_days",
+        "classification",
+        "review_required",
+        "description",
+        "recall",
+        "extraction_prompt",
+    }
+)
+#: 类型定义里必须出现的字段。缺任何一个都拒绝生效。
+_REQUIRED_TYPE_FIELDS = frozenset(
+    {"extractor", "source_roles", "classification", "conflict", "retention"}
+)
+#: profile 文件顶层允许出现的字段。
+_PROFILE_FIELDS = frozenset({"version", "namespace", "types"})
+_RECALL_FIELDS = frozenset({"path", "budget"})
+_EXTRACTORS = frozenset({"mem0", "profile", "none"})
+_CONFLICTS = frozenset({"overwrite", "append", "none"})
+_RETENTIONS = frozenset({"forever", "ttl"})
+_LAYERS = frozenset({"L1", "L2", "L3"})
+_RECALL_PATHS = frozenset({"fact", "instruction", "schedule"})
+
+_PROMPT_VERSION_PATTERN = re.compile(r"\.v(?P<version>\d+)$")
 
 
 @dataclass(frozen=True)
@@ -38,12 +75,19 @@ class MemoryTypeSpec:
       extractor: 抽取方式。``none`` = 不抽取（策略性条目）；
         其余值都交给 Mem0 抽取（``mem0`` / ``profile`` 目前行为相同）。
       source_roles: 允许作为该类型来源的角色（assistant 默认不在其中：
-        助手的话不是用户事实）。
+        助手的话不是用户事实）。这同时是「这条角色的事件能不能成为
+        该类型的事实」的判定依据。
       conflict: 同槽位新事实是否覆盖旧事实（overwrite / append / none）。
       retention: 保留策略（forever / ttl）。
       ttl_days: TTL 天数（retention=ttl 时生效，由 Mem0 expiration_date 承担）。
       classification: 该类型的敏感级别（语义由 domain/classification.py 统一执行）。
       review_required: 是否需要审批后才能写入。
+      recall_path: 该类型如何进入上下文（fact 进事实池、instruction 进提示词
+        装配、schedule 走独立到期通道）。
+      recall_budget: 该类型的 token 预算上限（None = 不单独限制）。
+      extraction_prompt: 抽取指令文件路径（相对 profile 目录）。
+      extraction_prompt_text: 指令正文（加载后填入）。
+      extraction_prompt_version: 指令版本（从文件名解析，写进记忆记录）。
       description: **仅供人阅读**的类型说明，不参与任何行为。
     """
 
@@ -59,6 +103,11 @@ class MemoryTypeSpec:
     # 分类语义由 domain/classification.py 统一执行，配置不能自造级别。
     classification: str = "personal"
     review_required: bool = False
+    recall_path: RecallPath = "fact"
+    recall_budget: int | None = None
+    extraction_prompt: str = ""
+    extraction_prompt_text: str = ""
+    extraction_prompt_version: str = ""
     # 仅供人阅读的类型说明；不参与抽取、检索或预算计算。
     description: str = ""
 
@@ -74,6 +123,7 @@ class MemoryTypeRegistry:
     """按 namespace 生效的类型集合（不可变）。"""
 
     namespace: str = "thinkback"
+    version: str = "1"
     types: Mapping[str, MemoryTypeSpec] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -103,6 +153,7 @@ def default_registry() -> MemoryTypeRegistry:
     """内置默认注册表：不配置时行为与现在一致。"""
     return MemoryTypeRegistry(
         namespace="thinkback",
+        version="1",
         types={
             "profile": MemoryTypeSpec(
                 name="profile",
@@ -183,30 +234,180 @@ def default_registry() -> MemoryTypeRegistry:
     )
 
 
-def registry_from_dict(payload: dict[str, Any], *, namespace: str) -> MemoryTypeRegistry:
-    """从配置字典构造注册表（未列出的类型不注册 —— 显式优于隐式兜底）。"""
+def _validate_prompt_path(value: str, *, where: str) -> str:
+    """抽取指令路径必须是 profile 目录下的相对路径。
+
+    配置是部署面输入，路径穿越会让服务读到 profile 目录之外的文件。
+    """
+    if not value.strip():
+        raise ValueError(f"{where}: 'extraction_prompt' must not be empty")
+    if value.startswith("/") or ".." in Path(value).parts:
+        raise ValueError(
+            f"{where}: 'extraction_prompt' must be a relative path inside the profile dir"
+        )
+    return value
+
+
+def prompt_version_from_filename(path: str) -> str:
+    """从指令文件名解析版本：``process_preference.v3.md`` → ``v3``。
+
+    没有版本后缀时用文件主干名，保证记忆记录里总有可追溯的版本标识。
+    """
+    stem = Path(path).stem
+    match = _PROMPT_VERSION_PATTERN.search(stem)
+    if match:
+        return f"v{match.group('version')}"
+    return stem
+
+
+def registry_from_dict(
+    payload: object,
+    *,
+    namespace: str,
+    prompt_loader: Callable[[str], str] | None = None,
+) -> MemoryTypeRegistry:
+    """从配置字典构造注册表（未列出的类型不注册 —— 显式优于隐式兜底）。
+
+    严格校验：未知字段、缺失必填项、非法取值一律抛 ``ValueError``，
+    不静默忽略也不回落默认类型。
+    """
+    if not isinstance(payload, dict):
+        raise ValueError(f"memory type profile for namespace {namespace!r} must be an object")
+    unknown_top = sorted(set(payload) - _PROFILE_FIELDS)
+    if unknown_top:
+        raise ValueError(
+            f"memory type profile for namespace {namespace!r} has unknown fields: {unknown_top}"
+        )
     valid_classifications = {member.value for member in DataClassification}
+    raw_types = payload.get("types")
+    if raw_types is None:
+        raw_types = {}
+    if not isinstance(raw_types, dict):
+        raise ValueError(
+            f"memory type profile for namespace {namespace!r}: 'types' must be an object"
+        )
+
     types: dict[str, MemoryTypeSpec] = {}
-    for name, raw in (payload.get("types") or {}).items():
-        classification = str(raw.get("classification", "personal"))
+    for name, raw in raw_types.items():
+        where = f"memory type {name!r}"
+        if not isinstance(raw, dict):
+            raise ValueError(f"{where}: definition must be an object")
+        unknown = sorted(set(raw) - _TYPE_FIELDS)
+        if unknown:
+            raise ValueError(f"{where}: unknown fields: {unknown}")
+        missing = sorted(_REQUIRED_TYPE_FIELDS - set(raw))
+        if missing:
+            raise ValueError(f"{where}: missing required fields: {missing}")
+
+        classification = str(raw["classification"])
         if classification not in valid_classifications:
             raise ValueError(
-                f"memory type {name!r} has unknown classification {classification!r}; "
+                f"{where} has unknown classification {classification!r}; "
                 f"expected one of {sorted(valid_classifications)}"
             )
+        extractor = str(raw["extractor"])
+        if extractor not in _EXTRACTORS:
+            raise ValueError(
+                f"{where} has unknown extractor {extractor!r}; "
+                f"expected one of {sorted(_EXTRACTORS)}"
+            )
+        conflict = str(raw["conflict"])
+        if conflict not in _CONFLICTS:
+            raise ValueError(
+                f"{where} has unknown conflict {conflict!r}; expected one of {sorted(_CONFLICTS)}"
+            )
+        retention = str(raw["retention"])
+        if retention not in _RETENTIONS:
+            raise ValueError(
+                f"{where} has unknown retention {retention!r}; expected one of {sorted(_RETENTIONS)}"
+            )
+        layer = str(raw.get("layer", "L3"))
+        if layer not in _LAYERS:
+            raise ValueError(
+                f"{where} has unknown layer {layer!r}; expected one of {sorted(_LAYERS)}"
+            )
+
+        source_roles = raw["source_roles"]
+        if (
+            not isinstance(source_roles, (list, tuple))
+            or not source_roles
+            or not all(isinstance(role, str) and role.strip() for role in source_roles)
+        ):
+            raise ValueError(f"{where}: 'source_roles' must be a non-empty list of role names")
+
+        review_required = bool(raw.get("review_required", False))
+        if review_required and "user" in source_roles:
+            raise ValueError(
+                f"{where}: 'review_required' types must not accept the 'user' role "
+                "(a reviewed type needs a non-user source)"
+            )
+
+        ttl_days = raw.get("ttl_days")
+        if retention == "ttl":
+            if not isinstance(ttl_days, int) or isinstance(ttl_days, bool) or ttl_days <= 0:
+                raise ValueError(
+                    f"{where}: 'ttl_days' must be a positive integer when retention='ttl'"
+                )
+        elif ttl_days is not None:
+            raise ValueError(f"{where}: 'ttl_days' is only allowed when retention='ttl'")
+
+        recall = raw.get("recall")
+        recall_path: RecallPath = "fact"
+        recall_budget: int | None = None
+        if recall is not None:
+            if not isinstance(recall, dict):
+                raise ValueError(f"{where}: 'recall' must be an object")
+            unknown_recall = sorted(set(recall) - _RECALL_FIELDS)
+            if unknown_recall:
+                raise ValueError(f"{where}: 'recall' has unknown fields: {unknown_recall}")
+            raw_path = str(recall.get("path", "fact"))
+            if raw_path not in _RECALL_PATHS:
+                raise ValueError(
+                    f"{where}: 'recall.path' must be one of {sorted(_RECALL_PATHS)}, got {raw_path!r}"
+                )
+            recall_path = raw_path  # type: ignore[assignment]
+            raw_budget = recall.get("budget")
+            if raw_budget is not None:
+                if (
+                    not isinstance(raw_budget, int)
+                    or isinstance(raw_budget, bool)
+                    or raw_budget <= 0
+                ):
+                    raise ValueError(f"{where}: 'recall.budget' must be a positive integer")
+                recall_budget = raw_budget
+
+        prompt_path = str(raw.get("extraction_prompt", ""))
+        prompt_text = ""
+        prompt_version = ""
+        if prompt_path:
+            _validate_prompt_path(prompt_path, where=where)
+            if prompt_loader is None:
+                raise ValueError(f"{where}: 'extraction_prompt' requires a prompt loader")
+            prompt_text = prompt_loader(prompt_path)
+            prompt_version = prompt_version_from_filename(prompt_path)
+
         types[name] = MemoryTypeSpec(
             name=name,
-            layer=raw.get("layer", "L3"),
-            extractor=raw.get("extractor", "mem0"),
-            source_roles=tuple(raw.get("source_roles", ("user",))),
-            conflict=raw.get("conflict", "overwrite"),
-            retention=raw.get("retention", "forever"),
-            ttl_days=raw.get("ttl_days"),
+            layer=layer,  # type: ignore[arg-type]
+            extractor=extractor,  # type: ignore[arg-type]
+            source_roles=tuple(str(role) for role in source_roles),
+            conflict=conflict,  # type: ignore[arg-type]
+            retention=retention,  # type: ignore[arg-type]
+            ttl_days=ttl_days,
             classification=classification,
-            review_required=bool(raw.get("review_required", False)),
-            description=raw.get("description", ""),
+            review_required=review_required,
+            recall_path=recall_path,
+            recall_budget=recall_budget,
+            extraction_prompt=prompt_path,
+            extraction_prompt_text=prompt_text,
+            extraction_prompt_version=prompt_version,
+            description=str(raw.get("description", "")),
         )
-    return MemoryTypeRegistry(namespace=namespace, types=types)
+    return MemoryTypeRegistry(
+        namespace=namespace,
+        version=str(payload.get("version", "1")),
+        types=types,
+    )
 
 
 def load_registry(profile_dir: Path, namespace: str) -> MemoryTypeRegistry:
@@ -214,12 +415,22 @@ def load_registry(profile_dir: Path, namespace: str) -> MemoryTypeRegistry:
 
     文件约定：``<profile_dir>/<namespace>.json``。文件不存在时回落到默认
     注册表 —— 默认 namespace 就是内置类型集，缺文件是正常的。
+
+    指令文件约定：``<profile_dir>/<extraction_prompt>``（相对路径），
+    例如 ``prompts/semiconductor/process_preference.v1.md``。
     """
     path = profile_dir / f"{namespace}.json"
     if not path.is_file():
         return default_registry()
     payload = json.loads(path.read_text(encoding="utf-8"))
-    return registry_from_dict(payload, namespace=namespace)
+
+    def load_prompt(relative: str) -> str:
+        prompt_path = profile_dir / relative
+        if not prompt_path.is_file():
+            raise ValueError(f"extraction prompt file not found: {prompt_path}")
+        return prompt_path.read_text(encoding="utf-8")
+
+    return registry_from_dict(payload, namespace=namespace, prompt_loader=load_prompt)
 
 
 def has_profile(profile_dir: Path, namespace: str) -> bool:

@@ -31,8 +31,20 @@ def test_profile_defines_namespace_types(tmp_path: Path) -> None:
         tmp_path,
         "semiconductor",
         {
-            "profile": {"extractor": "profile", "source_roles": ["user"]},
-            "process_preference": {"extractor": "mem0", "source_roles": ["user"]},
+            "profile": {
+                "extractor": "profile",
+                "source_roles": ["user"],
+                "conflict": "overwrite",
+                "retention": "forever",
+                "classification": "personal",
+            },
+            "process_preference": {
+                "extractor": "mem0",
+                "source_roles": ["user"],
+                "conflict": "overwrite",
+                "retention": "forever",
+                "classification": "personal",
+            },
         },
     )
     settings = Settings(memory_type_profile_dir=str(tmp_path))
