@@ -10,6 +10,10 @@ enum MessageRole {
   MESSAGE_ROLE_USER = 0;
   MESSAGE_ROLE_ASSISTANT = 1;
   MESSAGE_ROLE_SYSTEM = 2;
+  // 工具结果。v2 的角色集合是 user / assistant / tool / system：工具结果与
+  // 单向事实是企业助手的实际形态。哪类角色能成为某个记忆类型的事实，
+  // 由类型的 source_roles 决定，不在传输层限制。
+  MESSAGE_ROLE_TOOL = 3;
 }
 
 enum MemoryType {
@@ -69,11 +73,6 @@ enum OperationType {
   OPERATION_TYPE_ERASE = 7;
 }
 
-enum RecallIntent {
-  RECALL_INTENT_CHAT = 0;
-  RECALL_INTENT_SENSITIVE = 1;
-}
-
 enum DeleteScope {
   DELETE_SCOPE_MEMORY = 0;
   DELETE_SCOPE_SESSION = 1;
@@ -89,19 +88,34 @@ message MemoryMessage {
   string timestamp = 4;  // ISO 8601
 }
 
-message AppendRequest {
+// ─── v2 写入契约：一次 append 一条原始事件 ─────────────────────────────────
+//
+// 与 HTTP 的 /v2/memory/events 同形（ADR-0008：一次 append 一条事件，事件 ID
+// 同时是幂等锚点）。v1 的 AppendRequest（"一轮多消息"）已撤掉：它与 HTTP 的
+// v2 契约分叉，按 ADR-0011（契约直接替换，不并存）不留兼容形状。
+
+message SourceEvent {
+  string event_id = 1;   // 全局唯一，同时是幂等锚点
+  string source = 2;     // chat_round / tool_result / import …
+  MessageRole role = 3;  // user / assistant / tool / system
+  string payload = 4;    // 事件正文
+  string occurred_at = 5;  // ISO 8601，事件在源头发生的时间
+  optional string subject_ref = 6;  // 缺省即 user_id
+  map<string, string> provenance = 7;  // 来源链路信息
+}
+
+message AppendEventRequest {
   string request_id = 1;
   string user_id = 2;
   string session_id = 3;
-  string round_id = 4;
-  repeated MemoryMessage messages = 5;
-  string source_timestamp = 6;  // ISO 8601
+  SourceEvent event = 4;
+  string namespace = 5;  // 记忆作用域标签；空值按 "thinkback" 处理
+  optional string memory_type = 6;  // 该 namespace 已注册的类型名
   optional int32 round_index = 7;
   map<string, string> metadata = 8;
-  string namespace = 9;  // 记忆作用域标签；空值按 "thinkback" 处理
 }
 
-message AppendResponse {
+message AppendEventResponse {
   string status = 1;
   string task_id = 2;
   string round_id = 3;
@@ -112,7 +126,9 @@ message RecallRequest {
   string user_id = 1;
   string session_id = 2;
   string query = 3;
-  RecallIntent intent = 4;
+  // 字段 4 原为 RecallIntent intent：该轴在域模型里已删除（枚举只剩两个值，
+  // SENSITIVE 无条件报错，是 fail-useless 不是 fail-closed），语义不再分叉。
+  reserved 4;
   int32 l3_limit = 5;
   float l3_score_threshold = 6;
   int32 token_budget = 7;
@@ -290,7 +306,8 @@ message L3BackgroundStatusResponse {
 // ─── Service ──────────────────────────────────────────────────────────────────
 
 service MemoryService {
-  rpc Append(AppendRequest) returns (AppendResponse);
+  // v2 写入契约：一次一条原始事件（与 HTTP /v2/memory/events 同形）。
+  rpc AppendEvent(AppendEventRequest) returns (AppendEventResponse);
   rpc Recall(RecallRequest) returns (RecallResponse);
   rpc Delete(DeleteRequest) returns (DeleteResponse);
   // 逻辑下架：不可召回，保留原文与墓碑。

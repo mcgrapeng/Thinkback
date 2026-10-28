@@ -1,13 +1,16 @@
 {
   "namespace": "semiconductor",
-  "description": "半导体垂类对话助手的记忆语料。四个业务场景（工艺咨询 / 设备选型 / 良率分析 / 客户支持）+ 垂类机制（namespace 隔离、类型准入、保留期、assistant 不成为事实）。",
+  "description": "半导体垂类对话助手的记忆语料。四个业务场景（工艺咨询 / 设备选型 / 良率分析 / 客户支持）+ 垂类机制（namespace 隔离、类型准入、保留期、assistant 不成为事实、改口只记新值、一条消息含多件事实）。",
   "cases": [
     {
       "name": "case_semi_process_node_and_stage",
       "category": "工艺咨询",
       "kind": "recall",
       "query": "用户负责的工艺节点和工序段是什么？",
-      "expected_terms": ["28nm", "CMP"],
+      "expected_terms": [
+        "28nm",
+        "CMP"
+      ],
       "forbidden_terms": [],
       "rounds": [
         {
@@ -21,7 +24,10 @@
       "category": "工艺咨询",
       "kind": "recall",
       "query": "用户产线用的光刻波长和对应工艺节点是什么？",
-      "expected_terms": ["193nm", "14nm"],
+      "expected_terms": [
+        "193nm",
+        "14nm"
+      ],
       "forbidden_terms": [],
       "rounds": [
         {
@@ -35,7 +41,9 @@
       "category": "工艺咨询",
       "kind": "recall",
       "query": "用户在先进节点上的器件架构倾向是什么？",
-      "expected_terms": ["GAA"],
+      "expected_terms": [
+        "GAA"
+      ],
       "forbidden_terms": [],
       "rounds": [
         {
@@ -49,7 +57,9 @@
       "category": "设备选型",
       "kind": "recall",
       "query": "用户评估的 EUV 机台厂商和型号是什么？",
-      "expected_terms": ["ASML"],
+      "expected_terms": [
+        "ASML"
+      ],
       "forbidden_terms": [],
       "rounds": [
         {
@@ -63,7 +73,10 @@
       "category": "设备选型",
       "kind": "recall",
       "query": "用户用的刻蚀和量测设备厂商分别是什么？",
-      "expected_terms": ["TEL", "KLA"],
+      "expected_terms": [
+        "TEL",
+        "KLA"
+      ],
       "forbidden_terms": [],
       "rounds": [
         {
@@ -77,7 +90,9 @@
       "category": "设备选型",
       "kind": "recall",
       "query": "用户选机时的硬约束是什么？",
-      "expected_terms": ["交付周期"],
+      "expected_terms": [
+        "交付周期"
+      ],
       "forbidden_terms": [],
       "rounds": [
         {
@@ -91,7 +106,10 @@
       "category": "良率分析",
       "kind": "recall",
       "query": "用户良率卡在哪个工序，缺陷类型是什么？",
-      "expected_terms": ["CMP", "缺陷密度"],
+      "expected_terms": [
+        "CMP",
+        "缺陷密度"
+      ],
       "forbidden_terms": [],
       "rounds": [
         {
@@ -104,8 +122,11 @@
       "name": "case_semi_spc_control_method",
       "category": "良率分析",
       "kind": "recall",
-      "query": "用户用什么方法管控关键尺寸？",
-      "expected_terms": ["SPC", "套刻"],
+      "query": "用户用什么方法管控关键尺寸，套刻精度要求是多少？",
+      "expected_terms": [
+        "SPC",
+        "套刻"
+      ],
       "forbidden_terms": [],
       "rounds": [
         {
@@ -119,7 +140,10 @@
       "category": "良率分析",
       "kind": "recall",
       "query": "用户产线的良率目标和当前值是什么？",
-      "expected_terms": ["99.5%", "98.2%"],
+      "expected_terms": [
+        "99.5%",
+        "98.2%"
+      ],
       "forbidden_terms": [],
       "rounds": [
         {
@@ -133,7 +157,10 @@
       "category": "客户支持",
       "kind": "recall",
       "query": "用户的客户对可靠性有什么要求？",
-      "expected_terms": ["车规", "AEC-Q100"],
+      "expected_terms": [
+        "车规",
+        "AEC-Q100"
+      ],
       "forbidden_terms": [],
       "rounds": [
         {
@@ -147,7 +174,9 @@
       "category": "客户支持",
       "kind": "recall",
       "query": "客户的产品节点和良率要求是什么？",
-      "expected_terms": ["7nm"],
+      "expected_terms": [
+        "7nm"
+      ],
       "forbidden_terms": [],
       "rounds": [
         {
@@ -161,7 +190,9 @@
       "category": "客户支持",
       "kind": "recall",
       "query": "客户提出的问题和时限要求是什么？",
-      "expected_terms": ["批次一致性"],
+      "expected_terms": [
+        "批次一致性"
+      ],
       "forbidden_terms": [],
       "rounds": [
         {
@@ -175,7 +206,9 @@
       "category": "垂类机制",
       "kind": "namespace_isolation",
       "query": "用户负责的工艺节点是什么？",
-      "expected_terms": ["28nm"],
+      "expected_terms": [
+        "28nm"
+      ],
       "forbidden_terms": [],
       "rounds": [
         {
@@ -190,7 +223,9 @@
       "kind": "recall",
       "query": "用户用什么光刻方案？",
       "expected_terms": [],
-      "forbidden_terms": ["ArF"],
+      "forbidden_terms": [
+        "ArF"
+      ],
       "rounds": [
         {
           "user": "我们做的是 193nm 浸没式光刻。",
@@ -221,6 +256,398 @@
       "expected_terms": [],
       "forbidden_terms": [],
       "memory_type": "equipment_context",
+      "rounds": [
+        {
+          "user": "我们量产线的量测设备用的是 KLA 2930。",
+          "assistant": "好的。"
+        }
+      ]
+    },
+    {
+      "name": "case_semi_litho_resolution_limit",
+      "category": "工艺咨询",
+      "kind": "recall",
+      "query": "用户产线用的是什么波长的光刻，分辨率极限是多少？",
+      "expected_terms": [
+        "193nm",
+        "65nm"
+      ],
+      "forbidden_terms": [],
+      "rounds": [
+        {
+          "user": "我们用 193nm 浸没式光刻，分辨率极限是 65nm。",
+          "assistant": "记录一下。"
+        }
+      ]
+    },
+    {
+      "name": "case_semi_etch_gas_recipe",
+      "category": "工艺咨询",
+      "kind": "recall",
+      "query": "刻蚀用的气体和配比是什么？",
+      "expected_terms": [
+        "CF4",
+        "4:1"
+      ],
+      "forbidden_terms": [],
+      "rounds": [
+        {
+          "user": "刻蚀用 CF4 和 O2 混合气，比例 4:1。",
+          "assistant": "好的。"
+        }
+      ]
+    },
+    {
+      "name": "case_semi_cvd_temperature",
+      "category": "工艺咨询",
+      "kind": "recall",
+      "query": "沉铜工序的温度是多少？",
+      "expected_terms": [
+        "250℃"
+      ],
+      "forbidden_terms": [],
+      "rounds": [
+        {
+          "user": "CVD 沉铜的温度是 250℃。",
+          "assistant": "收到。"
+        }
+      ]
+    },
+    {
+      "name": "case_semi_interconnect_stack",
+      "category": "工艺咨询",
+      "kind": "recall",
+      "query": "用户的 IO 层互连材料和厚度是什么？",
+      "expected_terms": [
+        "铜互连",
+        "200nm"
+      ],
+      "forbidden_terms": [],
+      "rounds": [
+        {
+          "user": "我们的 IO 层用铜互连，厚度 200nm。",
+          "assistant": "明白。"
+        }
+      ]
+    },
+    {
+      "name": "case_semi_clean_sequence",
+      "category": "工艺咨询",
+      "kind": "recall",
+      "query": "出货前的清洗工序是怎么排的？",
+      "expected_terms": [
+        "RCA"
+      ],
+      "forbidden_terms": [],
+      "rounds": [
+        {
+          "user": "每片出货前要做两道清洗，RCA 槽排在第 3 道。",
+          "assistant": "记下了。"
+        }
+      ]
+    },
+    {
+      "name": "case_semi_pvd_vendor",
+      "category": "设备选型",
+      "kind": "recall",
+      "query": "用户在评估哪家的 PVD 设备？",
+      "expected_terms": [
+        "AMAT",
+        "Endura"
+      ],
+      "forbidden_terms": [],
+      "rounds": [
+        {
+          "user": "PVD 溅射我们在看 AMAT 的 Endura。",
+          "assistant": "了解。"
+        }
+      ]
+    },
+    {
+      "name": "case_semi_overlay_tool_model",
+      "category": "设备选型",
+      "kind": "recall",
+      "query": "用户量套刻用的是哪台设备？",
+      "expected_terms": [
+        "Archer 600"
+      ],
+      "forbidden_terms": [],
+      "rounds": [
+        {
+          "user": "套刻机用 KLA 的 Archer 600。",
+          "assistant": "收到。"
+        }
+      ]
+    },
+    {
+      "name": "case_semi_tool_lead_time_constraint",
+      "category": "设备选型",
+      "kind": "recall",
+      "query": "扩产时的机台交期约束是多少？",
+      "expected_terms": [
+        "9 个月"
+      ],
+      "forbidden_terms": [],
+      "rounds": [
+        {
+          "user": "二期扩产的瓶颈是光刻机台数，机台交期要 9 个月。",
+          "assistant": "那要提前下单。"
+        }
+      ]
+    },
+    {
+      "name": "case_semi_implant_tool_candidate",
+      "category": "设备选型",
+      "kind": "recall",
+      "query": "用户在评估哪款离子注入设备？",
+      "expected_terms": [
+        "AX-28"
+      ],
+      "forbidden_terms": [],
+      "rounds": [
+        {
+          "user": "离子注入机的国产替代在评估中，型号 AX-28。",
+          "assistant": "好的。"
+        }
+      ]
+    },
+    {
+      "name": "case_semi_cost_target",
+      "category": "设备选型",
+      "kind": "recall",
+      "query": "用户对单片成本的目标是多少？",
+      "expected_terms": [
+        "3000 美元"
+      ],
+      "forbidden_terms": [],
+      "rounds": [
+        {
+          "user": "单片成本要压到 3000 美元以内。",
+          "assistant": "这个压力不小。"
+        }
+      ]
+    },
+    {
+      "name": "case_semi_edge_defect_signature",
+      "category": "良率分析",
+      "kind": "recall",
+      "query": "这次良率下滑的缺陷特征是什么？",
+      "expected_terms": [
+        "edge dark"
+      ],
+      "forbidden_terms": [],
+      "rounds": [
+        {
+          "user": "这次良率掉是 edge dark 缺陷，集中在晶圆边缘。",
+          "assistant": "看边缘效应？"
+        }
+      ]
+    },
+    {
+      "name": "case_semi_film_thickness_measurement",
+      "category": "良率分析",
+      "kind": "recall",
+      "query": "膜厚实测值和目标值分别是多少？",
+      "expected_terms": [
+        "1200Å"
+      ],
+      "forbidden_terms": [],
+      "rounds": [
+        {
+          "user": "膜厚测量值 1200Å，目标 1180Å。",
+          "assistant": "偏厚了。"
+        }
+      ]
+    },
+    {
+      "name": "case_semi_cmp_pressure_window",
+      "category": "良率分析",
+      "kind": "recall",
+      "query": "CMP 的压力窗口是多少？",
+      "expected_terms": [
+        "1.5",
+        "2.5"
+      ],
+      "forbidden_terms": [],
+      "rounds": [
+        {
+          "user": "CMP 的压力窗口是 1.5 到 2.5 吨。",
+          "assistant": "记下了。"
+        }
+      ]
+    },
+    {
+      "name": "case_semi_spc_control_limit",
+      "category": "良率分析",
+      "kind": "recall",
+      "query": "关键尺寸的 SPC 控制限和当前能力指数是多少？",
+      "expected_terms": [
+        "CPK",
+        "1.33"
+      ],
+      "forbidden_terms": [],
+      "rounds": [
+        {
+          "user": "关键尺寸的 SPC 控制限是 ±2%，当前 CPK 是 1.33。",
+          "assistant": "能力还行。"
+        }
+      ]
+    },
+    {
+      "name": "case_semi_dishing_root_cause",
+      "category": "良率分析",
+      "kind": "recall",
+      "query": "良率瓶颈的根因是什么？",
+      "expected_terms": [
+        "dishing"
+      ],
+      "forbidden_terms": [],
+      "rounds": [
+        {
+          "user": "良率瓶颈确认是前道 CMP 的 dishing。",
+          "assistant": "要调 CMP 条件。"
+        }
+      ]
+    },
+    {
+      "name": "case_semi_customer_iatf_requirement",
+      "category": "客户支持",
+      "kind": "recall",
+      "query": "客户要求提供什么体系认证？",
+      "expected_terms": [
+        "IATF 16949"
+      ],
+      "forbidden_terms": [],
+      "rounds": [
+        {
+          "user": "客户要求提供 IATF 16949 体系认证。",
+          "assistant": "我来准备资料。"
+        }
+      ]
+    },
+    {
+      "name": "case_semi_customer_capacity_commitment",
+      "category": "客户支持",
+      "kind": "recall",
+      "query": "客户对明年产能的预期是什么？",
+      "expected_terms": [
+        "翻倍"
+      ],
+      "forbidden_terms": [],
+      "rounds": [
+        {
+          "user": "客户承诺明年产能翻倍，交付要跟得上。",
+          "assistant": "排产要提前算。"
+        }
+      ]
+    },
+    {
+      "name": "case_semi_customer_8d_request",
+      "category": "客户支持",
+      "kind": "recall",
+      "query": "客户要求提交什么形式的报告？",
+      "expected_terms": [
+        "8D"
+      ],
+      "forbidden_terms": [],
+      "rounds": [
+        {
+          "user": "客户反馈批次里有早失效的品，要求 8D 报告。",
+          "assistant": "启动 8D。"
+        }
+      ]
+    },
+    {
+      "name": "case_semi_customer_root_cause_deadline",
+      "category": "客户支持",
+      "kind": "recall",
+      "query": "客户要求什么时候之前给出根因？",
+      "expected_terms": [
+        "下周三"
+      ],
+      "forbidden_terms": [],
+      "rounds": [
+        {
+          "user": "客户要求下周三前给出根因，否则切换供应商。",
+          "assistant": "时间很紧。"
+        }
+      ]
+    },
+    {
+      "name": "case_semi_correction_records_new_value",
+      "category": "垂类机制",
+      "kind": "recall",
+      "query": "用户负责的工艺节点是什么？",
+      "expected_terms": [
+        "28nm"
+      ],
+      "forbidden_terms": [
+        "45nm"
+      ],
+      "rounds": [
+        {
+          "user": "我们的线宽工艺节点改成 28nm 了。",
+          "assistant": "已更新。"
+        }
+      ]
+    },
+    {
+      "name": "case_semi_assistant_number_not_user_fact",
+      "category": "垂类机制",
+      "kind": "recall",
+      "query": "用户的封装产能安排是什么？",
+      "expected_terms": [],
+      "forbidden_terms": [
+        "1.2 亿"
+      ],
+      "rounds": [
+        {
+          "user": "我们的封装产能要扩。",
+          "assistant": "建议按 Q4 的 1.2 亿颗规划。"
+        }
+      ]
+    },
+    {
+      "name": "case_semi_two_facts_in_one_message",
+      "category": "垂类机制",
+      "kind": "recall",
+      "query": "用户外延工序用什么设备和多厚的层？",
+      "expected_terms": [
+        "MOCVD",
+        "5 微米"
+      ],
+      "forbidden_terms": [],
+      "rounds": [
+        {
+          "user": "我们的外延层用 MOCVD，厚度 5 微米。",
+          "assistant": "收到。"
+        }
+      ]
+    },
+    {
+      "name": "case_semi_ttl_state_has_ttl",
+      "category": "垂类机制",
+      "kind": "ttl_expiration",
+      "query": "",
+      "expected_terms": [],
+      "forbidden_terms": [],
+      "memory_type": "state",
+      "rounds": [
+        {
+          "user": "当前在手工单的批次是 B-17。",
+          "assistant": "好的。"
+        }
+      ]
+    },
+    {
+      "name": "case_semi_namespace_isolation_equipment",
+      "category": "垂类机制",
+      "kind": "namespace_isolation",
+      "query": "用户量产线用的量测设备是什么？",
+      "expected_terms": [
+        "KLA 2930"
+      ],
+      "forbidden_terms": [],
       "rounds": [
         {
           "user": "我们量产线的量测设备用的是 KLA 2930。",

@@ -30,15 +30,20 @@ def _app(rate_limit_per_minute: int, burst: int) -> FastAPI:
 
 
 def test_burst_exhausted_requests_are_rejected() -> None:
-    """突发额度用完后必须 429（而不是无限放行）。"""
-    with TestClient(_app(rate_limit_per_minute=600, burst=2)) as client:
+    """突发额度用完后必须 429（而不是无限放行）。
+
+    速率取 1/分钟：突发额度要比补充速度快才测得到突发。原来的 600/分钟
+    是 10 token/秒，三次请求之间就补回 0.5 个 token，第三个请求又被放行 ——
+    结果取决于机器有多快，是条会随机红的用例。
+    """
+    with TestClient(_app(rate_limit_per_minute=1, burst=2)) as client:
         assert client.get("/v2/memory/ping").status_code == 200
         assert client.get("/v2/memory/ping").status_code == 200
 
         rejected = client.get("/v2/memory/ping")
         assert rejected.status_code == 429
         assert rejected.json()["error"]["code"] == "TB-1007"
-        assert rejected.headers["X-RateLimit-Limit"] == "600"
+        assert rejected.headers["X-RateLimit-Limit"] == "1"
 
 
 def test_configured_limit_is_applied() -> None:

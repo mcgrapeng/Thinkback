@@ -66,10 +66,13 @@ class SqlAlchemyMemoryRepository(L1CacheMixin):
         session_factory: async_sessionmaker[AsyncSession] = SessionLocal,
         *,
         operation_timeout_seconds: float | None = None,
+        l1_cache_enabled: bool = True,
     ) -> None:
         if operation_timeout_seconds is not None and operation_timeout_seconds <= 0:
             raise ValueError("operation_timeout_seconds must be > 0")
         self.session_factory = session_factory
+        # 关掉后 L1 走读穿透（每次回源 PG）。多副本部署必须关。
+        self.l1_cache_enabled = l1_cache_enabled
         self.operation_timeout_seconds = (
             operation_timeout_seconds
             if operation_timeout_seconds is not None
@@ -1028,6 +1031,50 @@ class SqlAlchemyMemoryRepository(L1CacheMixin):
     def delete_memory_rows(self, memory_ids: list[str]) -> int:
         """物理删除 L3 业务索引行（erase 语义）。"""
         return self._run(self._delete_memory_rows(memory_ids))
+
+    def list_expired_memories(
+        self,
+        *,
+        before: datetime,
+        limit: int = 500,
+        memory_scope_id: str | None = None,
+        user_id: str | None = None,
+    ) -> list[MemoryIndexEntry]:
+        """列出到期时刻早于 ``before`` 的 ACTIVE 记忆索引行。"""
+        return self._run(
+            self._list_expired_memories(
+                before=before,
+                limit=limit,
+                memory_scope_id=memory_scope_id,
+                user_id=user_id,
+            )
+        )
+
+    async def _list_expired_memories(
+        self,
+        *,
+        before: datetime,
+        limit: int,
+        memory_scope_id: str | None,
+        user_id: str | None,
+    ) -> list[MemoryIndexEntry]:
+        statement = (
+            select(MemoryRecord)
+            .where(
+                MemoryRecord.expires_at.is_not(None),
+                MemoryRecord.expires_at <= before,
+                MemoryRecord.memory_status == MemoryStatus.ACTIVE.value,
+            )
+            .order_by(MemoryRecord.expires_at)
+            .limit(limit)
+        )
+        if memory_scope_id:
+            statement = statement.where(MemoryRecord.memory_scope_id == memory_scope_id)
+        if user_id:
+            statement = statement.where(MemoryRecord.user_id == user_id)
+        async with self.session_factory() as session:
+            result = await session.execute(statement)
+            return [self._memory_from_record(record) for record in result.scalars().all()]
 
     async def _delete_memory_rows(self, memory_ids: list[str]) -> int:
         if not memory_ids:

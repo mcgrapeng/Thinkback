@@ -78,59 +78,65 @@ def main() -> int:
     ]
     task_ids = []
     for rid, idx, user_text, assistant_text in rounds:
-        resp = stub.Append(
-            pb.AppendRequest(
-                request_id=f"req-{rid}",
-                user_id=USER,
-                session_id=SESSION,
-                round_id=rid,
-                round_index=idx,
-                messages=[
-                    pb.MemoryMessage(
-                        message_id=f"{rid}-u",
-                        role=pb.MESSAGE_ROLE_USER,
-                        content=user_text,
-                        timestamp="2026-09-07T10:00:00+00:00",
-                    ),
-                    pb.MemoryMessage(
-                        message_id=f"{rid}-a",
-                        role=pb.MESSAGE_ROLE_ASSISTANT,
-                        content=assistant_text,
-                        timestamp="2026-09-07T10:00:01+00:00",
-                    ),
-                ],
-                source_timestamp="2026-09-07T10:00:01+00:00",
+        # v2 契约：一次一条原始事件。用户与助手各一条（角色放开到 tool/system）。
+        events = [
+            (
+                f"{rid}-u",
+                pb.MESSAGE_ROLE_USER,
+                user_text,
+                "2026-09-07T10:00:00+00:00",
             ),
-            timeout=30,
-        )
-        check(f"Append[{rid}] 200", resp.status in {"completed", "already_done"}, resp.status)
-        task_ids.append(resp.task_id)
-        again = stub.Append(
-            pb.AppendRequest(
-                request_id=f"req-{rid}-retry",
-                user_id=USER,
-                session_id=SESSION,
-                round_id=rid,
-                round_index=idx,
-                messages=[
-                    pb.MemoryMessage(
-                        message_id=f"{rid}-u",
-                        role=pb.MESSAGE_ROLE_USER,
-                        content=user_text,
-                        timestamp="2026-09-07T10:00:00+00:00",
-                    ),
-                    pb.MemoryMessage(
-                        message_id=f"{rid}-a",
-                        role=pb.MESSAGE_ROLE_ASSISTANT,
-                        content=assistant_text,
-                        timestamp="2026-09-07T10:00:01+00:00",
-                    ),
-                ],
-                source_timestamp="2026-09-07T10:00:01+00:00",
+            (
+                f"{rid}-a",
+                pb.MESSAGE_ROLE_ASSISTANT,
+                assistant_text,
+                "2026-09-07T10:00:01+00:00",
             ),
-            timeout=30,
-        )
-        check(f"Append[{rid}] 幂等 already_done", again.status == "already_done", again.status)
+        ]
+        for event_id, role, payload, occurred_at in events:
+            resp = stub.AppendEvent(
+                pb.AppendEventRequest(
+                    request_id=f"req-{event_id}",
+                    user_id=USER,
+                    session_id=SESSION,
+                    event=pb.SourceEvent(
+                        event_id=event_id,
+                        source="chat_round",
+                        role=role,
+                        payload=payload,
+                        occurred_at=occurred_at,
+                    ),
+                    round_index=idx,
+                ),
+                timeout=30,
+            )
+            check(
+                f"AppendEvent[{event_id}] 200",
+                resp.status in {"completed", "already_done"},
+                resp.status,
+            )
+            task_ids.append(resp.task_id)
+            again = stub.AppendEvent(
+                pb.AppendEventRequest(
+                    request_id=f"req-{event_id}-retry",
+                    user_id=USER,
+                    session_id=SESSION,
+                    event=pb.SourceEvent(
+                        event_id=event_id,
+                        source="chat_round",
+                        role=role,
+                        payload=payload,
+                        occurred_at=occurred_at,
+                    ),
+                    round_index=idx,
+                ),
+                timeout=30,
+            )
+            check(
+                f"AppendEvent[{event_id}] 幂等 already_done",
+                again.status == "already_done",
+                again.status,
+            )
 
     # 2. L3 任务完成
     for (rid, *_), task_id in zip(rounds, task_ids, strict=True):

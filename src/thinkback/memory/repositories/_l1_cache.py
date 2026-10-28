@@ -39,6 +39,10 @@ class L1CacheMixin:
 
     l1_cache: dict[str, list[JournalEntry]]
     _l1_lock: Lock
+    #: 关掉后整层旁路：每次都回源 PG（读穿透）。多副本部署必须这么配 ——
+    #: 进程内缓存的失效只在本副本，别的副本追加的轮次本副本看不见；TTL 只是
+    #: 把陈旧窗口从「永久」压到 30 秒，不是根治。
+    l1_cache_enabled: bool = True
 
     def _l1_timestamps(self) -> dict[str, float]:
         """每个缓存键的写入时刻（monotonic）。惰性建表，免改两个 adapter 的构造。"""
@@ -72,6 +76,8 @@ class L1CacheMixin:
         3. 追加新回合
         4. 只保留最近 limit 条（其余自动淘汰）
         """
+        if not self.l1_cache_enabled:
+            return
         key = self._l1_cache_key(
             entry.user_id, entry.memory_scope_id, entry.session_id, entry.namespace
         )
@@ -124,7 +130,11 @@ class L1CacheMixin:
         """读取 L1 缓存。从缓存中查询最近 N 轮回合
 
         返回格式：[JournalEntry, ...]（按时间序列，可为空）
+
+        缓存关掉时永远返回空：调用方据此回源 PG（读穿透）。
         """
+        if not self.l1_cache_enabled:
+            return []
         key = self._l1_cache_key(user_id, memory_scope_id, session_id, namespace)
         with self._l1_lock:
             entries = self.l1_cache.get(key)

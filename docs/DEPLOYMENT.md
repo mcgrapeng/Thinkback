@@ -119,6 +119,19 @@ keeps state **in the process**:
 Do not raise `replicas` until all of the above live in shared storage (Redis /
 PostgreSQL).
 
+The service enforces this: setting `MEMORY_MULTI_REPLICA=true` makes it check the
+five prerequisites at startup and **refuse to boot** if any is missing, listing
+what each unmet one would break. Two of them are configurable today:
+
+```bash
+MEMORY_MULTI_REPLICA=true      # declare multi-replica (the guard then checks)
+MEMORY_L1_CACHE_ENABLED=false  # L1 reads through to PostgreSQL
+MEMORY_HISTORY_DB_SHARED=true  # mem0 history.db is on a shared volume
+```
+
+The idempotency cache and the rate-limit buckets are still process-local, so the
+guard keeps refusing multi-replica until those move to shared storage.
+
 ### Rollout strategy
 
 The deployment uses `strategy: Recreate`. A rolling update with `maxSurge: 1` brings

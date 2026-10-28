@@ -84,6 +84,30 @@ class Settings(BaseSettings):
         description="Embedding API key; optional — leave empty when the endpoint needs no auth",
     )
     memory_milvus_collection: str = "thinkback"
+    # Milvus ``text`` 字段的分析器。集合由 Thinkback 预建（ADR-0007）：
+    # mem0 自建集合不带 analyzer_params，中文整句被当成一个词，BM25 对中文恒为 0。
+    # Milvus 不允许原地改分析器，改不动就走迁移重建（script/migrate_milvus_collection.py）。
+    memory_milvus_analyzer: str = "chinese"
+    # 迁移窗口的次集合（双写 + 双读回落）。留空表示迁移不在窗口内。
+    # 回滚只需清掉它、把 MEMORY_MILVUS_COLLECTION 改回旧集合名。
+    memory_milvus_mirror_collection: str = ""
+    # ── 部署形态 ──────────────────────────────────────────────────────
+    # 单副本是当前的发布边界。多副本要 HA，五项前置必须先落地（infra.replica_guard）：
+    # 前置没齐时服务在启动期硬失败，而不是静默双写。
+    memory_multi_replica: bool = False
+    # 进程内 L1 缓存。多副本部署必须关（关掉后走读穿透，每次回源 PG）。
+    memory_l1_cache_enabled: bool = True
+    # mem0 的 history.db 是否挂在共享卷上（多副本部署必须共享，否则擦除只清本副本）。
+    memory_history_db_shared: bool = False
+    # ── 保留期物理清理（ADR-0010 第三段）───────────────────────────────
+    # 作业默认关闭：开了就要有 CronJob 或人工定期跑（script/run_retention_cleanup.py）。
+    memory_retention_enabled: bool = False
+    # 到期后再等几天才物理删除：让「用户改口」能挽回。
+    memory_retention_grace_days: int = 7
+    # 单批清理条数上限。
+    memory_retention_batch_size: int = 500
+    # 只清理某个 namespace；留空表示全部。
+    memory_retention_namespace: str = ""
     memory_embedding_dims: int = 1024
     memory_llm_model: str = "qwen-plus-latest"
     memory_embedding_model: str = "default-embedding"

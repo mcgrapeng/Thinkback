@@ -89,6 +89,13 @@ def _build_lifespan(
                 logger.error(f"Failed to run database migrations: {exc}")
                 raise
 
+            # 多副本前置检查：宣称多副本但前置没齐时硬失败。
+            # 静默跑起来的后果是重试被当成新写入、限流额度按副本数放大、
+            # 别的副本追加的轮次本副本看不见。
+            from thinkback.infra.replica_guard import assert_multi_replica_ready
+
+            assert_multi_replica_ready(settings)
+
             # Make sure the configured Milvus database exists; mem0 won't create it
             # itself and would otherwise fail every append with code 800 once it tries
             # to write. Best-effort: log a warning if the lazy-create fails so the
