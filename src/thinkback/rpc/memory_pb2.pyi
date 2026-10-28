@@ -17,6 +17,7 @@ class MessageRole(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     MESSAGE_ROLE_USER: _ClassVar[MessageRole]
     MESSAGE_ROLE_ASSISTANT: _ClassVar[MessageRole]
     MESSAGE_ROLE_SYSTEM: _ClassVar[MessageRole]
+    MESSAGE_ROLE_TOOL: _ClassVar[MessageRole]
 
 class MemoryType(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     __slots__ = ()
@@ -74,11 +75,6 @@ class OperationType(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     OPERATION_TYPE_REBUILD_L3: _ClassVar[OperationType]
     OPERATION_TYPE_ERASE: _ClassVar[OperationType]
 
-class RecallIntent(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
-    __slots__ = ()
-    RECALL_INTENT_CHAT: _ClassVar[RecallIntent]
-    RECALL_INTENT_SENSITIVE: _ClassVar[RecallIntent]
-
 class DeleteScope(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     __slots__ = ()
     DELETE_SCOPE_MEMORY: _ClassVar[DeleteScope]
@@ -88,6 +84,7 @@ class DeleteScope(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
 MESSAGE_ROLE_USER: MessageRole
 MESSAGE_ROLE_ASSISTANT: MessageRole
 MESSAGE_ROLE_SYSTEM: MessageRole
+MESSAGE_ROLE_TOOL: MessageRole
 MEMORY_TYPE_PROFILE: MemoryType
 MEMORY_TYPE_PREFERENCE: MemoryType
 MEMORY_TYPE_EVENT: MemoryType
@@ -123,8 +120,6 @@ OPERATION_TYPE_DELETE_ALL: OperationType
 OPERATION_TYPE_REBUILD_L2: OperationType
 OPERATION_TYPE_REBUILD_L3: OperationType
 OPERATION_TYPE_ERASE: OperationType
-RECALL_INTENT_CHAT: RecallIntent
-RECALL_INTENT_SENSITIVE: RecallIntent
 DELETE_SCOPE_MEMORY: DeleteScope
 DELETE_SCOPE_SESSION: DeleteScope
 DELETE_SCOPE_ALL: DeleteScope
@@ -147,17 +142,59 @@ class MemoryMessage(_message.Message):
         timestamp: _Optional[str] = ...,
     ) -> None: ...
 
-class AppendRequest(_message.Message):
+class SourceEvent(_message.Message):
+    __slots__ = (
+        "event_id",
+        "source",
+        "role",
+        "payload",
+        "occurred_at",
+        "subject_ref",
+        "provenance",
+    )
+    class ProvenanceEntry(_message.Message):
+        __slots__ = ("key", "value")
+        KEY_FIELD_NUMBER: _ClassVar[int]
+        VALUE_FIELD_NUMBER: _ClassVar[int]
+        key: str
+        value: str
+        def __init__(self, key: _Optional[str] = ..., value: _Optional[str] = ...) -> None: ...
+
+    EVENT_ID_FIELD_NUMBER: _ClassVar[int]
+    SOURCE_FIELD_NUMBER: _ClassVar[int]
+    ROLE_FIELD_NUMBER: _ClassVar[int]
+    PAYLOAD_FIELD_NUMBER: _ClassVar[int]
+    OCCURRED_AT_FIELD_NUMBER: _ClassVar[int]
+    SUBJECT_REF_FIELD_NUMBER: _ClassVar[int]
+    PROVENANCE_FIELD_NUMBER: _ClassVar[int]
+    event_id: str
+    source: str
+    role: MessageRole
+    payload: str
+    occurred_at: str
+    subject_ref: str
+    provenance: _containers.ScalarMap[str, str]
+    def __init__(
+        self,
+        event_id: _Optional[str] = ...,
+        source: _Optional[str] = ...,
+        role: _Optional[_Union[MessageRole, str]] = ...,
+        payload: _Optional[str] = ...,
+        occurred_at: _Optional[str] = ...,
+        subject_ref: _Optional[str] = ...,
+        provenance: _Optional[_Mapping[str, str]] = ...,
+    ) -> None: ...
+
+class AppendEventRequest(_message.Message):
     __slots__ = (
         "request_id",
         "user_id",
         "session_id",
-        "round_id",
-        "messages",
-        "source_timestamp",
+        "event",
+        "namespace",
+        "memory_type",
         "round_index",
         "metadata",
-        "namespace",
     )
     class MetadataEntry(_message.Message):
         __slots__ = ("key", "value")
@@ -170,35 +207,32 @@ class AppendRequest(_message.Message):
     REQUEST_ID_FIELD_NUMBER: _ClassVar[int]
     USER_ID_FIELD_NUMBER: _ClassVar[int]
     SESSION_ID_FIELD_NUMBER: _ClassVar[int]
-    ROUND_ID_FIELD_NUMBER: _ClassVar[int]
-    MESSAGES_FIELD_NUMBER: _ClassVar[int]
-    SOURCE_TIMESTAMP_FIELD_NUMBER: _ClassVar[int]
+    EVENT_FIELD_NUMBER: _ClassVar[int]
+    NAMESPACE_FIELD_NUMBER: _ClassVar[int]
+    MEMORY_TYPE_FIELD_NUMBER: _ClassVar[int]
     ROUND_INDEX_FIELD_NUMBER: _ClassVar[int]
     METADATA_FIELD_NUMBER: _ClassVar[int]
-    NAMESPACE_FIELD_NUMBER: _ClassVar[int]
     request_id: str
     user_id: str
     session_id: str
-    round_id: str
-    messages: _containers.RepeatedCompositeFieldContainer[MemoryMessage]
-    source_timestamp: str
+    event: SourceEvent
+    namespace: str
+    memory_type: str
     round_index: int
     metadata: _containers.ScalarMap[str, str]
-    namespace: str
     def __init__(
         self,
         request_id: _Optional[str] = ...,
         user_id: _Optional[str] = ...,
         session_id: _Optional[str] = ...,
-        round_id: _Optional[str] = ...,
-        messages: _Optional[_Iterable[_Union[MemoryMessage, _Mapping]]] = ...,
-        source_timestamp: _Optional[str] = ...,
+        event: _Optional[_Union[SourceEvent, _Mapping]] = ...,
+        namespace: _Optional[str] = ...,
+        memory_type: _Optional[str] = ...,
         round_index: _Optional[int] = ...,
         metadata: _Optional[_Mapping[str, str]] = ...,
-        namespace: _Optional[str] = ...,
     ) -> None: ...
 
-class AppendResponse(_message.Message):
+class AppendEventResponse(_message.Message):
     __slots__ = ("status", "task_id", "round_id", "l3_events")
     STATUS_FIELD_NUMBER: _ClassVar[int]
     TASK_ID_FIELD_NUMBER: _ClassVar[int]
@@ -221,7 +255,6 @@ class RecallRequest(_message.Message):
         "user_id",
         "session_id",
         "query",
-        "intent",
         "l3_limit",
         "l3_score_threshold",
         "token_budget",
@@ -230,7 +263,6 @@ class RecallRequest(_message.Message):
     USER_ID_FIELD_NUMBER: _ClassVar[int]
     SESSION_ID_FIELD_NUMBER: _ClassVar[int]
     QUERY_FIELD_NUMBER: _ClassVar[int]
-    INTENT_FIELD_NUMBER: _ClassVar[int]
     L3_LIMIT_FIELD_NUMBER: _ClassVar[int]
     L3_SCORE_THRESHOLD_FIELD_NUMBER: _ClassVar[int]
     TOKEN_BUDGET_FIELD_NUMBER: _ClassVar[int]
@@ -238,7 +270,6 @@ class RecallRequest(_message.Message):
     user_id: str
     session_id: str
     query: str
-    intent: RecallIntent
     l3_limit: int
     l3_score_threshold: float
     token_budget: int
@@ -248,7 +279,6 @@ class RecallRequest(_message.Message):
         user_id: _Optional[str] = ...,
         session_id: _Optional[str] = ...,
         query: _Optional[str] = ...,
-        intent: _Optional[_Union[RecallIntent, str]] = ...,
         l3_limit: _Optional[int] = ...,
         l3_score_threshold: _Optional[float] = ...,
         token_budget: _Optional[int] = ...,

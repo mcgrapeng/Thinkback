@@ -56,6 +56,68 @@ curl $MEMORY_LLM_BASE_URL/v1/chat/completions \
 
 **Check**: `curl $MILVUS_URL/healthz`
 
+## Milvus collection rebuild (中文 BM25)
+
+**Symptom**: 日志出现 `milvus collection schema drifted from thinkback`，
+或者中文查询的 BM25 分数恒为 0。
+
+**Why**: Milvus 不允许原地改 `text` 字段的分析器（`analyzer_params does not
+allow update`），而 mem0 自建的集合没有 analyzer_params，中文整句被当成一个词。
+换分析器只能新建集合再把行搬过去（ADR-0007）。
+
+**Steps**（新集合名自己定，旧集合保留至少 30 天）：
+
+```bash
+# 1. 体检：看两个集合的行数与分析器
+uv run python script/migrate_milvus_collection.py status \
+  --source agent_semantic_memory_v1 --target agent_semantic_memory_v2
+
+# 2. 建好新集合（带中文分析器）并复制式回填，可重复执行
+uv run python script/migrate_milvus_collection.py backfill \
+  --source agent_semantic_memory_v1 --target agent_semantic_memory_v2
+
+# 3. 切换判据：行数一致 + 抽样召回有命中
+uv run python script/migrate_milvus_collection.py verify \
+  --source agent_semantic_memory_v1 --target agent_semantic_memory_v2
+```
+
+**Switch**（判据通过后改配置并重启）：
+
+```
+MEMORY_MILVUS_COLLECTION=agent_semantic_memory_v2
+MEMORY_MILVUS_MIRROR_COLLECTION=agent_semantic_memory_v1
+```
+
+镜像集合开着时写入、删除、修改都会同步到旧集合，召回先读新集合、命中不足
+时回落旧集合。
+
+**Rollback**（48 小时双读窗口内）：把两个值换回去并重启，不用补数据。
+
+**Cleanup**（窗口结束后）：清空 `MEMORY_MILVUS_MIRROR_COLLECTION`，确认旧集合
+不再被写入后再删除；旧集合至少保留 30 天。
+
+## Retention cleanup (保留期物理清理)
+
+**What it does**: 到期的事实先不可达（引擎隐藏 + 本地过滤），过了 7 天宽限期
+才由这个作业物理删除：向量、引擎侧事实历史、治理行一起删。原始消息不清 ——
+消息属于轮次，同轮次可能还挂着没过期的事实。
+
+**Run**:
+
+```bash
+# 先看清楚要删哪些，不动数据
+uv run python script/run_retention_cleanup.py --dry-run
+
+# 真删（作业默认关闭，要 MEMORY_RETENTION_ENABLED=true 或 --force）
+uv run python script/run_retention_cleanup.py --namespace thinkback --user-id u-123
+```
+
+**Scope**: 共享库里跑作业时务必带 `--namespace` / `--user-id`，否则一次运行会
+清掉别人的到期数据。
+
+**Audit**: 动作名 `memory.retention.purge`，只留计数。抑制（decay 置
+SUPERSEDED）与删除在审计上是两件事，看动作名就能分开。
+
 ## Database migration issues
 
 **Symptom**: Alembic migration fails on startup.

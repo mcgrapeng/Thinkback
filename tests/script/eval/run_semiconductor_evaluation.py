@@ -49,7 +49,41 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from thinkback.memory.schemas import (
+
+def _prepare_environment() -> None:
+    """先读凭据、再清代理 —— 必须在导入 thinkback 之前。
+
+    ``Settings`` 在模块导入时就构造好了，之后再 ``load_dotenv`` 就来不及：
+    端点会回落成默认地址，表现为「连接错误」而不是「缺凭据」。
+
+    凭据文件可以显式指定（``--env-file``）：评测常在别的机器或别的 worktree
+    上跑，用哪份部署凭据由调用方说了算，脚本只在原处读。
+    """
+
+    argv = sys.argv[1:]
+    env_file = None
+    if "--env-file" in argv:
+        index = argv.index("--env-file")
+        env_file = argv[index + 1] if index + 1 < len(argv) else None
+    from dotenv import load_dotenv
+
+    load_dotenv(env_file)
+    for key in (
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "ALL_PROXY",
+        "http_proxy",
+        "https_proxy",
+        "all_proxy",
+    ):
+        os.environ.pop(key, None)
+    os.environ["NO_PROXY"] = "*"
+    os.environ["no_proxy"] = "*"
+
+
+_prepare_environment()
+
+from thinkback.memory.schemas import (  # noqa: E402
     AppendMemoryRequest,
     MemoryMessage,
     MessageRole,
@@ -567,6 +601,7 @@ def main(argv: list[str]) -> int:
         default=REAL_BASELINE_PATH,
         help="真实栈模式对照的基线（自包含模式不用）",
     )
+    parser.add_argument("--env-file", default=None, help="凭据文件路径")
     args = parser.parse_args(argv[1:])
 
     if args.real:

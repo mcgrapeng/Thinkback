@@ -586,7 +586,7 @@ P0 与 P1 完成前不发布新接入方。P2 完成才算“插件形态”成�
 
 ## 14. 实施状态（2026-10-28）
 
-已落地（`feature/plugin-contract-v2`，已并入 `refactor/memory-architecture-rewrite`）：
+### 14.1 已落地（`feature/plugin-contract-v2` → `feature/production-hardening`）
 
 | 决策 | 落点 |
 | --- | --- |
@@ -595,19 +595,31 @@ P0 与 P1 完成前不发布新接入方。P2 完成才算“插件形态”成�
 | D9/ADR-0009 策略版本留痕 | 记忆记录 metadata 带 policy_version / extraction_prompt_version / extractor |
 | D22/D28 v2 事件契约 | `SourceEvent` + `AppendEventRequest`；业务面 `/v2/memory/*`，写入端点 `/v2/memory/events`；旧 `/memory/*` 撤掉 |
 | D12 来源角色由类型策略决定 | 写入路径按类型的 source_roles 过滤抽取输入（assistant 不作为用户事实来源） |
-| D25/D31 真实栈门禁 | `tests/script/gate_real.py` + `make gate-real`：七类检查，地板以真实基线为下限 |
+| D25/D31 真实栈门禁 | `tests/script/gate_real.py` + `make gate-real`：九类检查，地板以真实基线为下限 |
+| D21 collection 预建与中文分词器 | `infra/milvus_collection.py`：按 mem0 2.2.1 的字段名预建带 `chinese` 分析器的集合（BM25 Function + 两个索引 + Strong 一致性）；`script/migrate_milvus_collection.py` 做 status / backfill / verify；双写双读窗口由 `MEMORY_MILVUS_MIRROR_COLLECTION` 驱动（ADR-0007） |
+| D23 分层预算（层保底 + 类型上限） | 层保底与配额回流在 `domain/recall_policy.py`（LAYER_BUDGET_SHARES + 按剩余需求再分配）；类型上限接上注册表的 `recall.budget`，服务侧按 namespace 取各类型额度 |
+| D27 保留期三段与物理清理作业 | `memory/retention.py`：到期不可达 → 7 天宽限 → `script/run_retention_cleanup.py` 物理清理（向量 + 引擎事实历史 + 治理行）；审计动作 `memory.retention.purge` 只留计数（ADR-0010） |
+| D16 gRPC 同步升 v2 | proto 新增 `SourceEvent` / `AppendEventRequest`，`Append` RPC 换成 `AppendEvent`；MessageRole 补 tool；RecallRequest 撤掉 intent 轴；转换层走 `to_internal()` |
+| D33 多副本五项前置 | `infra/replica_guard.py`：宣称多副本但前置没齐时启动期硬失败；L1 读穿透与引擎侧历史外置已可配置。**幂等与限流仍在进程内**，因此多副本仍被拒绝（见 §14.3） |
 
-真实栈门禁首轮结果（`docs/memory/report/real/gate-3b4da00-*.json`）：抽取非空、期望事实召回、禁存词不泄漏、幂等重放、擦除残留五项通过；**期望事实覆盖率 0.25–0.50 低于 0.66 地板**，观测到一次抽取响应 JSON 解析失败；**英文型号词 BM25 未命中**（该轮事实未抽全）。这两项是真实质量缺口，不是门禁误报。
+### 14.2 质量缺口是怎么关掉的
 
-未落地（按依赖顺序）：
+| 缺口 | 根因 | 处理 |
+| --- | --- | --- |
+| 期望事实覆盖率 0.25–0.50（地板 0.66） | 抽取指令让模型在一条消息含两件事时只给一条事实；且现行指令删不得 | 用真实 LLM + 垂类语料做指令 A/B 与逐条消融（`tests/script/eval_prompt_ab.py`）：第 1/2/5/6 条承重，去掉任一条空抽率涨到 0.5–1.0；加第 8 条（一条消息含多件事实要全抽）+ 中性示例后覆盖率 0.70 → 1.00 |
+| 中文 BM25 恒为 0 | mem0 自建集合不带 analyzer_params，中文整句被当成一个词 | 集合由 Thinkback 预建（分析器 `chinese`）；迁移后实测查「气浮平台」命中（旧集合为 0） |
+| 事实已抽出来却召不回 | mem0 的 threshold 只卡语义分，BM25 再高也救不回来 | 引擎语义门关掉，服务侧按「语义分达标 **或** 综合分达标」放行（ADR-0004） |
 
-| 决策 | 阻塞点 |
+真实栈结果：门禁九项全通过；垂类评测 40 条语料 40/40（基线地板从 0.6875 抬到 0.9）。
+
+### 14.3 未落地（下一个阶段）
+
+| 事项 | 阻塞点 |
 | --- | --- |
-| D21 collection 预建与中文分词器 | 需要 collection 重建与回放方案（ADR-0007） |
-| D23 分层预算（层保底 + 类型上限） | 类型注册表已有 recall 字段，召回装配还没用上 |
-| D27 保留期三段与物理清理作业 | 依赖 D21 与保留策略定稿 |
-| D16 gRPC 同步升 v2 | proto 与转换层仍是 v1 形状（内部模型未变，gRPC 行为正常） |
-| D33 多副本五项前置 | 清单已写，执行是独立阶段 |
+| 幂等与限流迁到共享存储 | 多副本的最后一块；当前进程内缓存与限流桶，多副本会重试双写、限流额度按副本数放大。仓库明确不引入额外的队列与缓存依赖（§13），需要单独决策存储选型 |
+| 引擎侧历史外置 | mem0 的 `history.db` 仍需挂共享卷；当前只能声明（`MEMORY_HISTORY_DB_SHARED`），无法在进程内验证 |
+| 后台任务跨副本回收 | 任务行在 PG、认领靠主键插入（不会重复执行），但副本挂掉后要等重启或状态查询才被回收，没有持续轮询的调度器 |
+| 抽取指令瘦身 | 实测结论是「删规则会让抽取塌掉」，真正的杠杆是加规则与示例；瘦身要等评测能区分「精简」与「删承重条款」 |
 
 ## 13. 明确不做与理由
 

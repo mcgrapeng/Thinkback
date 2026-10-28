@@ -12,8 +12,8 @@
 4. 禁存词泄漏          0 条
 5. 擦除残留            0 条（Milvus / Mem0 history / Mem0 messages / PG 索引）
 6. 幂等重放一致        完全一致
-7. BM25 与 filter      英文型号词命中 + filter 正负向正确
-                        中文 BM25 在 jieba 上线前只报告不阻断
+7. BM25 与分词器        集合 schema 归 Thinkback（分析器 chinese）
+                        英文词与中文词各抽样一次，必须命中
 
 跑法（需要真实 Milvus + 可达的 LLM/embedding endpoint + 可写的 PG）：
 
@@ -25,14 +25,17 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import re
 import sqlite3
 import subprocess
 import sys
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 from uuid import uuid4
 
 from dotenv import load_dotenv
@@ -250,7 +253,7 @@ def history_residue(history_db_path: str, marker: str) -> tuple[int, int]:
 
 
 def _milvus_rows(settings: Settings, user_id: str) -> int:
-    """该用户在 Milvus 主 collection 里还剩多少行。"""
+    """该用户在 Milvus 里还剩多少行（主集合 + 迁移窗口的镜像集合）。"""
     try:
         from pymilvus import MilvusClient
 
@@ -259,15 +262,104 @@ def _milvus_rows(settings: Settings, user_id: str) -> int:
             token=settings.milvus_token or "",
             db_name=settings.milvus_database,
         )
-        rows = client.query(
-            collection_name=settings.memory_milvus_collection,
-            filter=f'metadata["user_id"] == "{user_id}"',
-            output_fields=["id"],
-        )
-        return len(rows)
+        collections = [settings.memory_milvus_collection]
+        if settings.memory_milvus_mirror_collection:
+            collections.append(settings.memory_milvus_mirror_collection)
+        total = 0
+        for collection in collections:
+            rows = client.query(
+                collection_name=collection,
+                filter=f'metadata["user_id"] == "{user_id}"',
+                output_fields=["id"],
+            )
+            total += len(rows)
+        return total
     except Exception as exc:  # noqa: BLE001 - 残留检查失败本身要报出来
         print(f"  WARN Milvus 残留检查失败: {type(exc).__name__}: {exc}")
         return -1
+
+
+def _collection_client(settings: Settings) -> Any:
+    from pymilvus import MilvusClient
+
+    return MilvusClient(
+        uri=settings.milvus_url,
+        token=settings.milvus_token or "",
+        db_name=settings.milvus_database,
+    )
+
+
+def _sample_terms(settings: Settings) -> tuple[str | None, str | None]:
+    """从集合里已有的内容里各取一个英文词和一个中文词做 BM25 抽样。
+
+    为什么不用固定词：固定词命中与否取决于抽取质量 —— 抽取没把「MA6000」抽出来
+    时它根本不在库里，测的就不是 BM25 而是抽取。从真实内容取词，测的才是分词器。
+    """
+    try:
+        client = _collection_client(settings)
+    except Exception as exc:  # noqa: BLE001 - 连不上由调用方记失败
+        print(f"  WARN Milvus 连接失败: {type(exc).__name__}: {exc}")
+        return None, None
+    try:
+        rows = client.query(
+            collection_name=settings.memory_milvus_collection,
+            filter="",
+            output_fields=["text"],
+            limit=200,
+        )
+    except Exception as exc:  # noqa: BLE001 - 取不到样本就报给调用方
+        print(f"  WARN Milvus 取样失败: {type(exc).__name__}: {exc}")
+        return None, None
+    finally:
+        client.close()
+
+    ascii_term: str | None = None
+    chinese_term: str | None = None
+    for row in rows:
+        text = str(row.get("text") or "")
+        if ascii_term is None:
+            match = re.search(r"[A-Za-z0-9][A-Za-z0-9\-]{2,}", text)
+            if match:
+                ascii_term = match.group(0)
+        if chinese_term is None:
+            match = re.search(r"[一-鿿]{2,}", text)
+            if match:
+                chinese_term = match.group(0)
+        if ascii_term and chinese_term:
+            break
+    return ascii_term, chinese_term
+
+
+def _bm25_probe(settings: Settings, term: str | None) -> tuple[bool, str]:
+    """在主集合上做一次 BM25 稀疏检索，看这个词能不能命中。
+
+    报告与终端里都只留词的长度与哈希：抽样词取自真实内容，把它原样写进
+    归档报告或日志等于把客户内容抄进产物。
+    """
+
+    if not term:
+        return False, "集合里没有可抽样的词"
+    fingerprint = f"len={len(term)} sha={hashlib.sha256(term.encode()).hexdigest()[:12]}"
+    try:
+        client = _collection_client(settings)
+    except Exception as exc:  # noqa: BLE001 - 失败要报出来
+        return False, f"{type(exc).__name__}: {exc}"
+    try:
+        hits = client.search(
+            collection_name=settings.memory_milvus_collection,
+            data=[term],
+            anns_field="sparse",
+            limit=3,
+            output_fields=["id"],
+        )
+    except Exception as exc:  # noqa: BLE001 - 失败要报出来
+        return False, f"{type(exc).__name__}: {exc}"
+    finally:
+        client.close()
+    score = float(hits[0][0]["distance"]) if hits and hits[0] else 0.0
+    hit_id = hits[0][0]["id"] if hits and hits[0] else None
+    print(f"  抽样词指纹 {fingerprint}")
+    return score > 0, f"抽样词 {fingerprint} -> 命中 {hit_id} score={score:.3f}"
 
 
 def _write_report(settings: Settings) -> Path:
@@ -309,7 +401,6 @@ def main() -> int:
     )
 
     service, repository = build_service(settings)
-    backend = service.backend
 
     marker = f"GATE{uuid4().hex[:8]}"
     user_id = f"gate-{uuid4().hex[:10]}"
@@ -437,47 +528,42 @@ def main() -> int:
         floor=float(first_count),
     )
 
-    # 7：BM25（英文型号词必须命中；中文在 jieba 上线前只报告不阻断）
+    # 7：BM25 与分词器
+    # 集合 schema 由 Thinkback 持有（ADR-0007）：分析器必须是 chinese，
+    # 否则中文整句被当成一个词，BM25 对中文查询恒为 0。
     try:
-        results = backend.search(
-            "MA6000",
-            user_id=user_id,
-            memory_scope_id=scope,
-            limit=5,
-            explain=True,
-        )
-        details = [item.get("score_details") or {} for item in results if isinstance(item, dict)]
-        bm25_ok = any(float(detail.get("bm25_score") or 0) > 0 for detail in details)
-        bm25_detail = f"bm25_scores={[round(float(d.get('bm25_score') or 0), 3) for d in details]}"
-    except Exception as exc:  # noqa: BLE001 - 门禁要看到真实错误
-        bm25_ok = False
-        bm25_detail = f"{type(exc).__name__}: {exc}"
-    record("bm25_ascii_hit", bm25_ok, bm25_detail, value=1.0 if bm25_ok else 0.0, floor=1.0)
+        from thinkback.infra.milvus_collection import analyzer_of, missing_fields
 
-    try:
-        cn_results = backend.search(
-            "气浮平台",
-            user_id=user_id,
-            memory_scope_id=scope,
-            limit=5,
-            explain=True,
-        )
-        cn_bm25 = [
-            float((item.get("score_details") or {}).get("bm25_score") or 0)
-            for item in cn_results
-            if isinstance(item, dict)
-        ]
-        record(
-            "bm25_chinese_hit",
-            True,
-            f"中文 bm25_scores={[round(value, 3) for value in cn_bm25]}（jieba 上线前不阻断）",
-            blocking=False,
-            skipped=True,
-        )
-    except Exception as exc:  # noqa: BLE001
-        record(
-            "bm25_chinese_hit", True, f"{type(exc).__name__}: {exc}", blocking=False, skipped=True
-        )
+        client = _collection_client(settings)
+        try:
+            description = client.describe_collection(settings.memory_milvus_collection)
+        finally:
+            client.close()
+        analyzer = analyzer_of(description)
+        gaps = missing_fields(description)
+        schema_ok = analyzer == "chinese" and not gaps
+        schema_detail = f"分析器 {analyzer or 'standard（未设 analyzer_params）'}"
+        if gaps:
+            schema_detail += f"，缺字段 {gaps}"
+    except Exception as exc:  # noqa: BLE001 - 门禁要看到真实错误
+        schema_ok = False
+        schema_detail = f"{type(exc).__name__}: {exc}"
+    record(
+        "collection_schema_owned",
+        schema_ok,
+        schema_detail,
+        value=1.0 if schema_ok else 0.0,
+        floor=1.0,
+    )
+
+    ascii_term, chinese_term = _sample_terms(settings)
+    ascii_ok, ascii_detail = _bm25_probe(settings, ascii_term)
+    record("bm25_ascii_hit", ascii_ok, ascii_detail, value=1.0 if ascii_ok else 0.0, floor=1.0)
+
+    chinese_ok, chinese_detail = _bm25_probe(settings, chinese_term)
+    record(
+        "bm25_chinese_hit", chinese_ok, chinese_detail, value=1.0 if chinese_ok else 0.0, floor=1.0
+    )
 
     # 5：erase 残留
     service.erase(

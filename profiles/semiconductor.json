@@ -3,66 +3,114 @@
   "types": {
     "profile": {
       "extractor": "profile",
-      "source_roles": ["user"],
+      "source_roles": [
+        "user"
+      ],
       "conflict": "overwrite",
       "retention": "forever",
       "classification": "personal",
-      "description": "用户画像：角色、负责的产线与工艺段"
+      "description": "用户画像：角色、负责的产线与工艺段",
+      "recall": {
+        "path": "fact",
+        "budget": 200
+      }
     },
     "preference": {
       "extractor": "mem0",
-      "source_roles": ["user"],
+      "source_roles": [
+        "user"
+      ],
       "conflict": "overwrite",
       "retention": "forever",
       "classification": "personal",
-      "description": "偏好与习惯（如常用 EDA 工具、报表口径）"
+      "description": "偏好与习惯（如常用 EDA 工具、报表口径）",
+      "recall": {
+        "path": "fact",
+        "budget": 200
+      }
     },
     "process_preference": {
       "extractor": "mem0",
-      "source_roles": ["user"],
+      "source_roles": [
+        "user"
+      ],
       "conflict": "overwrite",
       "retention": "forever",
       "classification": "personal",
-      "description": "工艺与设备相关的事实：制程节点偏好、常用机台、良率敏感点"
+      "description": "工艺与设备相关的事实：制程节点偏好、常用机台、良率敏感点",
+      "recall": {
+        "path": "fact",
+        "budget": 400
+      }
     },
     "equipment_context": {
       "extractor": "mem0",
-      "source_roles": ["user", "tool"],
+      "source_roles": [
+        "user",
+        "tool"
+      ],
       "conflict": "append",
       "retention": "ttl",
       "ttl_days": 180,
       "classification": "personal",
-      "description": "设备与量测上下文，时效性强"
+      "description": "设备与量测上下文，时效性强",
+      "recall": {
+        "path": "fact",
+        "budget": 300
+      }
     },
     "event": {
       "extractor": "mem0",
-      "source_roles": ["user", "tool"],
+      "source_roles": [
+        "user",
+        "tool"
+      ],
       "conflict": "append",
       "retention": "forever",
       "classification": "personal",
-      "description": "已发生的事件：流片、异常、验收、交付节点"
+      "description": "已发生的事件：流片、异常、验收、交付节点",
+      "recall": {
+        "path": "fact",
+        "budget": 300
+      }
     },
     "state": {
       "extractor": "mem0",
-      "source_roles": ["user", "tool"],
+      "source_roles": [
+        "user",
+        "tool"
+      ],
       "conflict": "overwrite",
       "retention": "ttl",
       "ttl_days": 90,
       "classification": "personal",
-      "description": "会过期的状态：当前批次良率、在手工单"
+      "description": "会过期的状态：当前批次良率、在手工单",
+      "recall": {
+        "path": "fact",
+        "budget": 200
+      }
     },
     "commitment": {
       "extractor": "mem0",
-      "source_roles": ["user", "tool"],
+      "source_roles": [
+        "user",
+        "tool"
+      ],
       "conflict": "append",
       "retention": "ttl",
       "ttl_days": 30,
       "classification": "personal",
-      "description": "承诺与待办：什么时候回复、什么时候复测"
+      "description": "承诺与待办：什么时候回复、什么时候复测",
+      "recall": {
+        "path": "fact",
+        "budget": 200
+      }
     },
     "procedure": {
       "extractor": "none",
-      "source_roles": ["admin"],
+      "source_roles": [
+        "admin"
+      ],
       "conflict": "none",
       "retention": "forever",
       "classification": "restricted",
