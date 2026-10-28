@@ -6,6 +6,17 @@
 约束整段丢掉。ADR-0014。
 
 全局默认放在这里而不是后端适配器里：它是领域策略，后端只负责传参。
+
+这份指令的形状是量出来的，不是想出来的（``tests/script/eval_prompt_ab.py``，
+16 条垂类语料、真实 LLM）：
+
+- 逐条消融显示第 1（语言）、2（输出形状）、5（一事一记忆）、6（无 assistant
+  轮次也要抽）四条承重，去掉任何一条都会让空抽率从 0 涨到 0.5–1.0。
+  **这份指令不能靠删规则瘦身**：精简版（去掉输出形状与空列表条款）
+  实测空抽率 1.00，一条事实都抽不出来。
+- 真正把覆盖率从 0.70 抬到 1.00 的是第 8 条（一条消息含多件事实时要全抽）
+  加一个两事实的示例。示例内容刻意用物流场景，与评测语料、门禁语料都不
+  重叠：用语料里的内容做示例也能拿 1.00，那是抄题，不是抽取能力。
 """
 
 from __future__ import annotations
@@ -17,7 +28,12 @@ DEFAULT_EXTRACTION_INSTRUCTIONS = """Additional requirements:
 4. Corrections write only the new value, never re-state the old one. When the user says "不叫 X，叫 Y" or "改成 Y", record only the new fact Y. Do NOT include X in the same memory text. The superseded memory is handled by a separate update path; your job is to surface the current truth, not the audit trail.
 5. One fact per memory. If a turn contains multiple distinct facts, emit one memory per fact. Never combine "X is Y" + "X is Z" into a single memory.
 6. The "New Messages" section may contain a "user", a "tool" or a "system" message; extract the facts from whichever message is present. NEVER return an empty list merely because there is no assistant turn to extract from.
-7. Facts include the user's own work and business context: responsibilities, process / equipment / tool facts, targets, requirements, constraints, deadlines, customer information, complaints, and numeric specifics (percentages, process nodes, tolerances). If the user's message contains ANY of these, extract at least one memory about it - returning an empty list for such a message is WRONG. Return an empty list ONLY for messages that truly contain no personal, work or business fact (pure greetings or acknowledgements)."""
+7. Facts include the user's own work and business context: responsibilities, process / equipment / tool facts, targets, requirements, constraints, deadlines, customer information, complaints, and numeric specifics (percentages, process nodes, tolerances). If the user's message contains ANY of these, extract at least one memory about it - returning an empty list for such a message is WRONG. Return an empty list ONLY for messages that truly contain no personal, work or business fact (pure greetings or acknowledgements).
+8. One message often carries two or more facts (which tool and which metrology tool, which process step and which defect, target and current value). Extract ALL of them: one memory per fact, never stop after the first.
+
+Example:
+Input: 我负责华东仓的库存周转，目标是每季度压到 4 轮。
+Output: {"memory": [{"id": "0", "text": "用户负责华东仓的库存周转。"}, {"id": "1", "text": "用户的库存周转目标是每季度压到 4 轮。"}]}"""
 
 
 def build_extraction_prompt(
