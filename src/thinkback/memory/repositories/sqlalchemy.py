@@ -66,10 +66,13 @@ class SqlAlchemyMemoryRepository(L1CacheMixin):
         session_factory: async_sessionmaker[AsyncSession] = SessionLocal,
         *,
         operation_timeout_seconds: float | None = None,
+        l1_cache_enabled: bool = True,
     ) -> None:
         if operation_timeout_seconds is not None and operation_timeout_seconds <= 0:
             raise ValueError("operation_timeout_seconds must be > 0")
         self.session_factory = session_factory
+        # 关掉后 L1 走读穿透（每次回源 PG）。多副本部署必须关。
+        self.l1_cache_enabled = l1_cache_enabled
         self.operation_timeout_seconds = (
             operation_timeout_seconds
             if operation_timeout_seconds is not None
