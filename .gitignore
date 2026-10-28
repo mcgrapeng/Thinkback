@@ -52,6 +52,7 @@ coverage.xml
 cover/
 # mutmut 变异树（make mutation-audit 生成）
 mutants/
+.mutmut-cache
 # pytest-testmon 影响分析数据库（make test-fast 生成）
 .testmondata
 
@@ -236,6 +237,7 @@ docs/superpowers/
 
 # 前端
 web/node_modules/
+web/node_modules
 web/dist/
 web/tsconfig.tsbuildinfo
 # Vite 缓存 / Playwright 报告
@@ -315,3 +317,5 @@ playwright/.cache/
 .planning
 
 # Untracked 2026-10 — docs/ is local-only iteration; kept on disk, not in git
+docs
+.claude-flow
