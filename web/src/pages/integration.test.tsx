@@ -1,80 +1,49 @@
-/** 集成页冒烟：API Key 列表/空态渲染 + mem0 配置区挂载。
- *  fetch 全量打桩，确定性无网络。 */
+/** 集成页冒烟：当前契约参考是**只读**的，不再有任何 API Key 管理写操作。
+ *  断言重点：业务/管理端点清单、信任边界说明、异步写入与擦除语义都在页面上。 */
 
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import { IntegrationPage } from "./integration";
 
-function stubFetch(routes: Record<string, unknown>): void {
-  vi.stubGlobal(
-    "fetch",
-    vi.fn(async (input: RequestInfo | URL) => {
-      const url = String(input);
-      const payload = Object.entries(routes).find(([path]) => url.includes(path))?.[1] ?? [];
-      return new Response(JSON.stringify(payload), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      });
-    }),
-  );
-}
-
 function renderPage(): void {
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false } },
-  });
-  render(
-    <QueryClientProvider client={queryClient}>
-      <IntegrationPage />
-    </QueryClientProvider>,
-  );
+  render(<IntegrationPage />);
 }
-
-afterEach(() => {
-  vi.unstubAllGlobals();
-});
 
 describe("IntegrationPage", () => {
-  it("列出 API Key 卡片", async () => {
-    stubFetch({
-      "/admin/api/integration/keys": [
-        {
-          key_id: "key-smoke-1",
-          tenant_id: "tenant-dev",
-          scopes: ["memory:recall"],
-          plan: "pro",
-          rate_limit_per_minute: 60,
-          rate_limit_burst: 120,
-          is_active: true,
-          created_at: "2026-05-04T10:00:00Z",
-        },
-      ],
-    });
+  it("展示当前业务端点，且不再出现已下线的 v1 接口", () => {
     renderPage();
 
-    expect(await screen.findByText("API Keys")).toBeInTheDocument();
-    expect(await screen.findByText("key-smoke-1")).toBeInTheDocument();
+    expect(screen.getByText("业务端点")).toBeInTheDocument();
+    expect(screen.getAllByText("/memory/append").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("/memory/recall").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("/memory/erase").length).toBeGreaterThan(0);
+    expect(screen.queryByText("/v1/memory/append")).not.toBeInTheDocument();
+    expect(screen.queryByText("API Keys")).not.toBeInTheDocument();
   });
 
-  it("无 Key 时展示空态引导", async () => {
-    stubFetch({
-      "/admin/api/integration/keys": [],
-    });
+  it("说明信任边界是网络边界，管理端点用 ADMIN_TOKEN", () => {
     renderPage();
 
-    expect(await screen.findByText("还没有 API Key")).toBeInTheDocument();
+    expect(screen.getAllByText("业务面免鉴权").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("信任边界 = 网络边界").length).toBeGreaterThan(0);
+    expect(screen.getByText("管理端点")).toBeInTheDocument();
+    expect(screen.getAllByText("/admin/api/overview").length).toBeGreaterThan(0);
   });
 
-  it("加载失败展示错误态与重试", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => new Response("boom", { status: 500 })),
-    );
+  it("写明异步写入返回 accepted、擦除后同一 round 不可重写", () => {
     renderPage();
 
-    expect(await screen.findByText("无法加载 API Key 列表")).toBeInTheDocument();
-    expect(screen.getAllByRole("button", { name: "重试" }).length).toBeGreaterThan(0);
+    expect(screen.getByText("写入语义与幂等")).toBeInTheDocument();
+    expect(screen.getByText('status="accepted"')).toBeInTheDocument();
+    expect(screen.getByText("擦除后不可重写")).toBeInTheDocument();
+    expect(screen.getByText("409")).toBeInTheDocument();
+  });
+
+  it("列出标准化错误码", () => {
+    renderPage();
+
+    expect(screen.getByText("TB-1005")).toBeInTheDocument();
+    expect(screen.getByText("TB-1007")).toBeInTheDocument();
   });
 });
