@@ -3113,6 +3113,7 @@ L2 更新 (缓存失效)
                 source_refs=entry.source_refs,
                 valid_at=entry.valid_at,
                 invalid_at=entry.invalid_at,
+                expires_at=getattr(entry, "expires_at", None),
                 last_recalled_at=entry.last_recalled_at,
                 recall_count=entry.recall_count,
                 conflict_slot=memory_conflict_slot(entry.memory_text),

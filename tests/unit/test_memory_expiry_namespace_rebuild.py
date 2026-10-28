@@ -169,6 +169,18 @@ def test_append_with_ttl_type_stores_expiry_on_index_row() -> None:
         assert row.recorded_at <= now
 
 
+def test_admin_list_exposes_expiry_without_hiding_the_entry() -> None:
+    """治理台保留过期条目（否则擦除不了），但必须说清它什么时候到期。"""
+    repository = InMemoryMemoryRepository()
+    service = MemoryService(repository=repository, backend=FakeMemoryBackend())
+    _expired_row(repository, backend_id="expired-admin", text="User lives in 北京")
+
+    result = service.admin_list_memories(user_id="user-1")
+
+    assert result["items"], "治理台要保留过期条目，否则运营无法发现并擦除它"
+    assert result["items"][0].expires_at is not None
+
+
 def test_forever_type_has_no_expiry_on_index_row() -> None:
     """非 TTL 类型不带过期时刻（None = 永不过期）。"""
     repository = InMemoryMemoryRepository()
