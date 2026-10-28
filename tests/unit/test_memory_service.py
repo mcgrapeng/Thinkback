@@ -9144,6 +9144,9 @@ def test_healthy_long_task_is_not_reclaimed_while_worker_alive(monkeypatch) -> N
 
     time.sleep(0.4)  # 超过孤儿阈值，但心跳仍在刷新任务行
 
+    # 集合级回收也必须什么都不收：心跳把任务行刷新得很新。
+    assert service.reclaim_orphan_running_tasks() == []
+
     task = service.get_task("memory-extract:r-heartbeat")
     assert task is not None
     assert task.status is TaskStatus.RUNNING
