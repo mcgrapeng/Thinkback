@@ -382,6 +382,7 @@ class MemoryBackend(Protocol):
         metadata: dict[str, Any] | None = None,
         infer: bool = True,
         expiration_date: str | None = None,
+        prompt: str | None = None,
     ) -> list[dict[str, Any]]:
         """写入若干条消息并返回抽取出的事件摘要列表。
 
@@ -390,6 +391,10 @@ class MemoryBackend(Protocol):
 
         ``expiration_date``（YYYY-MM-DD）交给引擎做 TTL：过期记忆由 Mem0 在
         检索时隐藏（show_expired=False），Thinkback 不自己实现过期。
+
+        ``prompt`` 是本次写入的抽取指令。引擎每次写入只能带一份指令，且是
+        **覆盖**配置级默认值，所以全局默认与类型指令由 Thinkback 拼好再传
+        （ADR-0014）。传 None 时引擎用配置级默认值。
 
         返回列表的元素通常形如 ``{"id": ..., "memory": ..., "event": "ADD|UPDATE"}``。
         """
@@ -403,8 +408,13 @@ class MemoryBackend(Protocol):
         memory_scope_id: str,
         limit: int,
         threshold: float | None = None,
+        explain: bool = False,
     ) -> list[dict[str, Any]]:
-        """语义检索：按 query 在 user+scope 范围内找最相关的 limit 条记忆。"""
+        """语义检索：按 query 在 user+scope 范围内找最相关的 limit 条记忆。
+
+        ``explain=True`` 让引擎返回分数分解（semantic / bm25 / entity），
+        否则 BM25 与 entity 的贡献在服务侧不可观测（ADR-0003）。
+        """
         ...
 
     def update(self, memory_id: str, data: str) -> None:

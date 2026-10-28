@@ -149,44 +149,39 @@ def build_registry_provider(
 
     profile 目录约定：``<dir>/<namespace>.json``。
 
-    加载失败的处理分两种：
-    - 开发环境：回落默认注册表并告警，不挡住服务启动。
-    - 生产环境：**报错**。静默换一套策略等于让企业以为在跑自己的记忆
-      类型规则，实际跑的是内置默认规则 —— 这类「配置看起来生效了」比启动
-      失败危险得多。
+    两种失败分开处理：
+    - **配置缺失**（该 namespace 没有 profile 文件）：生产环境报错；开发
+      环境回落默认注册表，因为开发期 namespace 可能还没配。
+    - **配置非法**（解析失败、字段未知、取值非法）：**任何环境都报错**。
+      静默换一套策略等于让企业以为在跑自己的记忆类型规则，实际跑的是
+      内置默认规则 —— 这类「配置看起来生效了」比启动失败危险得多。
+      ADR-0004 / D29。
     """
     current_settings = config or settings
     profile_dir = Path(current_settings.memory_type_profile_dir)
     strict = current_settings.environment == "production"
 
     def provider(namespace: str) -> MemoryTypeRegistry:
-        try:
-            if (
-                strict
-                and namespace != DEFAULT_NAMESPACE
-                and not has_profile(profile_dir, namespace)
-            ):
+        if not has_profile(profile_dir, namespace):
+            if strict and namespace != DEFAULT_NAMESPACE:
                 # 非默认 namespace 却没有任何 profile：说明部署漏了配置。
                 # 静默用默认注册表 = 行业类型全部「未注册」，而调用方以为
                 # 自己的类型规则在生效。
-                raise FileNotFoundError(
+                raise RuntimeError(
                     f"no memory type profile for namespace {namespace!r} in {profile_dir}"
                 )
+            return default_registry()
+        try:
             return load_registry(profile_dir, namespace)
         except (OSError, ValueError, json.JSONDecodeError) as exc:
             logger.bind(
                 namespace=namespace,
                 profile_dir=str(profile_dir),
                 error_type=type(exc).__name__,
-            ).warning("memory type profile load failed")
-            if strict:
-                raise RuntimeError(
-                    f"memory type profile for namespace {namespace!r} could not be loaded: {exc}"
-                ) from exc
-            logger.bind(namespace=namespace).warning(
-                "memory type profile load failed, using default registry"
-            )
-            return default_registry()
+            ).error("memory type profile load failed")
+            raise RuntimeError(
+                f"memory type profile for namespace {namespace!r} could not be loaded: {exc}"
+            ) from exc
 
     return provider
 

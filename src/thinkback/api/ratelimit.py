@@ -45,7 +45,7 @@ class TokenBucket:
 class RateLimitMiddleware(BaseHTTPMiddleware):
     """只对 /v1/* 路径做 API key 级限流。
 
-    /memory/*、/admin/api/*、/health 等内部路径不走限流。
+    /v2/memory/*、/admin/api/*、/health 等内部路径不走限流。
     """
 
     def __init__(
@@ -89,7 +89,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
         path = request.url.path
         # 只限流业务记忆路径；admin/health/docs 走各自通道。
-        if not path.startswith("/memory/"):
+        if not path.startswith("/v2/memory/"):
             return await call_next(request)
         if path in self.exclude_paths:
             return await call_next(request)

@@ -29,7 +29,7 @@ from thinkback.api.errors_standard import COMMON_ERROR_RESPONSES
 from thinkback.api.metrics import record_event
 from thinkback.infra.config import settings
 from thinkback.memory.schemas import (
-    AppendMemoryRequest,
+    AppendEventRequest,
     AppendMemoryResponse,
     DeleteMemoryRequest,
     DeleteMemoryResponse,
@@ -45,7 +45,9 @@ from thinkback.memory.schemas import (
 from thinkback.memory.service import MemoryService
 
 router = APIRouter(
-    prefix="/memory",
+    # v2 契约：路径带版本前缀。旧的 /memory/* 路由已撤掉，不并存 ——
+    # 两套语义并存只会各自漂移，最后没人说得清哪套是契约（ADR-0011）。
+    prefix="/v2/memory",
     tags=["memory"],
     responses={
         **COMMON_ERROR_RESPONSES,
@@ -260,17 +262,18 @@ async def _run_memory_call_in_pool[**P, R](
 
 
 @router.post(
-    "/append",
+    "/events",
     response_model=AppendMemoryResponse,
-    summary="写入一轮对话记忆",
-    operation_id="memory_append",
+    summary="写入一条原始事件",
+    operation_id="memory_append_event",
     description=(
-        "写入一个完整 user -> assistant 轮次，生成可靠轮次记录，"
-        "并触发 L1/L2 更新和 L3 长期记忆沉淀。"
+        "写入一条原始事件（SourceEvent）。事件的 event_id 同时是幂等锚点，"
+        "必须全局唯一。角色放开到 user / assistant / tool / system，"
+        "哪类角色能成为某个记忆类型的事实由类型的 source_roles 决定。"
     ),
 )
 async def append_memory(
-    request: AppendMemoryRequest,
+    request: AppendEventRequest,
     service: MemoryService = Depends(get_memory_service),
 ) -> AppendMemoryResponse:
     """写入一轮对话记忆，触发 L1/L2 更新与 L3 沉淀。
@@ -316,11 +319,12 @@ async def append_memory(
     logger.bind(
         user_id=request.user_id,
         session_id=request.session_id,
-        round_id=request.round_id,
-        message_count=len(request.messages),
+        event_id=request.event.event_id,
+        role=str(request.event.role),
+        source=request.event.source,
     ).debug("memory append request received")
     try:
-        response = await _run_write_memory_call(service.append, request)
+        response = await _run_write_memory_call(service.append, request.to_internal())
     except Exception:
         record_event("append_fail")
         raise

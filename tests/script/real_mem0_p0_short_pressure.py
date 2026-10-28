@@ -1,6 +1,6 @@
 """P0 short pressure suite for real thinkback -> Mem0 -> Milvus checks.
 
-V1 边界：本脚本 rebuild 子流程依赖 `POST /memory/rebuild`，但 V1 不对外暴露该端点
+V1 边界：本脚本 rebuild 子流程依赖 `POST /v2/memory/rebuild`，但 V1 不对外暴露该端点
 （取舍见 docs/memory/Thinkback记忆三层架构.md §0.2 / §5）。本脚本相关段落已临时跳过，
 完整 rebuild 真实链路验证作为 V2/V3 整体清理的一部分按 §0.2 推进。
 """
@@ -556,7 +556,7 @@ def _run_delete_rebuild_probe(
     )
     delete_response = _post_json(
         base_url,
-        "/memory/delete",
+        "/v2/memory/delete",
         {
             "request_id": scope.request_id("delete-cat"),
             "user_id": scope.user_id,
@@ -570,10 +570,10 @@ def _run_delete_rebuild_probe(
     )
     if delete_response.get("affected_memories") != 1:
         raise RuntimeError(f"delete did not affect one memory: {delete_response}")
-    # V1: POST /memory/rebuild 已下线，rebuild 子流程在 V2/V3 清理范围内（见架构文档 §0.2 / §5）。
+    # V1: POST /v2/memory/rebuild 已下线，rebuild 子流程在 V2/V3 清理范围内（见架构文档 §0.2 / §5）。
     # 本段跳过 rebuild HTTP 调用与依赖 rebuild 结果的后续断言；返回明确 stub 以保持调用方契约。
     print(
-        "[v1-skip] /memory/rebuild not exposed in V1; "
+        "[v1-skip] /v2/memory/rebuild not exposed in V1; "
         "skipping rebuild call and rebuild-dependent assertions"
     )
     return {

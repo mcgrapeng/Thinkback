@@ -1,4 +1,4 @@
-// k6 冒烟压测：真实后端（内网免鉴权，/memory/* 为唯一业务面，不进 make check）。
+// k6 冒烟压测：真实后端（内网免鉴权，/v2/memory/* 为唯一业务面，不进 make check）。
 //
 //   make load-smoke BASE_URL=http://127.0.0.1:7002
 //
@@ -50,7 +50,7 @@ function headers(iter) {
 // 轮询后台任务到终态；返回任务对象，未进入终态返回 null。
 function pollTask(taskId, iter) {
   for (let i = 0; i < TASK_POLL_MAX; i++) {
-    const res = http.get(`${BASE_URL}/memory/tasks/${encodeURIComponent(taskId)}`, {
+    const res = http.get(`${BASE_URL}/v2/memory/tasks/${encodeURIComponent(taskId)}`, {
       headers: headers(iter),
       tags: { op: "task" },
     });
@@ -119,17 +119,18 @@ export default function () {
   const userId = `k6-user-${RUN_ID}-${__VU}-${__ITER}`;
   const sessionId = `k6-session-${RUN_ID}-${__VU}-${__ITER}`;
   const append = http.post(
-    `${BASE_URL}/memory/append`,
+    `${BASE_URL}/v2/memory/events`,
     JSON.stringify({
       request_id: `k6-${RUN_ID}-${__VU}-${__ITER}`,
       user_id: userId,
       session_id: sessionId,
-      round_id: `k6-round-${RUN_ID}-${__VU}-${__ITER}`,
-      messages: [
-        { message_id: "m1", role: "user", content: fact, timestamp: ts },
-        { message_id: "m2", role: "assistant", content: "好的，已记住", timestamp: ts },
-      ],
-      source_timestamp: ts,
+      event: {
+        event_id: `k6-round-${RUN_ID}-${__VU}-${__ITER}`,
+        source: "chat_round",
+        role: "user",
+        payload: fact,
+        occurred_at: ts,
+      },
     }),
     { headers: headers(__ITER), tags: { op: "append" } },
   );
@@ -141,7 +142,7 @@ export default function () {
   check(task, { "append task completed": (t) => t !== null && t.status === "completed" });
 
   const recall = http.post(
-    `${BASE_URL}/memory/recall`,
+    `${BASE_URL}/v2/memory/recall`,
     JSON.stringify({
       user_id: userId,
       session_id: sessionId,

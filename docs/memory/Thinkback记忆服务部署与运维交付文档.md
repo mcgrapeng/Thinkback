@@ -12,7 +12,7 @@
 
 | 组件 | 用途 |
 | --- | --- |
-| FastAPI app | 对外提供 `/memory/*` 和健康检查 |
+| FastAPI app | 对外提供 `/v2/memory/*` 和健康检查 |
 | PostgreSQL | 保存 L2、可靠轮次、L3 业务索引和任务状态 |
 | Redis | Celery broker/result backend 和运行时基础设施 |
 | Mem0 Library | 嵌入 thinkback 进程内的 L3 长期记忆引擎 |
@@ -173,8 +173,8 @@ Mem0 L3 抽取在后台任务中沉淀，避免外部 LLM/Embedding 抖动把写
 
 | 变量 | 直白解释 |
 | --- | --- |
-| `MEMORY_API_WORKER_LIMIT` | `/memory/*` 读池和写池各自进入线程池的并发上限；调大后外部依赖压力也会增加 |
-| `MEMORY_API_WORKER_WAIT_SECONDS` | `/memory/*` 路由进入同步 worker 并等待返回的总时间窗口；超过后返回可重试的 503，worker 线程可能仍在继续执行 |
+| `MEMORY_API_WORKER_LIMIT` | `/v2/memory/*` 读池和写池各自进入线程池的并发上限；调大后外部依赖压力也会增加 |
+| `MEMORY_API_WORKER_WAIT_SECONDS` | `/v2/memory/*` 路由进入同步 worker 并等待返回的总时间窗口；超过后返回可重试的 503，worker 线程可能仍在继续执行 |
 | `MEMORY_L3_EXECUTOR_WORKERS` | L3 后台抽取线程数，影响 Mem0 写入并发，不影响 append 已经完成可靠轮次存储这件事 |
 | `MEMORY_L3_MAX_PENDING_TASKS` | L3 后台写入队列容量，队列满时 append 会触发背压，避免无限堆积 |
 | `MEMORY_L3_QUEUE_WAIT_SECONDS` | 队列接近满时最多等待多久，超过后仍无容量，会返回明确错误而不是静默丢任务 |
@@ -241,16 +241,16 @@ Celery worker 目前只承载诊断任务和后续异步任务扩展入口；只
 
 | 接口 | 用途 |
 | --- | --- |
-| `POST /memory/append` | 写入一个完整 user -> assistant 轮次，生成可靠轮次记录，并触发 L1/L2 更新和 L3 长期记忆沉淀 |
-| `POST /memory/recall` | 按 user、session 和 query 召回 L1/L2/L3 记忆，并返回降级状态和原因 |
-| `POST /memory/delete` | 按单条 memory、session 或用户全局范围删除记忆，并记录删除任务和摘要脏标记 |
-| `GET /memory/items` | 列出当前用户可管理的长期记忆；默认只返回 `ACTIVE` 业务记忆 |
-| `GET /memory/items/{memory_id}` | 查询单条可管理长期记忆，不暴露内部作用域、backend id 或 source refs |
-| `POST /memory/update` | 编辑单条 `ACTIVE` 长期记忆，并记录编辑任务和摘要脏标记 |
-| `GET /memory/tasks/{task_id}` | 查询写入、编辑、删除任务的执行状态、错误和结果 |
-| `GET /memory/l3/background-status` | 查看 L3 后台写入模式、线程池、排队任务数和剩余容量 |
+| `POST /v2/memory/events` | 写入一个完整 user -> assistant 轮次，生成可靠轮次记录，并触发 L1/L2 更新和 L3 长期记忆沉淀 |
+| `POST /v2/memory/recall` | 按 user、session 和 query 召回 L1/L2/L3 记忆，并返回降级状态和原因 |
+| `POST /v2/memory/delete` | 按单条 memory、session 或用户全局范围删除记忆，并记录删除任务和摘要脏标记 |
+| `GET /v2/memory/items` | 列出当前用户可管理的长期记忆；默认只返回 `ACTIVE` 业务记忆 |
+| `GET /v2/memory/items/{memory_id}` | 查询单条可管理长期记忆，不暴露内部作用域、backend id 或 source refs |
+| `POST /v2/memory/update` | 编辑单条 `ACTIVE` 长期记忆，并记录编辑任务和摘要脏标记 |
+| `GET /v2/memory/tasks/{task_id}` | 查询写入、编辑、删除任务的执行状态、错误和结果 |
+| `GET /v2/memory/l3/background-status` | 查看 L3 后台写入模式、线程池、排队任务数和剩余容量 |
 
-V1 不对外暴露 `POST /memory/rebuild` HTTP 端点；`MemoryService.rebuild()` 作为内部能力保留，仅供运维脚本和真实质量回归通过 Python 级调用触发。
+V1 不对外暴露 `POST /v2/memory/rebuild` HTTP 端点；`MemoryService.rebuild()` 作为内部能力保留，仅供运维脚本和真实质量回归通过 Python 级调用触发。
 具体取舍见 [Thinkback记忆三层架构](Thinkback记忆三层架构.md) 第 5 节。
 
 ### 1.5 健康检查
@@ -280,7 +280,7 @@ password authentication failed for user "postgres"
 当前仓库保留真实主链路脚本作为验证入口。
 `make real-test` 面向本地或受控验证环境，直接构造真实 `SqlAlchemyMemoryRepository`
 和真实 Mem0 Library 后端运行 5 轮主链路，不经过 HTTP API。
-HTTP 部署后的 smoke test 应另行通过 `/memory/*` 接口执行。
+HTTP 部署后的 smoke test 应另行通过 `/v2/memory/*` 接口执行。
 质量回归使用 `tests/script/real_mem0_quality_regression.py` / `tests/script/run_real_mem0_quality_evaluation.py`；
 性能稳定性使用 `tests/script/real_mem0_stability_preprod.py` 和 P0 压测脚本；
 当前仓库不再维护独立质量评测方案、报告字段、报告模板或性能稳定性方案文档。
@@ -373,7 +373,7 @@ readiness 只做诊断性依赖探测，用于暴露 LLM、Embedding、Mem0 或 
 
 当前 L3 异步写入执行位置沿用第 1.3 节口径，不依赖 Celery worker 消费。
 Celery worker 目前只承载诊断任务和后续异步任务扩展入口。
-排查 L3 后台积压时，应优先查看 API 日志、`ins_memory_task` 和 `/memory/l3/background-status`。
+排查 L3 后台积压时，应优先查看 API 日志、`ins_memory_task` 和 `/v2/memory/l3/background-status`。
 
 #### 2.2.1 业务可见性边界
 
@@ -384,7 +384,7 @@ thinkback 当前主链路采用 `MEMORY_L3_WRITE_MODE=async`，业务可见性�
 | 同会话紧接 recall（刚 append 完立即查） | 立即可见 | 该轮已写入 `ins_summary_round_journal` 并刷新 L1，recall 通过 L1 即可拿到 |
 | 同会话内 L2 摘要相关召回 | 立即可见 | L2 在 append 同步路径里更新 |
 | 跨会话恢复（新 session 召回上一会话沉淀的事实） | **存在秒级到分钟级延迟** | L3 Mem0 抽取在后台执行器中沉淀，延迟取决于 L3 队列长度、Mem0 抽取耗时和外部 LLM / Embedding 响应时间；调用方不应假设 append 完成后立即可跨会话恢复 |
-| 调用方需要确认 L3 已沉淀 | 通过任务态查询 | 轮询 `GET /memory/tasks/{task_id}` 或 `GET /memory/l3/background-status`；`l3_replay_status=completed` 才代表 L3 沉淀完成 |
+| 调用方需要确认 L3 已沉淀 | 通过任务态查询 | 轮询 `GET /v2/memory/tasks/{task_id}` 或 `GET /v2/memory/l3/background-status`；`l3_replay_status=completed` 才代表 L3 沉淀完成 |
 
 这条边界是当前首版的明确取舍：append 接口的延迟优先保证对话流不被外部 LLM/Embedding 抖动拖死，代价是 L3 跨会话可见性不是同步契约。
 真实压测样本和 SLO 基线由 `tests/script/real_mem0_p0_*` 脚本采集，调用方按这条 SLO 设计上游对话编排逻辑，不要假设记忆服务做了同步等待。
@@ -606,7 +606,7 @@ thinkback-secret
 | `READINESS_TIMEOUT_SECONDS` | 当前基线 `3`；K8s readinessProbe `timeoutSeconds` 当前为 `5`，必须不小于该值且小于 `periodSeconds` |
 
 `MEMORY_API_WORKER_LIMIT` 是 API 读池和写池各自的同步工作线程上限，不是单进程全局唯一线程数上限。
-`MEMORY_API_WORKER_WAIT_SECONDS` 同时约束 `/memory/*` 路由等待同步 worker 和等待同步调用返回的总时间窗口；超过后会返回可重试 503。
+`MEMORY_API_WORKER_WAIT_SECONDS` 同时约束 `/v2/memory/*` 路由等待同步 worker 和等待同步调用返回的总时间窗口；超过后会返回可重试 503。
 503 只表示 HTTP 层等待超时或 worker 队列满，不保证后端业务操作已经取消。
 调用方重试 append 必须复用原 `round_id`，重试 update/delete/rebuild 必须复用原 `operation_id`，并可用返回或已知的 `task_id` 查询最终状态。
 update 的完成幂等只在目标记忆仍是该次编辑结果时返回 `already_done`；如果同一记忆已被后续编辑或删除，旧 `operation_id` 重试会返回冲突，调用方应以当前管理列表或详情为准重新决策。
@@ -909,7 +909,7 @@ kubectl describe deployment thinkback-api
 
 - `ins_summary_round_journal`（可靠轮次账本）和 L1/L2 缓存**不受影响**，该轮次的对话上下文仍可被同会话延续召回；
 - 对应的 L3 长期记忆**抽取丢失**，跨会话恢复时该事实可能召回不到；
-- 调用方按原 `round_id` 重试 `/memory/append` 会命中 `already_done`（task 仍是 RUNNING），不会重新触发抽取。
+- 调用方按原 `round_id` 重试 `/v2/memory/events` 会命中 `already_done`（task 仍是 RUNNING），不会重新触发抽取。
 
 V1 运维处置（手工）：
 
@@ -928,7 +928,7 @@ WHERE task_id IN (...);
 
 恢复路径：
 
-- append 类（`memory-extract:{round_id}`）：标 FAILED 后上游用同 `round_id` 重发 `/memory/append`，V1 会走 FAILED 重试分支重新提交 L3 抽取；
+- append 类（`memory-extract:{round_id}`）：标 FAILED 后上游用同 `round_id` 重发 `/v2/memory/events`，V1 会走 FAILED 重试分支重新提交 L3 抽取；
 - update / delete / rebuild 类：上游用同 `operation_id` 重发；如果同一记忆已被后续编辑或删除，旧 update 操作会按冲突处理，避免返回错误的当前正文。
 
 未来版本：V2/V3 计划补 startup-time reaper（进程启动时自动扫超时 RUNNING task 标 FAILED），消除手工处置环节；当前 V1 不引入额外配置项或定时任务，明确以人工 SOP 兜底。

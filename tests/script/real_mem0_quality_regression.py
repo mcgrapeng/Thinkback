@@ -1,6 +1,6 @@
 """Focused real-quality regression checks for thinkback -> Mem0 -> Milvus.
 
-V1 边界：本脚本 rebuild 子流程依赖 `POST /memory/rebuild`，但 V1 不对外暴露该端点
+V1 边界：本脚本 rebuild 子流程依赖 `POST /v2/memory/rebuild`，但 V1 不对外暴露该端点
 （取舍见 docs/memory/Thinkback记忆三层架构.md §0.2 / §5）。本脚本相关段落已临时跳过，
 完整 rebuild 真实链路验证作为 V2/V3 整体清理的一部分按 §0.2 推进。
 """
@@ -12,7 +12,7 @@ import os
 import re
 import time
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
@@ -495,14 +495,14 @@ def _wait_for_l3_drain(
 ) -> dict[str, Any]:
     """等 L3 后台写入队列排空（async 模式下确保 recall 能看到刚 append 的事实）。
 
-    轮询 ``/memory/l3/background-status`` 直到 ``pending_write_tasks == 0``
+    轮询 ``/v2/memory/l3/background-status`` 直到 ``pending_write_tasks == 0``
     或超时（V1 不暴露 drain endpoint，只能靠轮询）。
     """
     deadline = time.monotonic() + timeout_seconds
     last_status: dict[str, Any] = {}
     while time.monotonic() < deadline:
         # 全局 background-status 是唯一稳定的 drain 信号
-        bg = _get_json(base_url, "/memory/l3/background-status")
+        bg = _get_json(base_url, "/v2/memory/l3/background-status")
         last_status = bg
         if bg.get("pending_write_tasks", 1) == 0 and bg.get("cleanup_tasks", 0) == 0:
             return bg
@@ -631,28 +631,19 @@ def _append_round(
     timestamp = datetime(2026, 5, 6, 10, index, tzinfo=UTC)
     response = _post_json(
         base_url,
-        "/memory/append",
+        "/v2/memory/events",
         {
             "request_id": scope.request_id(f"append-{index}"),
             "user_id": scope.user_id,
             "session_id": scope.session_id,
-            "round_id": scope.round_id(index),
             "round_index": index,
-            "messages": [
-                {
-                    "message_id": f"{scope.run_id}-{index}-user",
-                    "role": "user",
-                    "content": user_text,
-                    "timestamp": timestamp.isoformat(),
-                },
-                {
-                    "message_id": f"{scope.run_id}-{index}-assistant",
-                    "role": "assistant",
-                    "content": "我会记住这个信息，并按当前事实更新后续称呼。",
-                    "timestamp": (timestamp + timedelta(seconds=3)).isoformat(),
-                },
-            ],
-            "source_timestamp": (timestamp + timedelta(seconds=3)).isoformat(),
+            "event": {
+                "event_id": scope.round_id(index),
+                "source": "chat_round",
+                "role": "user",
+                "payload": user_text,
+                "occurred_at": timestamp.isoformat(),
+            },
             "metadata": metadata or {},
         },
         request_metrics=request_metrics,
@@ -685,7 +676,7 @@ def _recall(
     # RecallMemoryRequest 不接受 intent 轴（extra=forbid，带了就是 422）
     response = _post_json(
         base_url,
-        "/memory/recall",
+        "/v2/memory/recall",
         {
             "user_id": scope.user_id,
             "session_id": scope.session_id,
@@ -1097,7 +1088,7 @@ def main() -> None:
     )
     delete_response = _post_json(
         base_url,
-        "/memory/delete",
+        "/v2/memory/delete",
         {
             "request_id": scope.request_id("delete-cat"),
             "user_id": scope.user_id,
@@ -1127,10 +1118,10 @@ def main() -> None:
             base_url, scope, case, request_metrics=request_metrics, latency_metrics=latency_metrics
         )
 
-    # V1: POST /memory/rebuild 已下线，rebuild 子流程在 V2/V3 清理范围内（见架构文档 §0.2 / §5）。
+    # V1: POST /v2/memory/rebuild 已下线，rebuild 子流程在 V2/V3 清理范围内（见架构文档 §0.2 / §5）。
     # 本段跳过 rebuild HTTP 调用与依赖 rebuild 结果的后续断言。
     print(
-        "[v1-skip] /memory/rebuild not exposed in V1; "
+        "[v1-skip] /v2/memory/rebuild not exposed in V1; "
         "skipping rebuild call and rebuild-dependent assertions"
     )
     return

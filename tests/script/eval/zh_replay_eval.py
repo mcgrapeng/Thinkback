@@ -104,28 +104,19 @@ def _append(
     assistant_text: str,
 ) -> None:
     response = client.post(
-        f"{base}/memory/append",
+        f"{base}/v2/memory/events",
         json={
             "request_id": f"req-{run}-{round_id}",
             "user_id": user,
             "session_id": session,
-            "round_id": f"{run}-{round_id}",
             "round_index": index,
-            "messages": [
-                {
-                    "message_id": f"{round_id}-u",
-                    "role": "user",
-                    "content": user_text,
-                    "timestamp": "2026-09-08T10:00:00+00:00",
-                },
-                {
-                    "message_id": f"{round_id}-a",
-                    "role": "assistant",
-                    "content": assistant_text,
-                    "timestamp": "2026-09-08T10:00:01+00:00",
-                },
-            ],
-            "source_timestamp": "2026-09-08T10:00:01+00:00",
+            "event": {
+                "event_id": f"{run}-{round_id}",
+                "source": "chat_round",
+                "role": "user",
+                "payload": user_text,
+                "occurred_at": "2026-09-08T10:00:00+00:00",
+            },
         },
         timeout=30,
     )
@@ -135,7 +126,7 @@ def _append(
 def _recall(client: httpx.Client, base: str, user: str, session: str, query: str) -> dict[str, Any]:
     # RecallMemoryRequest 不接受 intent 轴（extra=forbid，带了就是 422）
     response = client.post(
-        f"{base}/memory/recall",
+        f"{base}/v2/memory/recall",
         json={
             "user_id": user,
             "session_id": session,
@@ -155,7 +146,7 @@ def _wait_l3(client: httpx.Client, base: str, task_ids: list[str], timeout: floa
     pending = set(task_ids)
     while pending and time.monotonic() < deadline:
         for task_id in list(pending):
-            response = client.get(f"{base}/memory/tasks/{task_id}", timeout=15)
+            response = client.get(f"{base}/v2/memory/tasks/{task_id}", timeout=15)
             if response.status_code == 200:
                 status = response.json().get("status")
                 if status in {"completed", "failed", "dead_letter"}:

@@ -21,6 +21,15 @@ from loguru import logger
 
 from thinkback.domain.ports import MEMORY_LIST_PAGE_LIMIT
 
+# 全局默认抽取指令住在 domain/prompts.py：它是领域策略，后端只负责传参。
+#
+# P1b（mem0 v2 升级）：v2 的 custom_instructions 以「## Custom Instructions」
+# 段拼进 user prompt（system prompt 由 v2 自带的 ADDITIVE_EXTRACTION_PROMPT
+# 承担，质量规范远比 0.1.x 丰富）。v2 的写入参数 ``prompt`` 是**覆盖**配置级
+# 默认值的（``custom_instr = prompt or self.custom_instructions``），所以全局
+# 默认与类型指令由 Thinkback 拼好再传（ADR-0014），配置级留空。
+from thinkback.domain.prompts import DEFAULT_EXTRACTION_INSTRUCTIONS
+
 THINKBACK_OPENAI_EMBEDDER_CLASS = (
     "thinkback.memory.embeddings.OpenAICompatibleEmbeddingNoDimensions"
 )
@@ -29,33 +38,8 @@ THINKBACK_OPENAI_EMBEDDER_CLASS = (
 # 它们用独立的并发预算，避免被慢速写路径（LLM 抽取）饿死。
 _READ_OPERATIONS = frozenset({"search", "get_all", "get"})
 
-# P1b（mem0 v2 升级）：v2 的 custom_instructions 以「## Custom Instructions」
-# 段拼进 user prompt（system prompt 由 v2 自带的 ADDITIVE_EXTRACTION_PROMPT
-# 承担，质量规范远比 0.1.x 丰富）。thinkback 追加约束：
-# 1) 输出语言跟随对话（v2 默认倾向英文输出，中文产品必须显式要求中文）；
-# 2) 输出结构必须严格遵守 v2 的 {"memory": [{"id", "text"}]} 形状——弱模型
-#    （本地 qwen 类）偶发嵌套数组/裸字符串，mem0 解析零容错会炸整轮写入
-#    （R-7 在 0.1.x 上的教训，v2 换了形状但风险同源）；
-# 3) 中文实体（昵称/宠物名/地名/品牌）逐字保留，不得翻译或泛化；
-# 4) **修正记录只写新事实，不要复读旧值** —— 当用户纠正「不叫 X，叫 Y」时，
-#    memory 只记录新事实 Y（"现在叫 Y"），不需要在同一条记忆里复读 X。
-#    这样审计 / 不变量检查才能稳定判定旧事实已被替换。
-# 7) 「New Messages 只有 user 一条」是常态（thinkback 的 L3 抽取只喂 user 消息，
-#    assistant 的话不是用户事实来源）。实测 zhiman38_27b 在只有 user 一条时直接返回
-#    {"memory": []}——整轮抽取静默为空，L3 永远写不进东西。这条规则把它掰回来，
-#    且不需要把 assistant 内容放回抽取输入（不变量不破）。
-THINKBACK_CUSTOM_INSTRUCTIONS = """Additional requirements:
-1. Language: write each memory text in the SAME language as the conversation (Chinese conversations → Chinese memories). Never translate Chinese names, nicknames, places, or brands into English.
-2. Output shape: return exactly {"memory": [{"id": "<sequential string>", "text": "<one self-contained memory>"}]}. Every "text" MUST be a plain string; never nest arrays or objects inside it.
-3. Preserve Chinese entities verbatim (宠物名/昵称/地点/品牌逐字保留), including tone particles only when they are part of a name.
-4. Corrections write only the new value, never re-state the old one. When the user says "不叫 X，叫 Y" or "改成 Y", record only the new fact Y. Do NOT include X in the same memory text. The superseded memory is handled by a separate update path; your job is to surface the current truth, not the audit trail.
-5. One fact per memory. If a turn contains multiple distinct facts, emit one memory per fact. Never combine "X is Y" + "X is Z" into a single memory.
-6. Keep the memory text in the SAME language as the source message, and keep
-       entity values verbatim in their original script. Do NOT transliterate
-       names, and do NOT append a parenthetical romanization
-       (e.g. "Mashu (麻薯)") — write only the entity value as it appeared.
-7. The "New Messages" section may contain ONLY a "user" message — the assistant has not replied yet, or the caller deliberately filtered assistant turns out. That is expected and normal: extract the user's facts from it anyway. NEVER return an empty list merely because there is no assistant turn to extract from.
-8. Facts include the user's own work and business context: responsibilities, process / equipment / tool facts, targets, requirements, constraints, deadlines, customer information, complaints, and numeric specifics (percentages, process nodes, tolerances). If the user's message contains ANY of these, extract at least one memory about it - returning an empty list for such a message is WRONG. Return an empty list ONLY for messages that truly contain no personal, work or business fact (pure greetings or acknowledgements)."""
+#: 兼容旧引用名：默认指令现在住在 domain/prompts.py。
+THINKBACK_CUSTOM_INSTRUCTIONS = DEFAULT_EXTRACTION_INSTRUCTIONS
 
 
 def build_mem0_library_config(
@@ -114,7 +98,11 @@ def build_mem0_library_config(
         "history_db_path": history_db_path,
         # P1b：v2 键名为 custom_instructions（原 custom_fact_extraction_prompt
         # 已改名），语义从"替换 system prompt"变为"user prompt 追加段"。
-        "custom_instructions": THINKBACK_CUSTOM_INSTRUCTIONS,
+        #
+        # 留空：抽取指令由服务层按「全局默认 + 类型指令」拼好后随每次写入传入
+        # （ADR-0014）。引擎的写入参数 prompt 是覆盖配置级默认值的，两者同时
+        # 存在只会让人误以为配置级也在起作用。
+        "custom_instructions": "",
     }
 
 
@@ -213,6 +201,7 @@ class Mem0LibraryMemoryBackend:
         metadata: dict[str, Any] | None = None,
         infer: bool = True,
         expiration_date: str | None = None,
+        prompt: str | None = None,
     ) -> list[dict[str, Any]]:
         """向 Mem0 写入消息并返回事件摘要。
 
@@ -270,6 +259,8 @@ class Mem0LibraryMemoryBackend:
         expiration_kwargs: dict[str, Any] = (
             {"expiration_date": expiration_date} if expiration_date else {}
         )
+        # 抽取指令：调用方给的是「全局默认 + 类型指令」拼好的版本（ADR-0014）。
+        # 没给就退回全局默认 —— 配置级默认是空的，不能让写入裸奔。
         result = self._call(
             "add",
             messages,
@@ -277,6 +268,7 @@ class Mem0LibraryMemoryBackend:
             agent_id=memory_scope_id,
             metadata=scoped_metadata,
             infer=infer,
+            prompt=prompt or DEFAULT_EXTRACTION_INSTRUCTIONS,
             **expiration_kwargs,
         )
         events = self._results(result)
@@ -299,6 +291,7 @@ class Mem0LibraryMemoryBackend:
         memory_scope_id: str,
         limit: int,
         threshold: float | None = None,
+        explain: bool = False,
     ) -> list[dict[str, Any]]:
         """按 query 检索长期记忆。
 
@@ -355,13 +348,15 @@ class Mem0LibraryMemoryBackend:
         - 本方法不 catch RuntimeError，由 :meth:`MemoryService.recall`
           捕获并降级为只返回 L1/L2。
         """
-        result = self._call(
-            "search",
-            query,
+        search_kwargs: dict[str, Any] = {
             **self._scope_kwargs("search", user_id=user_id, memory_scope_id=memory_scope_id),
             **self._limit_kwargs("search", limit),
-            threshold=threshold,
-        )
+            "threshold": threshold,
+        }
+        # explain 只在需要分数分解时传：默认路径不改变调用形状。
+        if explain:
+            search_kwargs["explain"] = True
+        result = self._call("search", query, **search_kwargs)
         items = self._results(result)
         logger.bind(
             user_id=user_id,

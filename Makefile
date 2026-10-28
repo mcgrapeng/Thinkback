@@ -70,6 +70,11 @@ eval:
 		--report-dir docs/memory/report/semiconductor \
 		--baseline tests/eval/baseline_semiconductor.json
 
+# 真实栈门禁：本地必跑，不进 CI（真实 Mem0/Milvus 契约与质量）
+# 需要真实 Milvus + 可达的 LLM/embedding endpoint + 可写的 PG。
+gate-real:
+	uv run --group dev python tests/script/gate_real.py
+
 # API 契约模糊测试（schemathesis，审计层：不进 check，分钟级）
 test-fuzz:
 	uv run --group dev pytest tests/fuzz -q

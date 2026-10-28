@@ -8,6 +8,7 @@ import pytest
 from loguru import logger
 
 from thinkback.domain.ports import MEMORY_LIST_PAGE_LIMIT
+from thinkback.domain.prompts import DEFAULT_EXTRACTION_INSTRUCTIONS
 from thinkback.memory.backends import FakeMemoryBackend
 
 
@@ -360,6 +361,9 @@ def test_mem0_library_backend_maps_add_search_update_delete_and_scoped_delete_al
                 "agent_id": "thinkback",
                 "metadata": {"memory_type": "preference", "memory_scope_id": "thinkback"},
                 "infer": True,
+                # 抽取指令随每次写入传：引擎的 prompt 覆盖配置级默认值，
+                # 没给就等于裸奔（ADR-0014）。
+                "prompt": DEFAULT_EXTRACTION_INSTRUCTIONS,
             },
         ),
         (

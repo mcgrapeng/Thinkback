@@ -26,37 +26,28 @@ import httpx
 
 client = httpx.Client(base_url="http://127.0.0.1:7002", timeout=30.0)
 
-# Append a memory round (triggers the L1/L2/L3 pipeline)
+# Append one source event (triggers the L1/L2/L3 pipeline)
 response = client.post(
-    "/memory/append",
+    "/v2/memory/events",
     headers={"Idempotency-Key": "idem-001"},
     json={
         "request_id": "req-001",
         "user_id": "alice",
         "session_id": "support-001",
-        "round_id": "round-001",
-        "source_timestamp": "2026-01-15T10:00:00Z",
-        "messages": [
-            {
-                "message_id": "m1",
-                "role": "user",
-                "content": "I prefer dark mode and vim keybindings.",
-                "timestamp": "2026-01-15T10:00:00Z",
-            },
-            {
-                "message_id": "m2",
-                "role": "assistant",
-                "content": "Noted. I will remember that.",
-                "timestamp": "2026-01-15T10:00:02Z",
-            },
-        ],
+        "event": {
+            "event_id": "event-001",
+            "source": "chat_round",
+            "role": "user",
+            "payload": "I prefer dark mode and vim keybindings.",
+            "occurred_at": "2026-01-15T10:00:00Z",
+        },
     },
 )
 print(response.json()["task_id"])  # track async L3 extraction
 
 # Recall relevant memories
 result = client.post(
-    "/memory/recall",
+    "/v2/memory/recall",
     json={
         "user_id": "alice",
         "session_id": "support-002",
@@ -76,28 +67,25 @@ for item in result["items"]:
 const base = process.env.THINKBACK_API_URL ?? "http://127.0.0.1:7002";
 
 // Append a memory round
-const appended = await fetch(`${base}/memory/append`, {
+const appended = await fetch(`${base}/v2/memory/events`, {
   method: "POST",
   headers: { "Content-Type": "application/json", "Idempotency-Key": "idem-001" },
   body: JSON.stringify({
     request_id: "req-001",
     user_id: "alice",
     session_id: "support-001",
-    round_id: "round-001",
-    source_timestamp: "2026-01-15T10:00:00Z",
-    messages: [
-      { message_id: "m1", role: "user",
-        content: "I prefer dark mode and vim keybindings.",
-        timestamp: "2026-01-15T10:00:00Z" },
-      { message_id: "m2", role: "assistant",
-        content: "Noted. I will remember that.",
-        timestamp: "2026-01-15T10:00:02Z" },
-    ],
+    event: {
+      event_id: "event-001",
+      source: "chat_round",
+      role: "user",
+      payload: "I prefer dark mode and vim keybindings.",
+      occurred_at: "2026-01-15T10:00:00Z",
+    },
   }),
 });
 
 // Recall with degradation detection
-const result = await fetch(`${base}/memory/recall`, {
+const result = await fetch(`${base}/v2/memory/recall`, {
   method: "POST",
   headers: { "Content-Type": "application/json" },
   body: JSON.stringify({
@@ -119,7 +107,7 @@ for (const item of result.items) {
 ## cURL
 
 ```bash
-curl -X POST http://127.0.0.1:7002/memory/recall \
+curl -X POST http://127.0.0.1:7002/v2/memory/recall \
   -H "Content-Type: application/json" \
   -H "X-Trace-Id: trace-001" \
   -d '{
