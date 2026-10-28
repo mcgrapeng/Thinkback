@@ -27,6 +27,7 @@ class _StubBackend:
         memory_scope_id: str,
         limit: int,
         threshold: float | None = None,
+        explain: bool = False,
     ) -> list[dict[str, Any]]:
         _ = (query, user_id, memory_scope_id, limit, threshold)
         return list(self.results)

@@ -78,6 +78,7 @@ class _FailingSearchBackend(FakeMemoryBackend):
         memory_scope_id: str,
         limit: int,
         threshold: float | None = None,
+        explain: bool = False,
     ) -> list[dict[str, Any]]:
         raise RuntimeError("simulated backend outage")
 

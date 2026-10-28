@@ -70,6 +70,7 @@ class _AlwaysReturnsBackend(FakeMemoryBackend):
         memory_scope_id: str,
         limit: int,
         threshold: float | None = None,
+        explain: bool = False,
     ) -> list[dict[str, Any]]:
         _ = (query, threshold)
         return [

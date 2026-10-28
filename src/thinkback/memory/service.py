@@ -1837,8 +1837,14 @@ L2 更新 (缓存失效)
                 request.query,
                 user_id=request.user_id,
                 memory_scope_id=l3_scope_id,
-                limit=request.l3_limit,
-                threshold=request.l3_score_threshold,
+                # 候选放宽到两倍：引擎的 threshold 卡的是**语义分**，语义分不高
+                # 但词命中的事实会被挡在门外（中文里很常见：问「RCA 槽在哪一步」，
+                # 记忆写的是「RCA 槽排在第 3 道」）。中文分词器上线后 BM25 是
+                # 有分量的，所以关掉引擎的语义门，改由服务侧按「语义分达标
+                # **或** 综合分达标」放行（ADR-0004）。
+                limit=max(request.l3_limit * 2, 10),
+                threshold=0.0,
+                explain=True,
             )
         except RuntimeError as exc:
             recall_log.bind(
@@ -1847,7 +1853,12 @@ L2 更新 (缓存失效)
             ).warning("memory recall degraded: l3 backend unreachable")
             degradation_reasons.append("l3_backend_unreachable")
             backend_items = []
+        l3_accepted = 0
         for item in backend_items:
+            if l3_accepted >= request.l3_limit:
+                break
+            if not self._l3_item_relevant(item, threshold=request.l3_score_threshold):
+                continue
             memory_id = str(item.get("id", ""))
             indexed_memory = active_memory_by_backend_id.get(memory_id)
             if indexed_memory is None:
@@ -1881,6 +1892,7 @@ L2 更新 (缓存失效)
                 )
             )
             recalled_entries.append(indexed_memory)
+            l3_accepted += 1
 
         clipped_items = self._dedupe_and_clip(items, request.token_budget)
         # P2#7：被召回即强化（艾宾浩斯信号，debounce 限流写放大）。
@@ -4376,6 +4388,29 @@ L2 更新 (缓存失效)
         """槽位/宽泛查询放行；其余要求上下文词相交（``domain.slots``）。"""
 
         return memory_context_allowed(memory, query)
+
+    @staticmethod
+    def _l3_item_relevant(item: dict[str, Any], *, threshold: float) -> bool:
+        """这条后端结果够不够格进上下文。
+
+        引擎的 threshold 卡的是**语义分**：一条语义分不高但词命中的事实会被挡在
+        门外 —— 中文里很常见（问「RCA 槽排在第几步」，记忆写的是「RCA 槽排在
+        第 3 道」，语义分 0.39、BM25 0.69）。中文分词器上线后词命中是有分量的，
+        所以放行条件改成「语义分达标 **或** 综合分达标」（ADR-0004）。
+
+        取不到分数分解时按旧口径只看语义分 —— 没有分数就退回引擎的判断，
+        不凭空放行。
+        """
+
+        details = item.get("score_details")
+        semantic = details.get("semantic_score") if isinstance(details, dict) else None
+        combined = item.get("score")
+        if semantic is None and combined is None:
+            # 后端没给分数（fake 后端就是）：它自己已经按阈值筛过，服务侧不再拦。
+            return True
+        if isinstance(semantic, (int, float)) and semantic >= threshold:
+            return True
+        return isinstance(combined, (int, float)) and combined >= threshold
 
     @staticmethod
     def _query_is_broad_memory_request(query: str) -> bool:

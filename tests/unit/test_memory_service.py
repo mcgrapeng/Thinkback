@@ -231,6 +231,7 @@ class ScoredBackend(FakeMemoryBackend):
         memory_scope_id: str,
         limit: int,
         threshold: float | None = None,
+        explain: bool = False,
     ) -> list[dict]:
         results = super().search(
             query,
@@ -246,6 +247,7 @@ class ScoredBackend(FakeMemoryBackend):
 
 class RecordingSearchBackend(FakeMemoryBackend):
     last_threshold: float | None = None
+    last_explain: bool | None = None
     search_count = 0
 
     def search(
@@ -256,9 +258,11 @@ class RecordingSearchBackend(FakeMemoryBackend):
         memory_scope_id: str,
         limit: int,
         threshold: float | None = None,
+        explain: bool = False,
     ) -> list[dict]:
         self.search_count += 1
         self.last_threshold = threshold
+        self.last_explain = explain
         return super().search(
             query,
             user_id=user_id,
@@ -277,6 +281,7 @@ class NoisySearchBackend(FakeMemoryBackend):
         memory_scope_id: str,
         limit: int,
         threshold: float | None = None,
+        explain: bool = False,
     ) -> list[dict]:
         _ = query
         _ = threshold
@@ -2366,7 +2371,48 @@ def test_recall_passes_l3_score_threshold_to_backend() -> None:
         )
     )
 
-    assert backend.last_threshold == 0.62
+    assert backend.last_threshold == 0.0
+    assert backend.last_explain is True
+
+
+def test_l3_item_with_lexical_hit_is_kept_despite_low_semantic_score() -> None:
+    """语义分不高但综合分达标的事实要进上下文（中文 BM25 生效后的关键行为）。
+
+    引擎的 threshold 只卡语义分：语义分不高但词命中的事实会被挡在门外
+    （中文场景常见：问「RCA 槽排在第几步」，记忆写的是「RCA 槽排在第 3 道」）。
+    所以服务侧要拿到分数分解自己判（ADR-0004）。
+    """
+
+    repository = InMemoryMemoryRepository()
+    backend = RecordingSearchBackend()
+    service = MemoryService(repository=repository, backend=backend)
+    memory = repository.add_memory_index(
+        backend_memory_id="m-rca",
+        user_id="user-1",
+        source_refs=[{"session_id": "session-1", "round_id": "round-1"}],
+        memory_text="RCA 槽排在第 3 道。",
+    )
+    backend.memories[memory.backend_memory_id] = {
+        "id": memory.backend_memory_id,
+        "memory": memory.memory_text,
+        "event": "ADD",
+        "user_id": "user-1",
+        "agent_id": "thinkback",
+        "metadata": {},
+        "score": 0.54,
+        "score_details": {"semantic_score": 0.39, "bm25_score": 0.69},
+    }
+
+    response = service.recall(
+        RecallMemoryRequest(
+            user_id="user-1",
+            session_id="session-1",
+            query="RCA 槽排在第几步？",
+            l3_score_threshold=0.5,
+        )
+    )
+
+    assert any(item.layer == "L3" for item in response.items)
 
 
 def test_recall_uses_business_index_directly_for_clear_slot_queries() -> None:
@@ -8601,7 +8647,7 @@ class _CountingSearchBackend(FakeMemoryBackend):
         }
         return [{"id": memory_id, "memory": self.fixed_memory, "event": "ADD"}]
 
-    def search(self, query, *, user_id, memory_scope_id, limit, threshold=None):  # type: ignore[no-untyped-def]
+    def search(self, query, *, user_id, memory_scope_id, limit, threshold=None, explain=False):  # type: ignore[no-untyped-def]
         self.search_calls += 1
         if self.fixed_memory is not None:
             return [
