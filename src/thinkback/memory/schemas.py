@@ -560,6 +560,13 @@ class AdminMemoryItem(BaseModel):
     source_refs: list[dict[str, str]] = Field(default_factory=list, description="来源回合引用。")
     valid_at: datetime | None = Field(default=None, description="事实生效时刻（双时态）。")
     invalid_at: datetime | None = Field(default=None, description="事实失效时刻（双时态）。")
+    expires_at: datetime | None = Field(
+        default=None,
+        description=(
+            "TTL 到期时刻（None=永不过期）。治理台保留过期条目以便查看与擦除，"
+            "但状态不会自动变成 DELETED——是否已到期看这个字段。"
+        ),
+    )
     last_recalled_at: datetime | None = Field(
         default=None, description="最近召回时刻（None=从未召回）。"
     )
