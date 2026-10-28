@@ -30,7 +30,7 @@ from thinkback.rpc.converters import (
     list_response_to_pb,
     rebuild_response_to_pb,
     task_response_to_pb,
-    to_append_request,
+    to_append_event_request,
     to_delete_request,
     to_rebuild_request,
     to_recall_request,
@@ -94,17 +94,20 @@ class MemoryServicer(memory_pb2_grpc.MemoryServiceServicer):
     def __init__(self, service: MemoryService) -> None:
         self._svc = service
 
-    def Append(self, request: pb.AppendRequest, context: grpc.ServicerContext) -> pb.AppendResponse:
+    def AppendEvent(
+        self, request: pb.AppendEventRequest, context: grpc.ServicerContext
+    ) -> pb.AppendEventResponse:
+        """v2 写入契约：一次一条原始事件（与 HTTP /v2/memory/events 同形）。"""
         try:
-            resp = self._svc.append(to_append_request(request))
-            return pb.AppendResponse(
+            resp = self._svc.append(to_append_event_request(request).to_internal())
+            return pb.AppendEventResponse(
                 status=resp.status,
                 task_id=resp.task_id,
                 round_id=resp.round_id,
                 l3_events=[json.dumps(e, default=str) for e in (resp.l3_events or [])],
             )
         except Exception as exc:
-            logger.bind(rpc="Append", error=str(exc)).warning("grpc append failed")
+            logger.bind(rpc="AppendEvent", error=str(exc)).warning("grpc append event failed")
             _handle_error(exc, context)
             raise RuntimeError("unreachable: _handle_error must abort")  # pragma: no cover
 

@@ -13,20 +13,20 @@ from typing import Any
 
 from thinkback.memory.schemas import (
     DEFAULT_NAMESPACE,
-    AppendMemoryRequest,
+    AppendEventRequest,
     DataClassification,
     DeleteMemoryRequest,
     DeleteScope,
     GetMemoryResponse,
     ListMemoriesResponse,
     ManagedMemoryItem,
-    MemoryMessage,
     MemoryStatus,
     MemoryType,
     OperationType,
     RebuildMemoryRequest,
     RebuildMemoryResponse,
     RecallMemoryRequest,
+    SourceEvent,
     SourceType,
     SummaryState,
     TaskResponse,
@@ -91,6 +91,7 @@ _ROLE = {
     pb.MESSAGE_ROLE_USER: "user",
     pb.MESSAGE_ROLE_ASSISTANT: "assistant",
     pb.MESSAGE_ROLE_SYSTEM: "system",
+    pb.MESSAGE_ROLE_TOOL: "tool",
 }
 _DELETE_SCOPE = {
     pb.DELETE_SCOPE_MEMORY: DeleteScope.MEMORY,
@@ -166,37 +167,37 @@ def _namespace(value: str) -> str:
     return value or DEFAULT_NAMESPACE
 
 
-def to_append_request(req: pb.AppendRequest) -> AppendMemoryRequest:
+def to_append_event_request(req: pb.AppendEventRequest) -> AppendEventRequest:
+    """v2 写入契约：一次一条原始事件（与 HTTP /v2/memory/events 同形）。
+
+    事件 ID 同时是幂等锚点（ADR-0005 / ADR-0008）；一条事件 = 内部一轮的
+    一条消息，转换交给领域模型的 ``to_internal``，不在传输层另造一套。
+    """
     from datetime import datetime
 
-    messages = [
-        MemoryMessage(
-            message_id=m.message_id,
-            role=_ROLE[m.role],
-            content=m.content,
-            timestamp=datetime.fromisoformat(m.timestamp),
-        )
-        for m in req.messages
-    ]
-    return AppendMemoryRequest(
+    event = req.event
+    return AppendEventRequest(
         request_id=req.request_id,
         user_id=req.user_id,
         session_id=req.session_id,
-        round_id=req.round_id,
-        messages=messages,
-        source_timestamp=datetime.fromisoformat(req.source_timestamp),
+        event=SourceEvent(
+            event_id=event.event_id,
+            source=event.source,
+            role=_ROLE[event.role],
+            payload=event.payload,
+            occurred_at=datetime.fromisoformat(event.occurred_at),
+            subject_ref=event.subject_ref if event.HasField("subject_ref") else None,
+            provenance=dict(event.provenance),
+        ),
+        namespace=_namespace(req.namespace),
+        memory_type=req.memory_type if req.HasField("memory_type") else None,
         round_index=req.round_index if req.HasField("round_index") else None,
         metadata=dict(req.metadata),
-        namespace=_namespace(req.namespace),
     )
 
 
 def to_recall_request(req: pb.RecallRequest) -> RecallMemoryRequest:
-    if req.intent == pb.RECALL_INTENT_SENSITIVE:
-        # 域模型的 intent 轴已删除（枚举只有两个值，SENSITIVE 无条件 raise，
-        # 是 fail-useless 不是 fail-closed）。proto 里的枚举值还在（生成代码
-        # 不重新生成），这里显式拒绝，保持对外行为不变：PERMISSION_DENIED。
-        raise ValueError("fail-closed recall intent: sensitive is not supported")
+    # intent 轴在域模型里已删除，proto 里也一并撤掉（字段 4 保留）。
     return RecallMemoryRequest(
         user_id=req.user_id,
         session_id=req.session_id,

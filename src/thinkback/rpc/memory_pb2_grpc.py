@@ -36,10 +36,10 @@ class MemoryServiceStub(object):
         Args:
             channel: A grpc.Channel.
         """
-        self.Append = channel.unary_unary(
-            "/memory.MemoryService/Append",
-            request_serializer=memory__pb2.AppendRequest.SerializeToString,
-            response_deserializer=memory__pb2.AppendResponse.FromString,
+        self.AppendEvent = channel.unary_unary(
+            "/memory.MemoryService/AppendEvent",
+            request_serializer=memory__pb2.AppendEventRequest.SerializeToString,
+            response_deserializer=memory__pb2.AppendEventResponse.FromString,
             _registered_method=True,
         )
         self.Recall = channel.unary_unary(
@@ -107,8 +107,8 @@ class MemoryServiceStub(object):
 class MemoryServiceServicer(object):
     """─── Service ──────────────────────────────────────────────────────────────────"""
 
-    def Append(self, request, context):
-        """Missing associated documentation comment in .proto file."""
+    def AppendEvent(self, request, context):
+        """v2 写入契约：一次一条原始事件（与 HTTP /v2/memory/events 同形）。"""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details("Method not implemented!")
         raise NotImplementedError("Method not implemented!")
@@ -176,10 +176,10 @@ class MemoryServiceServicer(object):
 
 def add_MemoryServiceServicer_to_server(servicer, server):
     rpc_method_handlers = {
-        "Append": grpc.unary_unary_rpc_method_handler(
-            servicer.Append,
-            request_deserializer=memory__pb2.AppendRequest.FromString,
-            response_serializer=memory__pb2.AppendResponse.SerializeToString,
+        "AppendEvent": grpc.unary_unary_rpc_method_handler(
+            servicer.AppendEvent,
+            request_deserializer=memory__pb2.AppendEventRequest.FromString,
+            response_serializer=memory__pb2.AppendEventResponse.SerializeToString,
         ),
         "Recall": grpc.unary_unary_rpc_method_handler(
             servicer.Recall,
@@ -244,7 +244,7 @@ class MemoryService(object):
     """─── Service ──────────────────────────────────────────────────────────────────"""
 
     @staticmethod
-    def Append(
+    def AppendEvent(
         request,
         target,
         options=(),
@@ -259,9 +259,9 @@ class MemoryService(object):
         return grpc.experimental.unary_unary(
             request,
             target,
-            "/memory.MemoryService/Append",
-            memory__pb2.AppendRequest.SerializeToString,
-            memory__pb2.AppendResponse.FromString,
+            "/memory.MemoryService/AppendEvent",
+            memory__pb2.AppendEventRequest.SerializeToString,
+            memory__pb2.AppendEventResponse.FromString,
             options,
             channel_credentials,
             insecure,
