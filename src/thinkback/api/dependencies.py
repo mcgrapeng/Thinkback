@@ -219,7 +219,9 @@ def get_memory_service() -> MemoryService:
                     l2_llm_enabled=settings.memory_l2_llm_enabled,
                 )
                 service_log.info("memory service initialization started")
-                repository = SqlAlchemyMemoryRepository()
+                repository = SqlAlchemyMemoryRepository(
+                    l1_cache_enabled=settings.memory_l1_cache_enabled
+                )
                 backend = get_memory_backend(settings)
                 _memory_service = MemoryService(
                     repository=repository,

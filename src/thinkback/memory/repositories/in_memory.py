@@ -63,6 +63,8 @@ class InMemoryMemoryRepository(L1CacheMixin):
     # 与 SQL 版 updated_at 对应的墙钟时间戳，reclaim_stale_running_tasks 用
     task_updated_at: dict[str, float] = field(default_factory=dict)
     l1_cache: dict[str, list[JournalEntry]] = field(default_factory=dict)
+    # 关掉后 L1 走读穿透（每次回源 PG）。多副本部署必须关。
+    l1_cache_enabled: bool = True
     task_lock: Lock = field(default_factory=Lock, repr=False)
     # N-5: 与 task_lock 同风格，作为 dataclass 字段提供，避免 dataclass __init__
     # 不调用 mixin __init__ 导致 _l1_lock 未初始化。
