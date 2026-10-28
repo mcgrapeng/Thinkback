@@ -2,6 +2,7 @@
 
 from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import asynccontextmanager
+from threading import Thread
 from time import perf_counter, time
 
 from fastapi import FastAPI, Request, Response
@@ -97,16 +98,40 @@ async def _lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: ARG001
     # 已接受（async 返回 accepted）但没写完的 L3 写入：按 journal 重放，
     # 否则进程崩溃后那条长期记忆会永久缺失。必须在孤儿回收之前跑：
     # 回收会把超龄 RUNNING 标成 failed，回收后就认不出「待重放」的工作了。
-    recovered_writes = get_memory_service().recover_pending_writes()
-    if recovered_writes:
-        logger.bind(recovered_count=recovered_writes).warning(
-            "memory pending writes recovered on startup"
-        )
-    reclaimed_tasks = get_memory_service().reclaim_orphan_running_tasks()
-    if reclaimed_tasks:
-        logger.bind(reclaimed_count=len(reclaimed_tasks)).warning(
-            "memory orphan running tasks reclaimed on startup"
-        )
+    #
+    # 放后台线程：重放最多 200 次 LLM 抽取，卡在 lifespan 里会让就绪探针
+    # 超时 → Pod 被判定不健康 → CrashLoopBackOff（要恢复的 Pod 自己起不来）。
+    def _recover_pending_writes() -> None:
+        # 抓住当前实例：后台线程里再调 get_memory_service() 会在服务关闭后
+        # 把单例重新造出来（关停后仍持有仓储）。
+        service = get_memory_service()
+
+        try:
+            recovered = service.recover_pending_writes()
+        except Exception as exc:  # noqa: BLE001 - 恢复失败不该挡住启动
+            logger.bind(error_type=type(exc).__name__).warning(
+                "memory pending write recovery failed on startup"
+            )
+            return
+        if recovered:
+            logger.bind(recovered_count=recovered).warning(
+                "memory pending writes recovered on startup"
+            )
+        # 回收排在重放之后：回收会把超龄 RUNNING 标成 failed，认不出
+        # 「待重放」的工作了。
+        try:
+            reclaimed = service.reclaim_orphan_running_tasks()
+        except Exception as exc:  # noqa: BLE001 - 回收失败不该挡住启动
+            logger.bind(error_type=type(exc).__name__).warning(
+                "memory orphan running task reclaim failed on startup"
+            )
+            return
+        if reclaimed:
+            logger.bind(reclaimed_count=len(reclaimed)).warning(
+                "memory orphan running tasks reclaimed on startup"
+            )
+
+    Thread(target=_recover_pending_writes, name="pending-write-recovery", daemon=True).start()
 
     grpc_server = None
     if settings.grpc_enabled:
