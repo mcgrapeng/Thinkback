@@ -588,7 +588,13 @@ class Mem0LibraryMemoryBackend:
         self._consistency_ensured = True
 
     def purge_history(
-        self, *, user_id: str, memory_ids: list[str], scopes: list[str]
+        self,
+        *,
+        user_id: str,
+        memory_ids: list[str],
+        namespace: str,
+        message_texts: list[str],
+        purge_all_messages: bool,
     ) -> dict[str, int]:
         """物理擦除引擎侧残留：事实抽取历史 + 原始消息。
 
@@ -602,6 +608,10 @@ class Mem0LibraryMemoryBackend:
 
         这里对同一份 SQLite 文件做定向 DELETE —— 不改引擎行为、不改表结构，
         只删指定记忆与指定作用域的行。
+
+        原始消息这一层没有 session 维度（Mem0 的会话标识只有 user/agent/
+        run），所以会话级擦除按**消息正文**精确删除：只删被擦除轮次的那几
+        条原文，不会连别的会话一起删。ALL 范围才清空整个作用域的原始消息。
 
         已知边界：``history.db`` 是进程本地文件，多副本部署时每个副本各有一份，
         一次擦除只清到当前副本（与本适配器里记录的既有边界一致）。
@@ -627,18 +637,33 @@ class Mem0LibraryMemoryBackend:
                         memory_ids,
                     )
                     counts["history"] = max(cursor.rowcount, 0)
-                if scopes and "messages" in tables:
-                    for scope in scopes:
+                if "messages" in tables:
+                    scope_key = self._mem0_session_scope(user_id, namespace)
+                    if purge_all_messages:
                         cursor = connection.execute(
                             "DELETE FROM messages WHERE session_scope = ?",
-                            (self._mem0_session_scope(user_id, scope),),
+                            (scope_key,),
+                        )
+                        counts["messages"] += max(cursor.rowcount, 0)
+                    elif message_texts:
+                        # 按正文删：Mem0 的消息表没有 session 维度，按 scope 删
+                        # 会连别的会话一起删。只有被擦除轮次自己的原文该走。
+                        placeholders = ",".join("?" for _ in message_texts)
+                        cursor = connection.execute(
+                            "DELETE FROM messages WHERE session_scope = ? "
+                            f"AND content IN ({placeholders})",
+                            (scope_key, *message_texts),
                         )
                         counts["messages"] += max(cursor.rowcount, 0)
         finally:
             connection.close()
-        logger.bind(user_id=user_id, scope_count=len(scopes), **counts).info(
-            "memory backend history purge completed"
-        )
+        logger.bind(
+            user_id=user_id,
+            namespace=namespace,
+            message_text_count=len(message_texts),
+            purge_all_messages=purge_all_messages,
+            **counts,
+        ).info("memory backend history purge completed")
         return counts
 
     @staticmethod

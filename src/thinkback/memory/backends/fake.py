@@ -131,9 +131,15 @@ class FakeMemoryBackend:
         return len(matching)
 
     def purge_history(
-        self, *, user_id: str, memory_ids: list[str], scopes: list[str]
+        self,
+        *,
+        user_id: str,
+        memory_ids: list[str],
+        namespace: str,
+        message_texts: list[str],
+        purge_all_messages: bool,
     ) -> dict[str, int]:
         """fake 后端没有引擎侧历史表，返回零计数并声明不支持。"""
 
-        _ = (user_id, memory_ids, scopes)
+        _ = (user_id, memory_ids, namespace, message_texts, purge_all_messages)
         return {"history": 0, "messages": 0, "supported": False}
