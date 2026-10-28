@@ -4415,6 +4415,16 @@ def test_l3_index_rejects_non_p0_event_when_white_list_is_configured(
         backend = FakeMemoryBackend()
         service = MemoryService(repository=repository, backend=backend)
 
+        # 模拟真实链路：mem0 add 先在后端留下记录，本地索引再判定准入。
+        backend.memories["generic-event"] = {
+            "id": "generic-event",
+            "memory": "喜欢晚上复盘工作压力",
+            "event": "ADD",
+            "user_id": "user-1",
+            "agent_id": "thinkback",
+            "metadata": {},
+            "score": 1.0,
+        }
         service._index_l3_event(
             {"id": "generic-event", "memory": "喜欢晚上复盘工作压力", "event": "ADD"},
             user_id="user-1",
@@ -4428,6 +4438,67 @@ def test_l3_index_rejects_non_p0_event_when_white_list_is_configured(
         # 显式白名单：不在列表中的 slot 拒绝入本地表（"喜欢晚上复盘工作压力"
         # 不在 preferred_nickname / pet_name:cat / current_location 三个白名单里）
         assert repository.active_memories("user-1", "thinkback") == []
+        # 准入不通过且从未进过本地索引的记录，不得留在后端：
+        # 它召回不到、也管不了，是纯粹的暗数据。
+        assert backend.memories == {}
+    finally:
+        cached_get_settings.cache_clear()
+
+
+def test_l3_index_keeps_backend_record_that_already_has_local_index(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """已有本地索引的记忆，准入不通过时不得删后端记录。
+
+    历史事故：误删后端记录导致 /recall 的 L3 召回丢掉事实。删除只适用于
+    「从未可见」的记录。
+    """
+    from thinkback.infra import config as config_module
+
+    cached_get_settings = config_module.get_settings
+    cached_get_settings.cache_clear()
+    replacement_settings = config_module.Settings(
+        memory_p0_slots="preferred_nickname,pet_name:cat,current_location"
+    )
+    monkeypatch.setattr(config_module, "settings", replacement_settings)
+    try:
+        repository = InMemoryMemoryRepository()
+        backend = FakeMemoryBackend()
+        service = MemoryService(repository=repository, backend=backend)
+
+        # 模拟真实链路：后端先写入一条记录（mem0 add 的产物），本地再索引它。
+        backend.memories["kept-event"] = {
+            "id": "kept-event",
+            "memory": "我的猫叫豆包",
+            "event": "ADD",
+            "user_id": "user-1",
+            "agent_id": "thinkback",
+            "metadata": {},
+            "score": 1.0,
+        }
+        service._index_l3_event(
+            {"id": "kept-event", "memory": "我的猫叫豆包", "event": "ADD"},
+            user_id="user-1",
+            source_refs=[{"session_id": "session-1", "round_id": "round-keep"}],
+            l3_metadata=service._l3_metadata(
+                [{"session_id": "session-1", "round_id": "round-keep"}],
+                {"source_text": "我的猫叫豆包"},
+            ),
+        )
+        assert len(repository.active_memories("user-1", "thinkback")) == 1
+        assert "kept-event" in backend.memories
+
+        # 同一后端 id 再来一条准入不通过的事件：记录必须保留。
+        service._index_l3_event(
+            {"id": "kept-event", "memory": "喜欢晚上复盘工作压力", "event": "ADD"},
+            user_id="user-1",
+            source_refs=[{"session_id": "session-1", "round_id": "round-keep"}],
+            l3_metadata=service._l3_metadata(
+                [{"session_id": "session-1", "round_id": "round-keep"}],
+                {"source_text": "我喜欢晚上复盘工作压力"},
+            ),
+        )
+        assert "kept-event" in backend.memories
     finally:
         cached_get_settings.cache_clear()
 
