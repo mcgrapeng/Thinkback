@@ -218,6 +218,24 @@ class MemoryRepository(Protocol):
 
     def mark_memory_deleted(self, memory_id: str) -> MemoryIndexEntry | None: ...
 
+    def list_expired_memories(
+        self,
+        *,
+        before: datetime,
+        limit: int = 500,
+        memory_scope_id: str | None = None,
+        user_id: str | None = None,
+    ) -> list[MemoryIndexEntry]:
+        """列出到期时刻早于 ``before`` 的记忆索引行（保留期物理清理用）。
+
+        只看 ACTIVE 行：墓碑行与已抑制行不由保留期作业处理 —— 抑制是遗忘
+        信号，与删除在审计上必须能分开看。
+
+        ``memory_scope_id`` 与 ``user_id`` 都是收敛范围：共享库里跑作业时
+        必须能限定到某个作用域或某个用户，否则一次运行会清掉别人的到期数据。
+        """
+        ...
+
     def delete_memory_rows(self, memory_ids: list[str]) -> int:
         """物理删除 L3 业务索引行（erase 语义）。返回删除行数。"""
         ...

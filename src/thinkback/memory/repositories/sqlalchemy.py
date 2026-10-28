@@ -1029,6 +1029,50 @@ class SqlAlchemyMemoryRepository(L1CacheMixin):
         """物理删除 L3 业务索引行（erase 语义）。"""
         return self._run(self._delete_memory_rows(memory_ids))
 
+    def list_expired_memories(
+        self,
+        *,
+        before: datetime,
+        limit: int = 500,
+        memory_scope_id: str | None = None,
+        user_id: str | None = None,
+    ) -> list[MemoryIndexEntry]:
+        """列出到期时刻早于 ``before`` 的 ACTIVE 记忆索引行。"""
+        return self._run(
+            self._list_expired_memories(
+                before=before,
+                limit=limit,
+                memory_scope_id=memory_scope_id,
+                user_id=user_id,
+            )
+        )
+
+    async def _list_expired_memories(
+        self,
+        *,
+        before: datetime,
+        limit: int,
+        memory_scope_id: str | None,
+        user_id: str | None,
+    ) -> list[MemoryIndexEntry]:
+        statement = (
+            select(MemoryRecord)
+            .where(
+                MemoryRecord.expires_at.is_not(None),
+                MemoryRecord.expires_at <= before,
+                MemoryRecord.memory_status == MemoryStatus.ACTIVE.value,
+            )
+            .order_by(MemoryRecord.expires_at)
+            .limit(limit)
+        )
+        if memory_scope_id:
+            statement = statement.where(MemoryRecord.memory_scope_id == memory_scope_id)
+        if user_id:
+            statement = statement.where(MemoryRecord.user_id == user_id)
+        async with self.session_factory() as session:
+            result = await session.execute(statement)
+            return [self._memory_from_record(record) for record in result.scalars().all()]
+
     async def _delete_memory_rows(self, memory_ids: list[str]) -> int:
         if not memory_ids:
             return 0
