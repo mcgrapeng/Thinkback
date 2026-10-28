@@ -584,6 +584,31 @@ P0 与 P1 完成前不发布新接入方。P2 完成才算“插件形态”成�
 
 设计树的边界已空。剩下的都是实现细节：字段怎么落、脚本怎么写、票怎么拆。
 
+## 14. 实施状态（2026-10-28）
+
+已落地（`feature/plugin-contract-v2`，已并入 `refactor/memory-architecture-rewrite`）：
+
+| 决策 | 落点 |
+| --- | --- |
+| D24/D29 类型配置严格校验 | `domain/memory_types.py`：未知字段拒绝、必填项、ttl_days、审批类型不接受 user、指令路径不得越界 |
+| D32/D35 抽取指令文件化与合并 | `domain/prompts.py` + `profiles/<namespace>/prompts/*.vN.md`；服务侧拼「全局默认 + 类型指令」后随写入传入 |
+| D9/ADR-0009 策略版本留痕 | 记忆记录 metadata 带 policy_version / extraction_prompt_version / extractor |
+| D22/D28 v2 事件契约 | `SourceEvent` + `AppendEventRequest`；业务面 `/v2/memory/*`，写入端点 `/v2/memory/events`；旧 `/memory/*` 撤掉 |
+| D12 来源角色由类型策略决定 | 写入路径按类型的 source_roles 过滤抽取输入（assistant 不作为用户事实来源） |
+| D25/D31 真实栈门禁 | `tests/script/gate_real.py` + `make gate-real`：七类检查，地板以真实基线为下限 |
+
+真实栈门禁首轮结果（`docs/memory/report/real/gate-3b4da00-*.json`）：抽取非空、期望事实召回、禁存词不泄漏、幂等重放、擦除残留五项通过；**期望事实覆盖率 0.25–0.50 低于 0.66 地板**，观测到一次抽取响应 JSON 解析失败；**英文型号词 BM25 未命中**（该轮事实未抽全）。这两项是真实质量缺口，不是门禁误报。
+
+未落地（按依赖顺序）：
+
+| 决策 | 阻塞点 |
+| --- | --- |
+| D21 collection 预建与中文分词器 | 需要 collection 重建与回放方案（ADR-0007） |
+| D23 分层预算（层保底 + 类型上限） | 类型注册表已有 recall 字段，召回装配还没用上 |
+| D27 保留期三段与物理清理作业 | 依赖 D21 与保留策略定稿 |
+| D16 gRPC 同步升 v2 | proto 与转换层仍是 v1 形状（内部模型未变，gRPC 行为正常） |
+| D33 多副本五项前置 | 清单已写，执行是独立阶段 |
+
 ## 13. 明确不做与理由
 
 | 不做 | 理由 |
