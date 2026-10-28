@@ -309,6 +309,11 @@ class UpdateMemoryRequest(BaseModel):
         description="编辑后的长期记忆正文；服务端会去除首尾空白。",
     )
     memory_type: MemoryType | None = Field(default=None, description="可选的新记忆分类。")
+    memory_type_name: str | None = Field(
+        default=None,
+        description="完整记忆类型名（namespace 类型注册表里的名称，如 state "
+        "或行业自定义类型）。与 memory_type 同时给出时以此为准。",
+    )
     namespace: str = Field(
         default=DEFAULT_NAMESPACE,
         description="记忆作用域标签；只更新该 namespace 下的记忆。",
@@ -437,7 +442,14 @@ class ManagedMemoryItem(BaseModel):
     status: MemoryStatus = Field(description="业务索引状态；只有 ACTIVE 会进入召回。")
     source_type: SourceType = Field(description="记忆来源类型。")
     data_classification: DataClassification = Field(description="数据敏感等级。")
-    memory_type: MemoryType | None = Field(default=None, description="记忆分类；未知时为空。")
+    memory_type: MemoryType | None = Field(
+        default=None, description="内置记忆分类；自定义类型为空。"
+    )
+    memory_type_name: str | None = Field(
+        default=None,
+        description="完整记忆类型名（namespace 类型注册表里的原始名称，"
+        "如 state / commitment / 行业自定义类型）。",
+    )
     backend_categories: list[str] = Field(
         default_factory=list,
         description="后端返回或调用方提供的分类标签。",

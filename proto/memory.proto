@@ -65,6 +65,8 @@ enum OperationType {
   OPERATION_TYPE_DELETE_ALL = 4;
   OPERATION_TYPE_REBUILD_L2 = 5;
   OPERATION_TYPE_REBUILD_L3 = 6;
+  // 物理擦除（原文不可恢复）。新增编号，不复用既有值。
+  OPERATION_TYPE_ERASE = 7;
 }
 
 enum RecallIntent {
@@ -150,6 +152,41 @@ message DeleteResponse {
   optional SummaryState summary_state = 4;
 }
 
+// 逻辑下架与物理擦除：与 HTTP /memory/suppress、/memory/erase 同义。
+message SuppressRequest {
+  string request_id = 1;
+  string user_id = 2;
+  DeleteScope scope = 3;
+  string operation_id = 4;
+  optional string memory_id = 5;
+  optional string session_id = 6;
+  string namespace = 7;
+}
+
+message SuppressResponse {
+  string status = 1;
+  string task_id = 2;
+  int32 affected_memories = 3;
+  optional SummaryState summary_state = 4;
+}
+
+message EraseRequest {
+  string request_id = 1;
+  string user_id = 2;
+  DeleteScope scope = 3;
+  string operation_id = 4;
+  optional string memory_id = 5;
+  optional string session_id = 6;
+  string namespace = 7;
+}
+
+message EraseResponse {
+  string status = 1;
+  string task_id = 2;
+  int32 affected_memories = 3;
+  optional SummaryState summary_state = 4;
+}
+
 message ListMemoriesRequest {
   string user_id = 1;
   bool include_deleted = 2;
@@ -164,6 +201,10 @@ message ManagedMemoryItem {
   DataClassification data_classification = 5;
   optional MemoryType memory_type = 6;
   repeated string backend_categories = 7;
+  // 完整的记忆类型名。自定义类型（state/commitment/行业类型）不在
+  // MemoryType 枚举里，旧字段会把它静默变成 UNSET —— 用这个字段承载
+  // namespace 类型注册表里的原始类型名。
+  string memory_type_name = 8;
 }
 
 message ListMemoriesResponse {
@@ -190,6 +231,8 @@ message UpdateMemoryRequest {
   string content = 5;
   optional MemoryType memory_type = 6;
   string namespace = 7;  // 记忆作用域标签；空值按 "thinkback" 处理
+  // 完整类型名（自定义类型用）。与 memory_type 同时给出时以此为准。
+  string memory_type_name = 8;
 }
 
 message UpdateMemoryResponse {
@@ -229,6 +272,8 @@ message TaskResponse {
   string scope = 5;  // JSON-encoded scope dict
   optional string last_error = 6;
   string result = 7;  // JSON-encoded result dict
+  // 已重试次数。客户端据此判断是否接近重试预算上限。
+  int32 retry_count = 8;
 }
 
 message L3BackgroundStatusRequest {}
@@ -248,6 +293,10 @@ service MemoryService {
   rpc Append(AppendRequest) returns (AppendResponse);
   rpc Recall(RecallRequest) returns (RecallResponse);
   rpc Delete(DeleteRequest) returns (DeleteResponse);
+  // 逻辑下架：不可召回，保留原文与墓碑。
+  rpc Suppress(SuppressRequest) returns (SuppressResponse);
+  // 物理擦除：原文不可恢复。
+  rpc Erase(EraseRequest) returns (EraseResponse);
   rpc ListMemories(ListMemoriesRequest) returns (ListMemoriesResponse);
   rpc GetMemory(GetMemoryRequest) returns (GetMemoryResponse);
   rpc UpdateMemory(UpdateMemoryRequest) returns (UpdateMemoryResponse);

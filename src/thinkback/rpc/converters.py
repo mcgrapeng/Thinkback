@@ -148,6 +148,7 @@ _OP_TYPE_TO_PB = {
     OperationType.DELETE_ALL: pb.OPERATION_TYPE_DELETE_ALL,
     OperationType.REBUILD_L2: pb.OPERATION_TYPE_REBUILD_L2,
     OperationType.REBUILD_L3: pb.OPERATION_TYPE_REBUILD_L3,
+    OperationType.ERASE: pb.OPERATION_TYPE_ERASE,
 }
 _SUMMARY_STATE_TO_PB = {
     SummaryState.ACTIVE: pb.SUMMARY_STATE_ACTIVE,
@@ -207,7 +208,9 @@ def to_recall_request(req: pb.RecallRequest) -> RecallMemoryRequest:
     )
 
 
-def to_delete_request(req: pb.DeleteRequest) -> DeleteMemoryRequest:
+def to_delete_request(
+    req: pb.DeleteRequest | pb.SuppressRequest | pb.EraseRequest,
+) -> DeleteMemoryRequest:
     return DeleteMemoryRequest(
         request_id=req.request_id,
         user_id=req.user_id,
@@ -228,6 +231,7 @@ def to_update_request(req: pb.UpdateMemoryRequest) -> UpdateMemoryRequest:
         memory_id=req.memory_id,
         content=req.content,
         memory_type=memory_type,
+        memory_type_name=req.memory_type_name or None,
         namespace=_namespace(req.namespace),
     )
 
@@ -259,6 +263,9 @@ def _managed_item_to_pb(item: ManagedMemoryItem) -> pb.ManagedMemoryItem:
     }
     if item.memory_type is not None:
         kwargs["memory_type"] = _MEMORY_TYPE_TO_PB[item.memory_type]
+    # 完整类型名：自定义类型不在枚举里，必须原样带给调用方。
+    if item.memory_type_name:
+        kwargs["memory_type_name"] = item.memory_type_name
     return pb.ManagedMemoryItem(**kwargs)
 
 
@@ -270,6 +277,7 @@ def task_response_to_pb(task: TaskResponse) -> pb.TaskResponse:
         "status": _TASK_STATUS_TO_PB[task.status],
         "scope": json.dumps(task.scope, default=str),
         "result": json.dumps(task.result, default=str),
+        "retry_count": task.retry_count,
     }
     if task.last_error is not None:
         kwargs["last_error"] = task.last_error

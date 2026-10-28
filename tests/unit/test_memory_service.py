@@ -8722,6 +8722,119 @@ def test_same_user_two_namespaces_do_not_mix_memories() -> None:
     assert [item.content for item in hr.items] == ["我负责年度绩效评估"]
 
 
+def test_custom_memory_type_is_visible_in_management_api() -> None:
+    """自定义类型必须在管理 API 里原样可见。
+
+    内置枚举只有五类，state/commitment/行业类型不在其中。此前它们在
+    list/get 响应里被静默变成 null，客户端无法判断这条记忆属于哪一类。
+    """
+    from thinkback.domain.memory_types import MemoryTypeRegistry, MemoryTypeSpec
+
+    registry = MemoryTypeRegistry(
+        namespace="thinkback",
+        types={
+            "profile": MemoryTypeSpec(name="profile"),
+            "process_preference": MemoryTypeSpec(name="process_preference"),
+        },
+    )
+    repository = InMemoryMemoryRepository()
+    service = MemoryService(
+        repository=repository,
+        backend=FakeMemoryBackend(),
+        l3_write_mode="sync",
+        registry_provider=lambda _namespace: registry,
+    )
+    service.append(
+        make_append(
+            round_id="r-custom-type",
+            content="我负责 3nm 工艺良率提升",
+            metadata={"memory_type": "process_preference"},
+        )
+    )
+
+    listed = service.list_memory_items(user_id="user-1")
+    assert [item.memory_type_name for item in listed.items] == ["process_preference"]
+    assert listed.items[0].memory_type is None
+
+    memory_id = listed.items[0].memory_id
+    fetched = service.get_memory_item(user_id="user-1", memory_id=memory_id)
+    assert fetched.memory is not None
+    assert fetched.memory.memory_type_name == "process_preference"
+
+
+def test_update_accepts_registered_custom_memory_type() -> None:
+    """编辑时可以把记忆改成已注册的自定义类型；未注册的类型直接拒绝。"""
+    from thinkback.domain.memory_types import MemoryTypeRegistry, MemoryTypeSpec
+
+    registry = MemoryTypeRegistry(
+        namespace="thinkback",
+        types={
+            "profile": MemoryTypeSpec(name="profile"),
+            "process_preference": MemoryTypeSpec(name="process_preference"),
+        },
+    )
+    repository = InMemoryMemoryRepository()
+    service = MemoryService(
+        repository=repository,
+        backend=FakeMemoryBackend(),
+        l3_write_mode="sync",
+        registry_provider=lambda _namespace: registry,
+    )
+    service.append(make_append(round_id="r-update-type", content="我负责良率提升"))
+    memory_id = repository.active_memories("user-1", "thinkback")[0].memory_id
+
+    service.update_memory(
+        UpdateMemoryRequest(
+            request_id="req-update-type",
+            user_id="user-1",
+            operation_id="op-update-type",
+            memory_id=memory_id,
+            content="我负责 3nm 工艺良率提升",
+            memory_type_name="process_preference",
+        )
+    )
+
+    updated = repository.active_memories("user-1", "thinkback")[0]
+    assert updated.memory_type == "process_preference"
+
+    with pytest.raises(ValueError, match="not registered"):
+        service.update_memory(
+            UpdateMemoryRequest(
+                request_id="req-update-type-2",
+                user_id="user-1",
+                operation_id="op-update-type-2",
+                memory_id=memory_id,
+                content="再改一次",
+                memory_type_name="never_registered_type",
+            )
+        )
+
+
+def test_custom_metadata_survives_to_backend_and_index() -> None:
+    """调用方的自定义业务属性必须保留到后端与本地索引。"""
+    repository = InMemoryMemoryRepository()
+    backend = FakeMemoryBackend()
+    service = MemoryService(repository=repository, backend=backend, l3_write_mode="sync")
+
+    service.append(
+        make_append(
+            round_id="r-custom-meta",
+            content="我负责 3nm 工艺良率提升",
+            metadata={"ticket_id": "OPS-1234", "customer": "acme"},
+        )
+    )
+
+    assert backend.memories, "后端应收到这条记忆"
+    stored = next(iter(backend.memories.values()))
+    assert stored["metadata"]["custom_metadata"] == {
+        "ticket_id": "OPS-1234",
+        "customer": "acme",
+    }
+
+    indexed = repository.active_memories("user-1", "thinkback")[0]
+    assert indexed.metadata["custom_metadata"]["ticket_id"] == "OPS-1234"
+
+
 def test_invalid_namespace_is_rejected() -> None:
     """namespace 含分隔符或超长必须明确拒绝，不静默归一化。"""
     from pydantic import ValidationError
