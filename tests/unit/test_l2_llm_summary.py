@@ -425,6 +425,46 @@ def test_refresh_in_flight_triggers_trailing_refresh() -> None:
     assert calls[-1] >= 3
 
 
+def test_trailing_refresh_survives_successful_inflight_write() -> None:
+    """在飞刷新**写入成功**时，在飞期间到达的轮次同样要触发 trailing 刷新。
+
+    回归：记录 scope 状态时若把 append 计数清零，trailing 刷新就不会发生。
+    这个分支只在刷新写入成功时走到，常规跑法很难发现——变异审计的
+    clean test 才把它逼出来。
+    """
+    started = Event()
+    release = Event()
+    calls: list[int] = []
+
+    def composer(rounds: list[Any], previous_summary: str | None) -> tuple[str, dict[str, str]]:
+        calls.append(len(rounds))
+        if len(calls) == 1:
+            started.set()
+            if not release.wait(timeout=10):
+                raise RuntimeError("test release timeout")
+        text = f"【主题】刷新{len(calls)}"
+        return text, {"主题": text}
+
+    repository = InMemoryMemoryRepository()
+    repository.save_round(make_append("r1", "第一轮"))
+    refresher = L2BackgroundRefresher(
+        repository=repository,
+        composer=composer,
+        executor=ThreadPoolExecutor(max_workers=1),
+        refresh_interval_rounds=2,
+    )
+    refresher.maybe_submit("user-1", "session-1")
+    assert started.wait(timeout=5)
+
+    # 在飞期间又来两轮：计数达到阈值，结束后必须补一次 trailing 刷新。
+    refresher.maybe_submit("user-1", "session-1")
+    refresher.maybe_submit("user-1", "session-1")
+    release.set()
+    refresher.drain(timeout=10)
+
+    assert len(calls) >= 2
+
+
 def test_upsert_summary_kind_roundtrip_in_memory_repo() -> None:
     repository = InMemoryMemoryRepository()
     repository.save_round(make_append("r1", "内容"))
