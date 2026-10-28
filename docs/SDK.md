@@ -26,7 +26,7 @@ import httpx
 
 client = httpx.Client(base_url="http://127.0.0.1:7002", timeout=30.0)
 
-# Append a memory round (triggers the L1/L2/L3 pipeline)
+# Append one source event (triggers the L1/L2/L3 pipeline)
 response = client.post(
     "/v2/memory/events",
     headers={"Idempotency-Key": "idem-001"},
@@ -34,22 +34,13 @@ response = client.post(
         "request_id": "req-001",
         "user_id": "alice",
         "session_id": "support-001",
-        "round_id": "round-001",
-        "source_timestamp": "2026-01-15T10:00:00Z",
-        "messages": [
-            {
-                "message_id": "m1",
-                "role": "user",
-                "content": "I prefer dark mode and vim keybindings.",
-                "timestamp": "2026-01-15T10:00:00Z",
-            },
-            {
-                "message_id": "m2",
-                "role": "assistant",
-                "content": "Noted. I will remember that.",
-                "timestamp": "2026-01-15T10:00:02Z",
-            },
-        ],
+        "event": {
+            "event_id": "event-001",
+            "source": "chat_round",
+            "role": "user",
+            "payload": "I prefer dark mode and vim keybindings.",
+            "occurred_at": "2026-01-15T10:00:00Z",
+        },
     },
 )
 print(response.json()["task_id"])  # track async L3 extraction
@@ -83,16 +74,13 @@ const appended = await fetch(`${base}/v2/memory/events`, {
     request_id: "req-001",
     user_id: "alice",
     session_id: "support-001",
-    round_id: "round-001",
-    source_timestamp: "2026-01-15T10:00:00Z",
-    messages: [
-      { message_id: "m1", role: "user",
-        content: "I prefer dark mode and vim keybindings.",
-        timestamp: "2026-01-15T10:00:00Z" },
-      { message_id: "m2", role: "assistant",
-        content: "Noted. I will remember that.",
-        timestamp: "2026-01-15T10:00:02Z" },
-    ],
+    event: {
+      event_id: "event-001",
+      source: "chat_round",
+      role: "user",
+      payload: "I prefer dark mode and vim keybindings.",
+      occurred_at: "2026-01-15T10:00:00Z",
+    },
   }),
 });
 
