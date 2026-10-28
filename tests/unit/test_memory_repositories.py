@@ -13,6 +13,7 @@ from thinkback.memory.repositories import (
     SqlAlchemyMemoryRepository,
 )
 from thinkback.memory.repositories import sqlalchemy as repositories_module
+from thinkback.memory.repositories._l1_cache import L1_CACHE_TTL_SECONDS
 from thinkback.memory.schemas import DataClassification, MemoryStatus, SourceType
 
 
@@ -650,3 +651,95 @@ def test_l1_cache_update_l1_default_limit_is_ten() -> None:
 
     cached = repository.get_l1("user-1", "session-1", "session-1")
     assert [entry.round_id for entry in cached] == [f"r-{index:02d}" for index in range(2, 12)]
+
+
+# ---------------------------------------------------------------------------
+# L1 缓存：直接断言缓存内部状态（get_l1 有 journal 回源兜底，光看返回值
+# 看不见「缓存条目还在不在」）
+# ---------------------------------------------------------------------------
+
+
+def test_l1_cache_clear_l1_removes_the_entry_from_cache() -> None:
+    """按 session 清缓存必须真的把条目从缓存里摘掉。
+
+    get_l1 拿不到缓存时会回源 journal，所以「返回值是空」证明不了缓存被清；
+    这里直接看缓存字典。
+    """
+    repository = InMemoryMemoryRepository()
+    repository.update_l1(
+        _make_l1_entry(round_id="r-1", user_id="user-1", scope_id="scope-1", session_id="s-1"),
+        limit=10,
+    )
+    key = next(iter(repository.l1_cache))
+
+    repository.clear_l1("user-1", "scope-1", "s-1")
+
+    assert key not in repository.l1_cache
+
+
+def test_l1_cache_clear_l1_on_uncached_session_is_a_noop() -> None:
+    """清一个从没缓存过的 session：不能抛异常，也不能误伤别的 session。"""
+    repository = InMemoryMemoryRepository()
+    repository.update_l1(
+        _make_l1_entry(round_id="r-1", user_id="user-1", scope_id="scope-1", session_id="s-1"),
+        limit=10,
+    )
+
+    repository.clear_l1("user-1", "scope-1", "s-never-cached")
+
+    assert [entry.round_id for entry in repository.get_l1("user-1", "scope-1", "s-1")] == ["r-1"]
+
+
+def test_l1_cache_clear_scope_removes_entries_that_have_no_timestamp() -> None:
+    """整 scope 清理要能处理「有条目但没有时间戳」的脏状态：不能抛异常。
+
+    时间戳缺失说明这条缓存是别处塞进来的（或者时间戳已被单独清掉）；
+    清理路径必须容错，而不是 KeyError。
+    """
+    repository = InMemoryMemoryRepository()
+    entry = _make_l1_entry(round_id="r-1", user_id="user-1", scope_id="scope-1", session_id="s-1")
+    key = repository._l1_cache_key("user-1", "scope-1", "s-1", "thinkback")
+    repository.l1_cache[key] = [entry]
+
+    repository.clear_l1("user-1", "scope-1")
+
+    assert key not in repository.l1_cache
+
+
+def test_l1_cache_entry_exactly_at_ttl_is_still_valid(monkeypatch) -> None:
+    """TTL 边界：刚好等于 TTL 的条目仍然有效（过期判定是严格大于）。
+
+    边界写成 >= 会让「正好到点」的条目被丢掉 —— 差一毫秒的行为分叉。
+    """
+    repository = InMemoryMemoryRepository()
+    repository.update_l1(
+        _make_l1_entry(round_id="r-1", user_id="user-1", scope_id="scope-1", session_id="s-1"),
+        limit=10,
+    )
+    key = next(iter(repository.l1_cache))
+    now = 1_000_000.0
+    repository._l1_timestamps()[key] = now - L1_CACHE_TTL_SECONDS
+    monkeypatch.setattr("thinkback.memory.repositories._l1_cache.time.monotonic", lambda: now)
+
+    assert [entry.round_id for entry in repository.get_l1("user-1", "scope-1", "s-1")] == ["r-1"]
+
+
+def test_l1_cache_entry_without_timestamp_is_dropped() -> None:
+    """缓存条目没有时间戳 = 无法判断新鲜度，按 miss 处理并清掉。
+
+    清时间戳时必须容错（这条时间戳本来就不存在）。
+    """
+    repository = InMemoryMemoryRepository()
+    entry = _make_l1_entry(round_id="r-1", user_id="user-1", scope_id="scope-1", session_id="s-1")
+    key = repository._l1_cache_key("user-1", "scope-1", "s-1", "thinkback")
+    repository.l1_cache[key] = [entry]
+
+    assert repository.get_l1("user-1", "scope-1", "s-1") == []
+    assert key not in repository.l1_cache
+
+
+def test_l1_cache_close_on_in_memory_repository_is_a_noop() -> None:
+    """内存仓储的 close 是 no-op：调用不应报错（协议要求有 close）。"""
+    repository = InMemoryMemoryRepository()
+
+    repository.close()
