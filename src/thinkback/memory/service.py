@@ -1894,7 +1894,7 @@ L2 更新 (缓存失效)
             recalled_entries.append(indexed_memory)
             l3_accepted += 1
 
-        clipped_items = self._dedupe_and_clip(items, request.token_budget)
+        clipped_items = self._dedupe_and_clip(items, request.token_budget, namespace=l3_scope_id)
         # P2#7：被召回即强化（艾宾浩斯信号，debounce 限流写放大）。
         # 只对**真正进入上下文**的记忆计数：被去重（同内容/同槽位）或被预算
         # 裁掉的条目并没有暴露给模型，计进去会形成「召回 → 计数涨 → 强度涨 →
@@ -4273,10 +4273,39 @@ L2 更新 (缓存失效)
         """读 L2 摘要。直读仓库（同上，V2.1 起不再缓存）。"""
         return self.repository.get_summary(user_id, memory_scope_id, namespace=namespace)
 
-    def _dedupe_and_clip(self, items: list[MemoryItem], token_budget: int) -> list[MemoryItem]:
-        """召回去重与预算裁剪（策略在 ``domain.recall_policy``）。"""
+    def _dedupe_and_clip(
+        self,
+        items: list[MemoryItem],
+        token_budget: int,
+        *,
+        namespace: str = "",
+    ) -> list[MemoryItem]:
+        """召回去重与预算裁剪（策略在 ``domain.recall_policy``）。
 
-        return dedupe_and_clip(items, token_budget)
+        类型级上限来自该 namespace 的记忆类型注册表（``recall_budget``）：
+        某一类记忆不能吃掉整份预算。没配上限的类型不受限。
+        """
+
+        caps = self._type_recall_caps(namespace) if namespace else {}
+        return dedupe_and_clip(items, token_budget, type_caps=caps)
+
+    def _type_recall_caps(self, namespace: str) -> dict[str, int]:
+        """该 namespace 下各记忆类型的 token 上限。"""
+
+        try:
+            registry = self._type_registry(namespace)
+        except Exception as exc:  # noqa: BLE001 - 配置坏了不该让召回整个挂掉
+            logger.bind(
+                namespace=namespace,
+                error_type=type(exc).__name__,
+            ).warning("memory type registry unavailable; type caps skipped")
+            return {}
+        caps: dict[str, int] = {}
+        for name, spec in registry.types.items():
+            budget = getattr(spec, "recall_budget", None)
+            if isinstance(budget, int) and budget > 0:
+                caps[name] = budget
+        return caps
 
     @staticmethod
     def _recall_l3_metadata(raw_metadata: Any) -> dict[str, Any]:

@@ -154,7 +154,11 @@ def _quality(item: MemoryItem) -> float:
 
 
 def dedupe_and_clip(
-    items: list[MemoryItem], token_budget: int, *, now: datetime | None = None
+    items: list[MemoryItem],
+    token_budget: int,
+    *,
+    now: datetime | None = None,
+    type_caps: dict[str, int] | None = None,
 ) -> list[MemoryItem]:
     """按内容去重（层优先 → 强度 → 同层分高者胜）再按预算裁剪。
 
@@ -169,6 +173,10 @@ def dedupe_and_clip(
        但异步竞争 / 非本副本写入会留下同槽位的多条 ACTIVE 记忆；
        召回期再兜一次底：保留 ``valid_at`` 最新的一条（事实生效时间），
        时间相同再比 score、强度。
+
+    ``type_caps`` 是**类型级** token 上限（来自记忆类型注册表的 recall_budget）：
+    某一类记忆不能吃掉整份预算。某类型没用完的额度仍留在 L3 层里给别的类型
+    用 —— 与层间配额回流同一口径。
     """
 
     deduped: dict[str, MemoryItem] = {}
@@ -195,7 +203,7 @@ def dedupe_and_clip(
 
     deduped = _resolve_slot_conflicts(deduped, now)
     ordered = _order_items(list(deduped.values()), now)
-    return _clip_by_layer(ordered, token_budget)
+    return _clip_by_layer(ordered, token_budget, type_caps=type_caps)
 
 
 def _order_items(items: list[MemoryItem], now: datetime | None = None) -> list[MemoryItem]:
@@ -245,10 +253,18 @@ def _allocate_by_layer(needs: dict[str, int], budget: int) -> dict[str, int]:
     return allocation
 
 
-def _clip_by_layer(ordered: list[MemoryItem], token_budget: int) -> list[MemoryItem]:
+def _clip_by_layer(
+    ordered: list[MemoryItem],
+    token_budget: int,
+    *,
+    type_caps: dict[str, int] | None = None,
+) -> list[MemoryItem]:
     """按层切预算：L1 保底、L3 为主，层内取排名前缀。
 
     L1（当前对话）从最近的轮次开始挑 —— 预算紧时保留最新对话，而不是最旧。
+
+    ``type_caps`` 给 L3 层再加一道类型级上限：某类记忆（比如画像）不能吃掉
+    整份 L3 额度。类型没用完的额度留在层里给别的类型 —— 跟层间配额回流同口径。
     """
     groups: dict[str, list[MemoryItem]] = {}
     for item in ordered:
@@ -271,6 +287,7 @@ def _clip_by_layer(ordered: list[MemoryItem], token_budget: int) -> list[MemoryI
         candidates = list(reversed(group)) if layer == "L1" else group
         selected: list[MemoryItem] = []
         used = 0
+        type_used: dict[str, int] = {}
         for item in candidates:
             cost = estimate_tokens(item.content.strip())
             if used + cost > limit:
@@ -278,12 +295,28 @@ def _clip_by_layer(ordered: list[MemoryItem], token_budget: int) -> list[MemoryI
                 # 不该把整层清空（否则上下文直接空包）。引擎已按相关度排好序，
                 # 后面的条目同样相关，只是更短。
                 continue
+            type_name = _memory_type_of(item)
+            if type_name:
+                cap = (type_caps or {}).get(type_name)
+                if cap is not None and type_used.get(type_name, 0) + cost > cap:
+                    # 这一类已经用满它的额度：跳过这条，额度留给别的类型。
+                    continue
+                type_used[type_name] = type_used.get(type_name, 0) + cost
             used += cost
             selected.append(item)
         if layer == "L1":
             selected.reverse()  # 输出仍按时间顺序
         kept.extend(selected)
     return kept
+
+
+def _memory_type_of(item: MemoryItem) -> str | None:
+    """条目所属的记忆类型（来自 L3 的 metadata）。"""
+    metadata = getattr(item, "metadata", None)
+    if not isinstance(metadata, dict):
+        return None
+    value = metadata.get("memory_type")
+    return value if isinstance(value, str) and value else None
 
 
 def _resolve_slot_conflicts(
