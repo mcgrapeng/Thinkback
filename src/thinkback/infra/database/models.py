@@ -16,14 +16,16 @@ from thinkback.infra.database.base import Base
 
 
 class CurrentSummaryRecord(Base):
-    """L2 当前摘要记录（每个 user+scope 一行）。
+    """L2 当前摘要记录（每个 user+namespace+scope 一行）。
 
     字段含义：
     - ``summary_text``：当前生效的摘要文本；
     - ``summary_cursor_round``：该摘要基于的最后一条 round_id；
     - ``summary_state``：active/stale/dirty/rebuilding 状态机；
     - ``latest_source_round_id`` / ``latest_source_timestamp``：用于判断是否需要重算。
-    ``(user_id, memory_scope_id)`` 唯一约束保证每个 scope 只有一条当前摘要。
+    ``(user_id, namespace, memory_scope_id)`` 唯一约束保证每个
+    (namespace, scope) 只有一条当前摘要：同一 session_id 在不同 namespace
+    下必须是两份互不可见的记忆空间。
     """
 
     __tablename__ = "ins_current_summary"
@@ -31,6 +33,10 @@ class CurrentSummaryRecord(Base):
     summary_id: Mapped[str] = mapped_column(String(64), primary_key=True)
     user_id: Mapped[str] = mapped_column(String(128), index=True)
     memory_scope_id: Mapped[str] = mapped_column(String(128), index=True)
+    # L2 的隔离维度：同一 session_id 在不同 namespace 下互不可见。
+    namespace: Mapped[str] = mapped_column(
+        String(128), default="thinkback", server_default="thinkback", index=True
+    )
     summary_text: Mapped[str] = mapped_column(Text, default="")
     summary_cursor_round: Mapped[str | None] = mapped_column(String(128), nullable=True)
     latest_source_round_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
@@ -52,7 +58,9 @@ class CurrentSummaryRecord(Base):
     )
 
     __table_args__ = (
-        UniqueConstraint("user_id", "memory_scope_id", name="uq_ins_current_summary_scope"),
+        UniqueConstraint(
+            "user_id", "namespace", "memory_scope_id", name="uq_ins_current_summary_scope"
+        ),
     )
 
 

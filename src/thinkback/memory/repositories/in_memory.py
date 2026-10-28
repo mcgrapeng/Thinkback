@@ -28,7 +28,13 @@ from thinkback.domain.enums import (
     TaskStatus,
 )
 from thinkback.domain.errors import TaskStaleWriteError
-from thinkback.domain.keys import request_fingerprint, round_sort_key, scope_key, source_ref_key
+from thinkback.domain.keys import (
+    DEFAULT_NAMESPACE,
+    namespace_scope_key,
+    request_fingerprint,
+    round_sort_key,
+    source_ref_key,
+)
 from thinkback.domain.summarization import summarize_rounds
 from thinkback.memory.repositories._l1_cache import L1_CACHE_LIMIT, L1CacheMixin
 from thinkback.memory.schemas import AppendMemoryRequest
@@ -59,18 +65,25 @@ class InMemoryMemoryRepository(L1CacheMixin):
     def get_round(self, round_id: str) -> JournalEntry | None:
         return self.journal_by_round.get(round_id)
 
-    def get_l1(self, user_id: str, memory_scope_id: str, session_id: str) -> list[JournalEntry]:
+    def get_l1(
+        self,
+        user_id: str,
+        memory_scope_id: str,
+        session_id: str,
+        *,
+        namespace: str = DEFAULT_NAMESPACE,
+    ) -> list[JournalEntry]:
         """L1 读取：缓存优先，缺失时从 journal 派生（与 SQL 实现同语义）。
 
         冷缓存（进程重启 / 其他写者）必须回源，否则召回会丢最近轮次。
         """
-        cached = super().get_l1(user_id, memory_scope_id, session_id)
+        cached = super().get_l1(user_id, memory_scope_id, session_id, namespace=namespace)
         if cached:
             return cached
-        rounds = self.list_rounds(user_id, memory_scope_id, session_id)
+        rounds = self.list_rounds(user_id, memory_scope_id, session_id, namespace=namespace)
         for entry in rounds[-L1_CACHE_LIMIT:]:
             super().update_l1(entry, limit=L1_CACHE_LIMIT)
-        return super().get_l1(user_id, memory_scope_id, session_id)
+        return super().get_l1(user_id, memory_scope_id, session_id, namespace=namespace)
 
     def save_round(
         self, request: AppendMemoryRequest, *, request_metadata: dict[str, Any] | None = None
@@ -92,6 +105,8 @@ class InMemoryMemoryRepository(L1CacheMixin):
         entry = JournalEntry(
             journal_id=f"journal-{uuid4()}",
             user_id=request.user_id,
+            # L1 的隔离维度是 (user, namespace, session)：namespace 存在
+            # journal.namespace 列，作用域键仍是会话维度。
             memory_scope_id=request.session_id,
             session_id=request.session_id,
             round_id=request.round_id,
@@ -105,16 +120,20 @@ class InMemoryMemoryRepository(L1CacheMixin):
         self.journal_by_round[request.round_id] = entry
         return entry
 
-    def upsert_summary_from_journal(self, user_id: str, memory_scope_id: str) -> SummaryEntry:
+    def upsert_summary_from_journal(
+        self, user_id: str, memory_scope_id: str, *, namespace: str = DEFAULT_NAMESPACE
+    ) -> SummaryEntry:
         # 排除集按**用户**聚合（不按 scope）：L3 记忆在长期 scope，
         # 轮次在会话 scope；按 scope 过滤会漏掉已删除事实 → 摘要把原文复活。
         deleted_refs = self.excluded_source_refs_for_user(user_id)
         rounds = [
             entry
-            for entry in self.list_rounds(user_id, memory_scope_id)
+            for entry in self.list_rounds(user_id, memory_scope_id, namespace=namespace)
             if (entry.session_id, entry.round_id) not in deleted_refs
         ]
-        return self.upsert_summary_from_rounds(user_id, memory_scope_id, rounds)
+        return self.upsert_summary_from_rounds(
+            user_id, memory_scope_id, rounds, namespace=namespace
+        )
 
     def upsert_summary_from_rounds(
         self,
@@ -127,9 +146,11 @@ class InMemoryMemoryRepository(L1CacheMixin):
         structured_sections: dict[str, str] | None = None,
         preserve_llm: bool = False,
         expected_row_version: int | None = None,
+        namespace: str = DEFAULT_NAMESPACE,
     ) -> SummaryEntry:
         composed_text, latest = summarize_rounds(rounds)
-        existing = self.summaries.get(scope_key(user_id, memory_scope_id))
+        key = namespace_scope_key(user_id, namespace, memory_scope_id)
+        existing = self.summaries.get(key)
         # 乐观锁：版本已经变了（删除、状态变更、别人写过）就不写。
         if (
             existing is not None
@@ -148,6 +169,7 @@ class InMemoryMemoryRepository(L1CacheMixin):
             summary_id=existing.summary_id if existing else f"summary-{uuid4()}",
             user_id=user_id,
             memory_scope_id=memory_scope_id,
+            namespace=namespace,
             summary_text=summary_text if summary_text is not None else composed_text,
             summary_cursor_round=latest.round_id if latest else None,
             latest_source_round_id=latest.round_id if latest else None,
@@ -157,14 +179,23 @@ class InMemoryMemoryRepository(L1CacheMixin):
             structured_sections=dict(structured_sections) if structured_sections else {},
             row_version=(existing.row_version + 1) if existing else 0,
         )
-        self.summaries[scope_key(user_id, memory_scope_id)] = summary
+        self.summaries[key] = summary
         return summary
 
-    def get_summary(self, user_id: str, memory_scope_id: str) -> SummaryEntry | None:
-        return self.summaries.get(scope_key(user_id, memory_scope_id))
+    def get_summary(
+        self, user_id: str, memory_scope_id: str, *, namespace: str = DEFAULT_NAMESPACE
+    ) -> SummaryEntry | None:
+        return self.summaries.get(namespace_scope_key(user_id, namespace, memory_scope_id))
 
-    def mark_summary(self, user_id: str, memory_scope_id: str, state: SummaryState) -> None:
-        summary = self.get_summary(user_id, memory_scope_id)
+    def mark_summary(
+        self,
+        user_id: str,
+        memory_scope_id: str,
+        state: SummaryState,
+        *,
+        namespace: str = DEFAULT_NAMESPACE,
+    ) -> None:
+        summary = self.get_summary(user_id, memory_scope_id, namespace=namespace)
         if summary:
             summary.summary_state = state
             # 状态变更也要 +1：让基于旧快照的在飞刷新写不进来。
@@ -179,6 +210,7 @@ class InMemoryMemoryRepository(L1CacheMixin):
         limit: int | None = None,
         descending: bool = False,
         include_pending: bool = False,
+        namespace: str = DEFAULT_NAMESPACE,
     ) -> list[JournalEntry]:
         states = ("active", "pending_append") if include_pending else ("active",)
         rounds = [
@@ -186,6 +218,7 @@ class InMemoryMemoryRepository(L1CacheMixin):
             for entry in self.journal_by_round.values()
             if entry.user_id == user_id
             and entry.memory_scope_id == memory_scope_id
+            and entry.namespace == namespace
             and entry.round_state in states
             and (session_id is None or entry.session_id == session_id)
         ]
@@ -195,24 +228,36 @@ class InMemoryMemoryRepository(L1CacheMixin):
         return ordered
 
     def list_user_rounds(
-        self, user_id: str, *, include_pending: bool = False
+        self,
+        user_id: str,
+        *,
+        include_pending: bool = False,
+        namespace: str | None = None,
     ) -> list[JournalEntry]:
         states = ("active", "pending_append") if include_pending else ("active",)
         rounds = [
             entry
             for entry in self.journal_by_round.values()
-            if entry.user_id == user_id and entry.round_state in states
+            if entry.user_id == user_id
+            and entry.round_state in states
+            and (namespace is None or entry.namespace == namespace)
         ]
         return sorted(rounds, key=round_sort_key)
 
     def mark_rounds_deleted(
-        self, user_id: str, memory_scope_id: str, session_id: str | None = None
+        self,
+        user_id: str,
+        memory_scope_id: str,
+        session_id: str | None = None,
+        *,
+        namespace: str = DEFAULT_NAMESPACE,
     ) -> int:
         affected = 0
         for entry in self.journal_by_round.values():
             if (
                 entry.user_id == user_id
                 and entry.memory_scope_id == memory_scope_id
+                and entry.namespace == namespace
                 and (session_id is None or entry.session_id == session_id)
                 and entry.round_state != "deleted_tombstone"
             ):
@@ -384,6 +429,8 @@ class InMemoryMemoryRepository(L1CacheMixin):
         memory_scope_id: str,
         session_id: str | None = None,
         round_ids: list[str] | None = None,
+        *,
+        namespace: str = DEFAULT_NAMESPACE,
     ) -> int:
         """物理删除 L1 轮次原文行（erase 语义）。"""
         victims = [
@@ -391,6 +438,7 @@ class InMemoryMemoryRepository(L1CacheMixin):
             for round_id, entry in self.journal_by_round.items()
             if entry.user_id == user_id
             and entry.memory_scope_id == memory_scope_id
+            and entry.namespace == namespace
             and (session_id is None or entry.session_id == session_id)
             and (round_ids is None or round_id in round_ids)
         ]
@@ -398,13 +446,15 @@ class InMemoryMemoryRepository(L1CacheMixin):
             del self.journal_by_round[round_id]
         return len(victims)
 
-    def clear_summary(self, user_id: str, memory_scope_id: str) -> None:
+    def clear_summary(
+        self, user_id: str, memory_scope_id: str, *, namespace: str = DEFAULT_NAMESPACE
+    ) -> None:
         """清空 L2 会话摘要正文（erase 语义）。
 
         同时置 DIRTY 并递增版本：在飞的 LLM 刷新带着旧版本号写不回来，
         已擦除的内容不会回到 ACTIVE 摘要。
         """
-        summary = self.summaries.get(scope_key(user_id, memory_scope_id))
+        summary = self.summaries.get(namespace_scope_key(user_id, namespace, memory_scope_id))
         if summary is not None:
             summary.summary_text = ""
             summary.structured_sections = {}

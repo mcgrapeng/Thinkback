@@ -67,6 +67,7 @@ from thinkback.memory.repositories import (
     source_ref_key,
 )
 from thinkback.memory.schemas import (
+    DEFAULT_NAMESPACE,
     AdminMemoryItem,
     AppendMemoryRequest,
     AppendMemoryResponse,
@@ -391,6 +392,12 @@ class MemoryService:
 
     @staticmethod
     def _session_scope_id(request: Any) -> str:
+        """L1/L2 的会话作用域键（会话维度）。
+
+        namespace 是**独立维度**，不拼进这个键：仓储方法另有 namespace
+        参数，摘要表也有 namespace 列。这样同 session_id 在不同 namespace
+        下是两份互不可见的记忆空间，又不会把列撑到超长。
+        """
         session_id = getattr(request, "session_id", None)
         if session_id:
             return str(session_id)
@@ -416,34 +423,49 @@ class MemoryService:
             )
 
     def _rebuild_summary_scope_ids(self, request: RebuildMemoryRequest) -> list[str]:
+        """rebuild 涉及的 L1/L2 会话作用域键（会话维度）。
+
+        只取当前 namespace 的轮次：跨 namespace 重建会把别人的会话也
+        重算进当前 namespace 的摘要。
+        """
+        namespace = self._long_term_scope_id(request)
         if request.session_id:
             return [request.session_id]
         if self.history_source:
             history_rounds = self.history_source.list_rounds(
                 request.user_id,
-                self._session_scope_id(request),
+                request.session_id or "__all_sessions__",
                 None,
             )
             history_scope_ids = sorted({entry.memory_scope_id for entry in history_rounds})
             if history_scope_ids:
                 return history_scope_ids
         return sorted(
-            {entry.memory_scope_id for entry in self.repository.list_user_rounds(request.user_id)}
+            {
+                entry.memory_scope_id
+                for entry in self.repository.list_user_rounds(request.user_id, namespace=namespace)
+            }
         )
 
     def _history_scope_id(self, request: RebuildMemoryRequest) -> str:
         if request.session_id:
             return str(request.session_id)
         if self.history_source:
-            return self._session_scope_id(request)
+            return request.session_id or "__all_sessions__"
         scope_ids = self._rebuild_summary_scope_ids(request)
         if len(scope_ids) == 1:
             return scope_ids[0]
-        return self._session_scope_id(request)
+        return request.session_id or "__all_sessions__"
 
-    def _user_summary_scope_ids(self, user_id: str) -> set[str]:
-        rounds = self.repository.list_user_rounds(user_id)
-        return {entry.memory_scope_id for entry in rounds} or {self.LONG_TERM_SCOPE_ID}
+    def _user_summary_scope_ids(self, user_id: str, namespace: str) -> set[str]:
+        """该用户在指定 namespace 下的全部 L1/L2 会话作用域键。
+
+        删除/擦除按 namespace 分区：跨 namespace 删写会误伤别人的记忆。
+        """
+        rounds = self.repository.list_user_rounds(user_id, namespace=namespace)
+        return {entry.memory_scope_id for entry in rounds if entry.namespace == namespace} or {
+            "__all_sessions__"
+        }
 
     def append(self, request: AppendMemoryRequest) -> AppendMemoryResponse:
         """追加一个完整对话回合，并按安全策略同步或异步写入 L3。
@@ -649,7 +671,10 @@ L2 更新 (缓存失效)
             entry = existing or self.repository.save_round(
                 request, request_metadata=effective_metadata
             )
-            entry.memory_scope_id = session_scope_id
+            # 作用域键统一为 namespace::session（仓储写入时已按此口径落库）；
+            # 幂等重放时历史数据可能是裸 session_id，这里补齐。
+            if entry.memory_scope_id != session_scope_id:
+                entry.memory_scope_id = session_scope_id
             if restricted_or_unsafe:
                 # 命中 write-gate：这轮**不写长期记忆**（L2/L3 都不写），
                 # 并在响应里如实返回 skipped（原先返回 completed —— 谎报成功）。
@@ -839,10 +864,12 @@ L2 更新 (缓存失效)
             # 这轮已被删除或擦除：不得再发布到 L1/L2，否则原文回到上下文。
             return []
         self.repository.update_l1(entry)
-        self._upsert_default_summary(request.user_id, session_scope_id)
+        self._upsert_default_summary(request.user_id, session_scope_id, namespace=l3_scope_id)
         if self._l2_refresher is not None:
             # 拼接版已同步落库（降级保底）；LLM 综合版按去抖间隔后台刷新。
-            self._l2_refresher.maybe_submit(request.user_id, session_scope_id)
+            self._l2_refresher.maybe_submit(
+                request.user_id, session_scope_id, namespace=l3_scope_id
+            )
         if self._decay_sweeper is not None:
             # P2#7：遗忘清扫（进程级时间门控，默认 1 小时至多一次）。
             self._decay_sweeper.maybe_submit(request.user_id, l3_scope_id)
@@ -1668,7 +1695,12 @@ L2 更新 (缓存失效)
         # 排除集按用户聚合（不按 scope）：L3 记忆在长期 scope，轮次在会话 scope，
         # 按 scope 过滤会漏掉「记忆已删除/已遗忘」的轮次 → 原文从 L1 复活。
         excluded_refs = self.repository.excluded_source_refs_for_user(request.user_id)
-        for entry in self.repository.get_l1(request.user_id, session_scope_id, request.session_id):
+        for entry in self.repository.get_l1(
+            request.user_id,
+            session_scope_id,
+            request.session_id,
+            namespace=l3_scope_id,
+        ):
             if (entry.session_id, entry.round_id) in excluded_refs:
                 continue
             # 保留说话人：助手的话不能和用户的话混成一段，否则召回后无法区分
@@ -1680,7 +1712,7 @@ L2 更新 (缓存失效)
             )
             items.append(MemoryItem(layer="L1", content=content, source=entry.round_id))
 
-        summary = self._summary(request.user_id, session_scope_id)
+        summary = self._summary(request.user_id, session_scope_id, namespace=l3_scope_id)
         if summary and summary.summary_state is SummaryState.ACTIVE and summary.summary_text:
             items.append(
                 MemoryItem(layer="L2", content=summary.summary_text, source=summary.summary_id)
@@ -2157,7 +2189,7 @@ L2 更新 (缓存失效)
             round_ids_by_session = {session_scope_id: None}
         else:
             targets = self._erase_targets_all(request, l3_scope_id)
-            affected_sessions = set(self._user_summary_scope_ids(request.user_id))
+            affected_sessions = set(self._user_summary_scope_ids(request.user_id, l3_scope_id))
             round_ids_by_session = dict.fromkeys(affected_sessions)
 
         source_refs = self._erase_source_refs(request, targets, affected_sessions)
@@ -2199,7 +2231,11 @@ L2 更新 (缓存失效)
         refs = []
         for scope_id in sorted(affected_sessions):
             for entry in self.repository.list_rounds(
-                request.user_id, scope_id, None, include_pending=True
+                request.user_id,
+                scope_id,
+                None,
+                include_pending=True,
+                namespace=self._long_term_scope_id(request),
             ):
                 refs.append({"session_id": entry.session_id, "round_id": entry.round_id})
         return refs
@@ -2330,9 +2366,12 @@ L2 更新 (缓存失效)
                         request.user_id,
                         scope_id,
                         round_ids=round_ids.get(scope_id),
+                        namespace=namespace,
                     )
-                    self.repository.clear_summary(request.user_id, scope_id)
-                    self.repository.clear_l1(request.user_id, scope_id, scope_id)
+                    self.repository.clear_summary(request.user_id, scope_id, namespace=namespace)
+                    self.repository.clear_l1(
+                        request.user_id, scope_id, scope_id, namespace=namespace
+                    )
                 mark_done("l1")
 
             if "audit" not in done:
@@ -2892,6 +2931,7 @@ L2 更新 (缓存失效)
                             request.user_id,
                             summary_scope_id,
                             summary_scope_id,
+                            namespace=l3_scope_id,
                         )
                         if (entry.session_id, entry.round_id) not in deleted_refs
                         and delete_cutoffs.allows(entry)
@@ -2900,6 +2940,7 @@ L2 更新 (缓存失效)
                         request.user_id,
                         summary_scope_id,
                         l2_rounds,
+                        namespace=l3_scope_id,
                     )
             if request.rebuild_l3:
                 deleted_refs = self.repository.excluded_source_refs(
@@ -3452,7 +3493,7 @@ L2 更新 (缓存失效)
             if rollback_writes:
                 self._run_backend_writes(rollback_writes)
             raise
-        self._mark_source_refs_dirty(request.user_id, affected_source_refs)
+        self._mark_source_refs_dirty(request.user_id, affected_source_refs, namespace=l3_scope_id)
         return updated, pending_backend_writes
 
     def _conflicting_active_memories(
@@ -3473,15 +3514,26 @@ L2 更新 (缓存失效)
             and self._memory_conflict_slot(memory.memory_text) == slot
         ]
 
-    def _mark_source_refs_dirty(self, user_id: str, source_refs: list[dict[str, str]]) -> None:
+    def _mark_source_refs_dirty(
+        self, user_id: str, source_refs: list[dict[str, str]], *, namespace: str
+    ) -> None:
+        """让来源轮次所在会话的 L1/L2 失效。
+
+        namespace 是独立维度：同一 session_id 在别的 namespace 下属于
+        另一份记忆，不能被这里的置脏牵连。
+        """
         session_scope_ids = {
             str(source_ref["session_id"])
             for source_ref in source_refs
             if source_ref.get("session_id")
         }
         for session_scope_id in session_scope_ids:
-            self.repository.clear_l1(user_id, session_scope_id, session_scope_id)
-            self.repository.mark_summary(user_id, session_scope_id, SummaryState.DIRTY)
+            self.repository.clear_l1(
+                user_id, session_scope_id, session_scope_id, namespace=namespace
+            )
+            self.repository.mark_summary(
+                user_id, session_scope_id, SummaryState.DIRTY, namespace=namespace
+            )
 
     @staticmethod
     def _enum_or_none(enum_type: type[StrEnum], value: object) -> str | None:
@@ -3589,9 +3641,12 @@ L2 更新 (缓存失效)
                 request.user_id,
                 str(source_session_id) if source_session_id else self._session_scope_id(request),
                 source_session_id,
+                namespace=l3_scope_id,
             )
         for session_scope_id in affected_session_scope_ids:
-            self.repository.mark_summary(request.user_id, session_scope_id, SummaryState.DIRTY)
+            self.repository.mark_summary(
+                request.user_id, session_scope_id, SummaryState.DIRTY, namespace=l3_scope_id
+            )
         return [memory.memory_id], pending_cleanup_tasks, deferred_backend_deletes
 
     def _delete_session_memories(
@@ -3658,7 +3713,9 @@ L2 更新 (缓存失效)
                         delete_scope=request.scope.value,
                     )
                 affected.append(memory.memory_id)
-        self.repository.clear_l1(request.user_id, session_scope_id, request.session_id)
+        self.repository.clear_l1(
+            request.user_id, session_scope_id, request.session_id, namespace=l3_scope_id
+        )
         # 删除屏障的来源集合：必须在 mark_rounds_deleted 之前取，且要带上
         # pending_append（在飞抽取）的轮次 —— 否则删除返回后，在飞写入仍能
         # 把这轮写回 ACTIVE。
@@ -3669,12 +3726,14 @@ L2 更新 (缓存失效)
                 session_scope_id,
                 request.session_id,
                 include_pending=True,
+                namespace=l3_scope_id,
             )
         ]
         self.repository.mark_rounds_deleted(
             request.user_id,
             session_scope_id,
             request.session_id,
+            namespace=l3_scope_id,
         )
         delete_cutoff = self._add_session_delete_tombstone(
             user_id=request.user_id,
@@ -3689,7 +3748,9 @@ L2 更新 (缓存失效)
             session_id=request.session_id,
             deleted_before=delete_cutoff,
         )
-        self.repository.mark_summary(request.user_id, session_scope_id, SummaryState.DIRTY)
+        self.repository.mark_summary(
+            request.user_id, session_scope_id, SummaryState.DIRTY, namespace=l3_scope_id
+        )
         return affected, pending_cleanup_tasks, deferred_backend_deletes
 
     def _add_deleted_source_ref_tombstone(
@@ -3933,13 +3994,19 @@ L2 更新 (缓存失效)
             operation_id=request.operation_id,
             source_refs=[
                 {"session_id": entry.session_id, "round_id": entry.round_id}
-                for entry in self.repository.list_user_rounds(request.user_id, include_pending=True)
+                for entry in self.repository.list_user_rounds(
+                    request.user_id, include_pending=True, namespace=l3_scope_id
+                )
             ],
         )
-        for summary_scope_id in self._user_summary_scope_ids(request.user_id):
-            self.repository.clear_l1(request.user_id, summary_scope_id)
-            self.repository.mark_rounds_deleted(request.user_id, summary_scope_id)
-            self.repository.mark_summary(request.user_id, summary_scope_id, SummaryState.DIRTY)
+        for summary_scope_id in self._user_summary_scope_ids(request.user_id, l3_scope_id):
+            self.repository.clear_l1(request.user_id, summary_scope_id, namespace=l3_scope_id)
+            self.repository.mark_rounds_deleted(
+                request.user_id, summary_scope_id, namespace=l3_scope_id
+            )
+            self.repository.mark_summary(
+                request.user_id, summary_scope_id, SummaryState.DIRTY, namespace=l3_scope_id
+            )
         self._add_deleted_source_ref_tombstones_for_history(
             user_id=request.user_id,
             memory_scope_id=l3_scope_id,
@@ -3993,9 +4060,11 @@ L2 更新 (缓存失效)
         路径都被 invalidate，cache lifetime ≈ 0，收益不抵复杂度）。"""
         return list(self.repository.active_memories(user_id, memory_scope_id))
 
-    def _summary(self, user_id: str, memory_scope_id: str) -> Any | None:
+    def _summary(
+        self, user_id: str, memory_scope_id: str, *, namespace: str = DEFAULT_NAMESPACE
+    ) -> Any | None:
         """读 L2 摘要。直读仓库（同上，V2.1 起不再缓存）。"""
-        return self.repository.get_summary(user_id, memory_scope_id)
+        return self.repository.get_summary(user_id, memory_scope_id, namespace=namespace)
 
     def _dedupe_and_clip(self, items: list[MemoryItem], token_budget: int) -> list[MemoryItem]:
         """召回去重与预算裁剪（策略在 ``domain.recall_policy``）。"""
@@ -5111,7 +5180,9 @@ L2 更新 (缓存失效)
 
         return messages_are_restricted_or_unsafe(messages)
 
-    def _upsert_default_summary(self, user_id: str, memory_scope_id: str) -> None:
+    def _upsert_default_summary(
+        self, user_id: str, memory_scope_id: str, *, namespace: str = DEFAULT_NAMESPACE
+    ) -> None:
         """写入拼接占位摘要（P0：已有 llm 综合摘要时由仓储层跳过覆盖）。
 
         拼接版只是"尚无 LLM 综合摘要时"的同步占位；已有 llm 版时不做
@@ -5130,13 +5201,14 @@ L2 更新 (缓存失效)
             memory_scope_id,
             limit=SUMMARY_ROUNDS_WINDOW,
             descending=True,
+            namespace=namespace,
         )
         recent.reverse()
         rounds = [
             entry for entry in recent if (entry.session_id, entry.round_id) not in deleted_refs
         ]
         self.repository.upsert_summary_from_rounds(
-            user_id, memory_scope_id, rounds, preserve_llm=True
+            user_id, memory_scope_id, rounds, preserve_llm=True, namespace=namespace
         )
 
     @staticmethod
@@ -5263,6 +5335,7 @@ L2 更新 (缓存失效)
                     request.user_id,
                     summary_scope_id,
                     summary_scope_id,
+                    namespace=l3_scope_id,
                 )
                 if (entry.session_id, entry.round_id) not in excluded_refs
                 and delete_cutoffs.allows(entry)
@@ -5368,11 +5441,18 @@ L2 更新 (缓存失效)
         return processed_refs
 
     def _effective_history_rounds(
-        self, user_id: str, memory_scope_id: str, session_id: str | None
+        self,
+        user_id: str,
+        memory_scope_id: str,
+        session_id: str | None,
+        *,
+        namespace: str = DEFAULT_NAMESPACE,
     ) -> list[JournalEntry]:
         if self.history_source:
             return list(self.history_source.list_rounds(user_id, memory_scope_id, session_id))
-        return list(self.repository.list_rounds(user_id, memory_scope_id, session_id))
+        return list(
+            self.repository.list_rounds(user_id, memory_scope_id, session_id, namespace=namespace)
+        )
 
     def _rebuild_cleanup_candidates(
         self,

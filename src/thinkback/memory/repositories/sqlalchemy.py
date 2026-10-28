@@ -35,7 +35,11 @@ from thinkback.domain.enums import (
     TaskStatus,
 )
 from thinkback.domain.errors import TaskStaleWriteError
-from thinkback.domain.keys import request_fingerprint, source_ref_key
+from thinkback.domain.keys import (
+    DEFAULT_NAMESPACE,
+    request_fingerprint,
+    source_ref_key,
+)
 from thinkback.domain.summarization import summarize_rounds
 from thinkback.infra.database.engine import SessionLocal
 from thinkback.infra.database.models import (
@@ -195,7 +199,14 @@ class SqlAlchemyMemoryRepository(L1CacheMixin):
     def get_round(self, round_id: str) -> JournalEntry | None:
         return self._run(self._get_round(round_id))
 
-    def get_l1(self, user_id: str, memory_scope_id: str, session_id: str) -> list[JournalEntry]:
+    def get_l1(
+        self,
+        user_id: str,
+        memory_scope_id: str,
+        session_id: str,
+        *,
+        namespace: str = DEFAULT_NAMESPACE,
+    ) -> list[JournalEntry]:
         """L1 读取：进程缓存优先，缓存缺失时回源 PG journal 派生。
 
         短期记忆的持久层是 PostgreSQL；进程内 L1 缓存只是单 Pod 读加速。
@@ -203,7 +214,7 @@ class SqlAlchemyMemoryRepository(L1CacheMixin):
         此时必须从 journal（round_state=active 的最近 N 轮）派生，否则
         recall 的 L1 会随机丢失最近轮次。
         """
-        cached = super().get_l1(user_id, memory_scope_id, session_id)
+        cached = super().get_l1(user_id, memory_scope_id, session_id, namespace=namespace)
         if cached:
             return cached
         rounds = self.list_rounds(
@@ -212,11 +223,12 @@ class SqlAlchemyMemoryRepository(L1CacheMixin):
             session_id,
             limit=L1_CACHE_LIMIT,
             descending=True,
+            namespace=namespace,
         )
         rounds.reverse()
         for entry in rounds:
             super().update_l1(entry, limit=L1_CACHE_LIMIT)
-        return super().get_l1(user_id, memory_scope_id, session_id)
+        return super().get_l1(user_id, memory_scope_id, session_id, namespace=namespace)
 
     async def _get_round(self, round_id: str) -> JournalEntry | None:
         async with self.session_factory() as session:
@@ -249,6 +261,8 @@ class SqlAlchemyMemoryRepository(L1CacheMixin):
         return JournalEntry(
             journal_id=f"journal-{uuid4()}",
             user_id=request.user_id,
+            # L1 的隔离维度是 (user, namespace, session)：namespace 存在
+            # journal.namespace 列，作用域键仍是会话维度。
             memory_scope_id=request.session_id,
             session_id=request.session_id,
             round_id=request.round_id,
@@ -304,16 +318,20 @@ class SqlAlchemyMemoryRepository(L1CacheMixin):
                 raise
         return entry
 
-    def upsert_summary_from_journal(self, user_id: str, memory_scope_id: str) -> SummaryEntry:
+    def upsert_summary_from_journal(
+        self, user_id: str, memory_scope_id: str, *, namespace: str = DEFAULT_NAMESPACE
+    ) -> SummaryEntry:
         # 排除集按**用户**聚合（不按 scope）：L3 记忆在长期 scope，
         # 轮次在会话 scope；按 scope 过滤会漏掉已删除事实 → 摘要把原文复活。
         excluded_refs = self.excluded_source_refs_for_user(user_id)
         rounds = [
             entry
-            for entry in self.list_rounds(user_id, memory_scope_id)
+            for entry in self.list_rounds(user_id, memory_scope_id, namespace=namespace)
             if (entry.session_id, entry.round_id) not in excluded_refs
         ]
-        return self.upsert_summary_from_rounds(user_id, memory_scope_id, rounds)
+        return self.upsert_summary_from_rounds(
+            user_id, memory_scope_id, rounds, namespace=namespace
+        )
 
     def upsert_summary_from_rounds(
         self,
@@ -326,6 +344,7 @@ class SqlAlchemyMemoryRepository(L1CacheMixin):
         structured_sections: dict[str, str] | None = None,
         preserve_llm: bool = False,
         expected_row_version: int | None = None,
+        namespace: str = DEFAULT_NAMESPACE,
     ) -> SummaryEntry:
         composed_text, latest = summarize_rounds(rounds)
         return self._run(
@@ -338,6 +357,7 @@ class SqlAlchemyMemoryRepository(L1CacheMixin):
                 structured_sections=structured_sections,
                 preserve_llm=preserve_llm,
                 expected_row_version=expected_row_version,
+                namespace=namespace,
             )
         )
 
@@ -352,6 +372,7 @@ class SqlAlchemyMemoryRepository(L1CacheMixin):
         structured_sections: dict[str, str] | None = None,
         preserve_llm: bool = False,
         expected_row_version: int | None = None,
+        namespace: str = DEFAULT_NAMESPACE,
     ) -> SummaryEntry:
         async with self.session_factory() as session:
             # 单条条件 UPDATE —— 判据与写在一起，不给并发留窗口。
@@ -367,6 +388,7 @@ class SqlAlchemyMemoryRepository(L1CacheMixin):
                 .where(
                     and_(
                         CurrentSummaryRecord.user_id == user_id,
+                        CurrentSummaryRecord.namespace == namespace,
                         CurrentSummaryRecord.memory_scope_id == memory_scope_id,
                     )
                 )
@@ -403,6 +425,7 @@ class SqlAlchemyMemoryRepository(L1CacheMixin):
                     select(CurrentSummaryRecord).where(
                         and_(
                             CurrentSummaryRecord.user_id == user_id,
+                            CurrentSummaryRecord.namespace == namespace,
                             CurrentSummaryRecord.memory_scope_id == memory_scope_id,
                         )
                     )
@@ -414,6 +437,7 @@ class SqlAlchemyMemoryRepository(L1CacheMixin):
                     summary_id=f"summary-{uuid4()}",
                     user_id=user_id,
                     memory_scope_id=memory_scope_id,
+                    namespace=namespace,
                     summary_text="",
                     summary_cursor_round=None,
                     latest_source_round_id=None,
@@ -441,6 +465,7 @@ class SqlAlchemyMemoryRepository(L1CacheMixin):
                         select(CurrentSummaryRecord).where(
                             and_(
                                 CurrentSummaryRecord.user_id == user_id,
+                                CurrentSummaryRecord.namespace == namespace,
                                 CurrentSummaryRecord.memory_scope_id == memory_scope_id,
                             )
                         )
@@ -455,6 +480,7 @@ class SqlAlchemyMemoryRepository(L1CacheMixin):
                 select(CurrentSummaryRecord).where(
                     and_(
                         CurrentSummaryRecord.user_id == user_id,
+                        CurrentSummaryRecord.namespace == namespace,
                         CurrentSummaryRecord.memory_scope_id == memory_scope_id,
                     )
                 )
@@ -464,30 +490,45 @@ class SqlAlchemyMemoryRepository(L1CacheMixin):
             await session.refresh(record)
             return self._summary_from_record(record)
 
-    def get_summary(self, user_id: str, memory_scope_id: str) -> SummaryEntry | None:
-        return self._run(self._get_summary(user_id, memory_scope_id))
+    def get_summary(
+        self, user_id: str, memory_scope_id: str, *, namespace: str = DEFAULT_NAMESPACE
+    ) -> SummaryEntry | None:
+        return self._run(self._get_summary(user_id, memory_scope_id, namespace))
 
-    async def _get_summary(self, user_id: str, memory_scope_id: str) -> SummaryEntry | None:
+    async def _get_summary(
+        self, user_id: str, memory_scope_id: str, namespace: str
+    ) -> SummaryEntry | None:
         async with self.session_factory() as session:
             record = await session.scalar(
                 select(CurrentSummaryRecord).where(
                     and_(
                         CurrentSummaryRecord.user_id == user_id,
+                        CurrentSummaryRecord.namespace == namespace,
                         CurrentSummaryRecord.memory_scope_id == memory_scope_id,
                     )
                 )
             )
             return self._summary_from_record(record) if record else None
 
-    def mark_summary(self, user_id: str, memory_scope_id: str, state: SummaryState) -> None:
-        self._run(self._mark_summary(user_id, memory_scope_id, state))
+    def mark_summary(
+        self,
+        user_id: str,
+        memory_scope_id: str,
+        state: SummaryState,
+        *,
+        namespace: str = DEFAULT_NAMESPACE,
+    ) -> None:
+        self._run(self._mark_summary(user_id, memory_scope_id, state, namespace))
 
-    async def _mark_summary(self, user_id: str, memory_scope_id: str, state: SummaryState) -> None:
+    async def _mark_summary(
+        self, user_id: str, memory_scope_id: str, state: SummaryState, namespace: str
+    ) -> None:
         async with self.session_factory() as session:
             record = await session.scalar(
                 select(CurrentSummaryRecord).where(
                     and_(
                         CurrentSummaryRecord.user_id == user_id,
+                        CurrentSummaryRecord.namespace == namespace,
                         CurrentSummaryRecord.memory_scope_id == memory_scope_id,
                     )
                 )
@@ -507,6 +548,7 @@ class SqlAlchemyMemoryRepository(L1CacheMixin):
         limit: int | None = None,
         descending: bool = False,
         include_pending: bool = False,
+        namespace: str = DEFAULT_NAMESPACE,
     ) -> list[JournalEntry]:
         return self._run(
             self._list_rounds(
@@ -516,6 +558,7 @@ class SqlAlchemyMemoryRepository(L1CacheMixin):
                 limit=limit,
                 descending=descending,
                 include_pending=include_pending,
+                namespace=namespace,
             )
         )
 
@@ -528,10 +571,12 @@ class SqlAlchemyMemoryRepository(L1CacheMixin):
         limit: int | None = None,
         descending: bool = False,
         include_pending: bool = False,
+        namespace: str = DEFAULT_NAMESPACE,
     ) -> list[JournalEntry]:
         states = ("active", "pending_append") if include_pending else ("active",)
         filters = [
             SummaryRoundJournalRecord.user_id == user_id,
+            SummaryRoundJournalRecord.namespace == namespace,
             SummaryRoundJournalRecord.memory_scope_id == memory_scope_id,
             SummaryRoundJournalRecord.round_state.in_(states),
         ]
@@ -560,24 +605,31 @@ class SqlAlchemyMemoryRepository(L1CacheMixin):
             return [self._journal_from_record(record) for record in records]
 
     def list_user_rounds(
-        self, user_id: str, *, include_pending: bool = False
+        self,
+        user_id: str,
+        *,
+        include_pending: bool = False,
+        namespace: str | None = None,
     ) -> list[JournalEntry]:
-        return self._run(self._list_user_rounds(user_id, include_pending=include_pending))
+        return self._run(
+            self._list_user_rounds(user_id, include_pending=include_pending, namespace=namespace)
+        )
 
     async def _list_user_rounds(
-        self, user_id: str, *, include_pending: bool = False
+        self, user_id: str, *, include_pending: bool = False, namespace: str | None = None
     ) -> list[JournalEntry]:
         states = ("active", "pending_append") if include_pending else ("active",)
+        filters = [
+            SummaryRoundJournalRecord.user_id == user_id,
+            SummaryRoundJournalRecord.round_state.in_(states),
+        ]
+        if namespace is not None:
+            filters.append(SummaryRoundJournalRecord.namespace == namespace)
         async with self.session_factory() as session:
             records = (
                 await session.scalars(
                     select(SummaryRoundJournalRecord)
-                    .where(
-                        and_(
-                            SummaryRoundJournalRecord.user_id == user_id,
-                            SummaryRoundJournalRecord.round_state.in_(states),
-                        )
-                    )
+                    .where(and_(*filters))
                     .order_by(
                         SummaryRoundJournalRecord.source_timestamp,
                         SummaryRoundJournalRecord.round_index.nulls_first(),
@@ -588,9 +640,14 @@ class SqlAlchemyMemoryRepository(L1CacheMixin):
             return [self._journal_from_record(record) for record in records]
 
     def mark_rounds_deleted(
-        self, user_id: str, memory_scope_id: str, session_id: str | None = None
+        self,
+        user_id: str,
+        memory_scope_id: str,
+        session_id: str | None = None,
+        *,
+        namespace: str = DEFAULT_NAMESPACE,
     ) -> int:
-        return self._run(self._mark_rounds_deleted(user_id, memory_scope_id, session_id))
+        return self._run(self._mark_rounds_deleted(user_id, memory_scope_id, session_id, namespace))
 
     def mark_round_deleted(self, round_id: str) -> bool:
         return self._run(self._mark_round_deleted(round_id))
@@ -602,10 +659,15 @@ class SqlAlchemyMemoryRepository(L1CacheMixin):
         return self._run(self._mark_round_pending_append(round_id))
 
     async def _mark_rounds_deleted(
-        self, user_id: str, memory_scope_id: str, session_id: str | None
+        self,
+        user_id: str,
+        memory_scope_id: str,
+        session_id: str | None,
+        namespace: str = DEFAULT_NAMESPACE,
     ) -> int:
         filters = [
             SummaryRoundJournalRecord.user_id == user_id,
+            SummaryRoundJournalRecord.namespace == namespace,
             SummaryRoundJournalRecord.memory_scope_id == memory_scope_id,
             SummaryRoundJournalRecord.round_state != "deleted_tombstone",
         ]
@@ -983,9 +1045,13 @@ class SqlAlchemyMemoryRepository(L1CacheMixin):
         memory_scope_id: str,
         session_id: str | None = None,
         round_ids: list[str] | None = None,
+        *,
+        namespace: str = DEFAULT_NAMESPACE,
     ) -> int:
         """物理删除 L1 轮次原文行（erase 语义）。"""
-        return self._run(self._delete_rounds(user_id, memory_scope_id, session_id, round_ids))
+        return self._run(
+            self._delete_rounds(user_id, memory_scope_id, session_id, round_ids, namespace)
+        )
 
     async def _delete_rounds(
         self,
@@ -993,9 +1059,11 @@ class SqlAlchemyMemoryRepository(L1CacheMixin):
         memory_scope_id: str,
         session_id: str | None = None,
         round_ids: list[str] | None = None,
+        namespace: str = DEFAULT_NAMESPACE,
     ) -> int:
         conditions = [
             SummaryRoundJournalRecord.user_id == user_id,
+            SummaryRoundJournalRecord.namespace == namespace,
             SummaryRoundJournalRecord.memory_scope_id == memory_scope_id,
         ]
         if session_id is not None:
@@ -1009,16 +1077,21 @@ class SqlAlchemyMemoryRepository(L1CacheMixin):
             await session.commit()
             return int(getattr(result, "rowcount", 0) or 0)
 
-    def clear_summary(self, user_id: str, memory_scope_id: str) -> None:
+    def clear_summary(
+        self, user_id: str, memory_scope_id: str, *, namespace: str = DEFAULT_NAMESPACE
+    ) -> None:
         """清空 L2 会话摘要正文（erase 语义）。"""
-        self._run(self._clear_summary(user_id, memory_scope_id))
+        self._run(self._clear_summary(user_id, memory_scope_id, namespace))
 
-    async def _clear_summary(self, user_id: str, memory_scope_id: str) -> None:
+    async def _clear_summary(
+        self, user_id: str, memory_scope_id: str, namespace: str = DEFAULT_NAMESPACE
+    ) -> None:
         async with self.session_factory() as session:
             record = await session.scalar(
                 select(CurrentSummaryRecord).where(
                     and_(
                         CurrentSummaryRecord.user_id == user_id,
+                        CurrentSummaryRecord.namespace == namespace,
                         CurrentSummaryRecord.memory_scope_id == memory_scope_id,
                     )
                 )
@@ -1617,6 +1690,7 @@ class SqlAlchemyMemoryRepository(L1CacheMixin):
             summary_id=record.summary_id,
             user_id=record.user_id,
             memory_scope_id=record.memory_scope_id,
+            namespace=getattr(record, "namespace", None) or "thinkback",
             summary_text=record.summary_text,
             summary_cursor_round=record.summary_cursor_round,
             latest_source_round_id=record.latest_source_round_id,

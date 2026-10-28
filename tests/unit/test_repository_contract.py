@@ -245,6 +245,66 @@ def test_mark_rounds_deleted_bulk_counts_and_scopes(repository) -> None:  # type
 
 
 # ---------------------------------------------------------------------------
+# namespace 隔离（L1 轮次与 L2 摘要）
+# ---------------------------------------------------------------------------
+
+
+def test_same_session_in_two_namespaces_stays_separate(repository) -> None:  # type: ignore[no-untyped-def]
+    """同一 session_id 在不同 namespace 下必须是两份互不可见的记忆空间。"""
+    repository.save_round(make_append(round_id="r-alpha", namespace="alpha"))
+    repository.save_round(make_append(round_id="r-beta", namespace="beta"))
+
+    alpha = repository.list_rounds("user-1", "session-1", namespace="alpha")
+    beta = repository.list_rounds("user-1", "session-1", namespace="beta")
+    assert [entry.round_id for entry in alpha] == ["r-alpha"]
+    assert [entry.round_id for entry in beta] == ["r-beta"]
+    assert repository.get_l1("user-1", "session-1", "session-1", namespace="alpha") != []
+    assert (
+        repository.get_l1("user-1", "session-1", "session-1", namespace="beta")[0].round_id
+        == "r-beta"
+    )
+
+
+def test_summary_rows_are_isolated_per_namespace(repository) -> None:  # type: ignore[no-untyped-def]
+    """L2 摘要按 (user, namespace, scope) 唯一：alpha 的摘要不能被 beta 覆盖。"""
+    alpha_rounds = repository.list_rounds("user-1", "session-1", namespace="alpha")
+    beta_rounds = repository.list_rounds("user-1", "session-1", namespace="beta")
+    repository.upsert_summary_from_rounds(
+        "user-1", "session-1", alpha_rounds, summary_text="alpha 摘要", namespace="alpha"
+    )
+    repository.upsert_summary_from_rounds(
+        "user-1", "session-1", beta_rounds, summary_text="beta 摘要", namespace="beta"
+    )
+
+    alpha = repository.get_summary("user-1", "session-1", namespace="alpha")
+    beta = repository.get_summary("user-1", "session-1", namespace="beta")
+    assert alpha is not None and alpha.summary_text == "alpha 摘要"
+    assert beta is not None and beta.summary_text == "beta 摘要"
+
+
+def test_mark_rounds_deleted_does_not_cross_namespace(repository) -> None:  # type: ignore[no-untyped-def]
+    """在 alpha 墓碑化轮次，不得影响 beta 的同名会话轮次。"""
+    repository.save_round(make_append(round_id="r-alpha", namespace="alpha"))
+    repository.save_round(make_append(round_id="r-beta", namespace="beta"))
+
+    assert repository.mark_rounds_deleted("user-1", "session-1", namespace="alpha") == 1
+    assert repository.list_rounds("user-1", "session-1", namespace="alpha") == []
+    assert [
+        entry.round_id for entry in repository.list_rounds("user-1", "session-1", namespace="beta")
+    ] == ["r-beta"]
+
+
+def test_list_user_rounds_can_filter_by_namespace(repository) -> None:  # type: ignore[no-untyped-def]
+    """跨 namespace 删除/重建时必须能只取本 namespace 的轮次。"""
+    repository.save_round(make_append(round_id="r-alpha", namespace="alpha"))
+    repository.save_round(make_append(round_id="r-beta", namespace="beta"))
+
+    alpha = repository.list_user_rounds("user-1", namespace="alpha")
+    assert [entry.round_id for entry in alpha] == ["r-alpha"]
+    assert len(repository.list_user_rounds("user-1")) == 2
+
+
+# ---------------------------------------------------------------------------
 # L1 缓存
 # ---------------------------------------------------------------------------
 

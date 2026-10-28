@@ -72,6 +72,8 @@ class SummaryEntry:
       summary_id: 摘要编号（唯一）
       user_id: 用户维度
       memory_scope_id: 会话维度
+      namespace: 命名空间维度（同一 session_id 在不同 namespace 下是
+        两份互不可见的摘要）
       summary_text: 摘要正文（向后兼容视图，供召回端消费）
       summary_cursor_round: 最后处理过的回合 ID
       latest_source_round_id: 最新源回合 ID（用于版本号）
@@ -91,6 +93,7 @@ class SummaryEntry:
     summary_cursor_round: str | None
     latest_source_round_id: str | None
     latest_source_timestamp: datetime | None
+    namespace: str = "thinkback"
     summary_state: SummaryState = SummaryState.ACTIVE
     summary_kind: str = "concat"
     structured_sections: dict[str, str] = field(default_factory=dict)

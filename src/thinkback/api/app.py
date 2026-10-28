@@ -95,6 +95,11 @@ async def _lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: ARG001
     # 避免 GetTask 客户端永远轮询。内部已按阈值做条件回收并吞掉失败。
     from thinkback.api.dependencies import get_memory_service
 
+    # 服务单例在 lifespan 内**同步**构造：构造只碰 PG 引擎与 Mem0 客户端，
+    # 不发网络请求，代价可忽略。不这样做的话单例由后台线程懒构造，
+    # 启动完成时可能还没建好 —— 首个请求会与恢复线程竞争同一个单例。
+    service = get_memory_service()
+
     # 已接受（async 返回 accepted）但没写完的 L3 写入：按 journal 重放，
     # 否则进程崩溃后那条长期记忆会永久缺失。必须在孤儿回收之前跑：
     # 回收会把超龄 RUNNING 标成 failed，回收后就认不出「待重放」的工作了。
@@ -102,10 +107,8 @@ async def _lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: ARG001
     # 放后台线程：重放最多 200 次 LLM 抽取，卡在 lifespan 里会让就绪探针
     # 超时 → Pod 被判定不健康 → CrashLoopBackOff（要恢复的 Pod 自己起不来）。
     def _recover_pending_writes() -> None:
-        # 抓住当前实例：后台线程里再调 get_memory_service() 会在服务关闭后
-        # 把单例重新造出来（关停后仍持有仓储）。
-        service = get_memory_service()
-
+        # 用 lifespan 已构造好的实例：后台线程里再调 get_memory_service()
+        # 会在服务关闭后把单例重新造出来（关停后仍持有仓储）。
         try:
             recovered = service.recover_pending_writes()
         except Exception as exc:  # noqa: BLE001 - 恢复失败不该挡住启动
@@ -138,7 +141,7 @@ async def _lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: ARG001
         from thinkback.rpc.server import create_server
 
         grpc_server, address = create_server(
-            get_memory_service(),
+            service,
             host=settings.grpc_host,
             port=settings.grpc_port,
             max_workers=settings.grpc_max_workers,

@@ -28,6 +28,7 @@ from typing import TYPE_CHECKING
 
 from loguru import logger
 
+from thinkback.domain.keys import DEFAULT_NAMESPACE
 from thinkback.domain.summarization import (
     L2_STRUCTURED_SUMMARY_SYSTEM_PROMPT,
     SummaryComposer,
@@ -41,6 +42,11 @@ if TYPE_CHECKING:
     from thinkback.domain.ports import MemoryRepository
 
 OnSummaryRefreshed = Callable[[str, str], None]
+
+# 刷新作用域的键：(user_id, namespace, session_scope_id)。
+# namespace 必须进键：同一 session_id 在不同 namespace 下是两份记忆，
+# 去抖计数与在飞去重不能跨 namespace 共享。
+ScopeKey = tuple[str, str, str]
 
 
 class L2BackgroundRefresher:
@@ -71,15 +77,15 @@ class L2BackgroundRefresher:
         self._release_capacity = release_capacity
         self._max_tracked_scopes = max(1, max_tracked_scopes)
         self._state_lock = Lock()
-        # 去抖：每个 (user, scope) 自上次提交以来的 append 计数（LRU 淘汰）
-        self._append_counters: OrderedDict[tuple[str, str], int] = OrderedDict()
+        # 去抖：每个 (user, namespace, scope) 自上次提交以来的 append 计数（LRU 淘汰）
+        self._append_counters: OrderedDict[ScopeKey, int] = OrderedDict()
         # 已完成过至少一次 llm 刷新的作用域（进程内视角；重启后首 append 会再触发一次，幂等无害）
-        self._llm_refreshed_scopes: OrderedDict[tuple[str, str], None] = OrderedDict()
+        self._llm_refreshed_scopes: OrderedDict[ScopeKey, None] = OrderedDict()
         # 提交去重 + futures 记账
-        self._pending_scopes: set[tuple[str, str]] = set()
+        self._pending_scopes: set[ScopeKey] = set()
         self._futures: set[Future[None]] = set()
 
-    def _remember_scope(self, scope: tuple[str, str]) -> None:
+    def _remember_scope(self, scope: ScopeKey) -> None:
         """记住一个活跃 scope，并淘汰最久未用的（进程内状态必须有上界）。
 
         注意：这里**不能**清零 append 计数——计数表示「上次提交之后又来了
@@ -102,10 +108,12 @@ class L2BackgroundRefresher:
 
     # ── 对外接口 ────────────────────────────────────────────────────
 
-    def maybe_submit(self, user_id: str, session_scope_id: str) -> None:
+    def maybe_submit(
+        self, user_id: str, session_scope_id: str, *, namespace: str = DEFAULT_NAMESPACE
+    ) -> None:
         """append 后调用：达到去抖阈值或该作用域尚无 llm 摘要时提交后台刷新。"""
 
-        scope = (user_id, session_scope_id)
+        scope: ScopeKey = (user_id, namespace, session_scope_id)
         with self._state_lock:
             # 计数先落：在飞期间的 append 也要计数，否则在飞结束后
             # 这几轮永远等不到下一次刷新（trailing 刷新缺失）。
@@ -148,7 +156,7 @@ class L2BackgroundRefresher:
         context = copy_context()
         try:
             future = self._executor.submit(
-                context.run, self._run_refresh, user_id, session_scope_id
+                context.run, self._run_refresh, user_id, session_scope_id, namespace
             )
         except Exception:
             with self._state_lock:
@@ -194,7 +202,7 @@ class L2BackgroundRefresher:
 
     # ── 内部 ────────────────────────────────────────────────────────
 
-    def _finish(self, future: Future[None], scope: tuple[str, str]) -> None:
+    def _finish(self, future: Future[None], scope: ScopeKey) -> None:
         with self._state_lock:
             self._futures.discard(future)
             self._pending_scopes.discard(scope)
@@ -208,11 +216,15 @@ class L2BackgroundRefresher:
             # _run_refresh 自身已捕获并落日志；这里只做记账清理。
             pass
         if trailing_due:
-            user_id, session_scope_id = scope
-            self.maybe_submit(user_id, session_scope_id)
+            user_id, namespace, session_scope_id = scope
+            self.maybe_submit(user_id, session_scope_id, namespace=namespace)
 
-    def _run_refresh(self, user_id: str, session_scope_id: str) -> None:
-        refresh_log = logger.bind(user_id=user_id, session_scope_id=session_scope_id)
+    def _run_refresh(
+        self, user_id: str, session_scope_id: str, namespace: str = DEFAULT_NAMESPACE
+    ) -> None:
+        refresh_log = logger.bind(
+            user_id=user_id, session_scope_id=session_scope_id, namespace=namespace
+        )
         refresh_log.debug("memory l2 llm refresh started")
         try:
             # 排除集按用户聚合：L3 记忆在长期 scope，轮次在会话 scope；
@@ -220,13 +232,17 @@ class L2BackgroundRefresher:
             excluded_refs = self._repository.excluded_source_refs_for_user(user_id)
             rounds = [
                 entry
-                for entry in self._repository.list_rounds(user_id, session_scope_id)
+                for entry in self._repository.list_rounds(
+                    user_id, session_scope_id, namespace=namespace
+                )
                 if (entry.session_id, entry.round_id) not in excluded_refs
             ]
-            previous_summary = self._previous_llm_summary(user_id, session_scope_id)
+            previous_summary = self._previous_llm_summary(
+                user_id, session_scope_id, namespace=namespace
+            )
             # 乐观锁：带着当前版本去写。删除、状态变更、别人的写入都会让
             # 版本 +1，于是这份旧快照写不进来（不会把 DIRTY 改回 ACTIVE）。
-            current = self._repository.get_summary(user_id, session_scope_id)
+            current = self._repository.get_summary(user_id, session_scope_id, namespace=namespace)
             expected_row_version = current.row_version if current is not None else None
             if not rounds:
                 refresh_log.debug("memory l2 llm refresh skipped: no active rounds")
@@ -242,6 +258,7 @@ class L2BackgroundRefresher:
                 summary_kind="llm",
                 structured_sections=structured_sections,
                 expected_row_version=expected_row_version,
+                namespace=namespace,
             )
             if written.summary_text != summary_text.strip():
                 # 写不进去：期间有人改过这一行（多半是删除置脏）。
@@ -253,7 +270,7 @@ class L2BackgroundRefresher:
                 ).warning("memory l2 llm refresh superseded by concurrent write")
                 return
             with self._state_lock:
-                self._remember_scope((user_id, session_scope_id))
+                self._remember_scope((user_id, namespace, session_scope_id))
             if self._on_refreshed is not None:
                 self._on_refreshed(user_id, session_scope_id)
             refresh_log.bind(
@@ -267,10 +284,12 @@ class L2BackgroundRefresher:
                 "memory l2 llm refresh failed: keeping concat summary"
             )
 
-    def _previous_llm_summary(self, user_id: str, session_scope_id: str) -> str | None:
+    def _previous_llm_summary(
+        self, user_id: str, session_scope_id: str, *, namespace: str = DEFAULT_NAMESPACE
+    ) -> str | None:
         """上一版摘要只喂 llm 版本；拼接版是轮次子集，喂入只会引入噪声。"""
 
-        summary = self._repository.get_summary(user_id, session_scope_id)
+        summary = self._repository.get_summary(user_id, session_scope_id, namespace=namespace)
         if summary is None:
             return None
         if getattr(summary, "summary_kind", "concat") != "llm":
