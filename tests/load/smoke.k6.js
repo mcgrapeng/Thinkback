@@ -2,6 +2,9 @@
 //
 //   make load-smoke BASE_URL=http://127.0.0.1:7002
 //
+// 被测服务要求：单 IP 限流调高（MEMORY_RATE_LIMIT_PER_MINUTE=600000、
+// MEMORY_RATE_LIMIT_BURST=10000）。压测测的是服务容量，限流器另有一维。
+//
 // 口径：低并发 30 秒验证读写延迟、错误率**与记忆正确性**——
 //   - append 的后台任务轮询到终态且必须是 completed（写入真的落盘了）；
 //   - recall 必须未降级（degraded=false，L3 后端可达，没有退回 L1/L2 兜底）；
@@ -13,9 +16,15 @@ import http from "k6/http";
 import { check, sleep } from "k6";
 
 const BASE_URL = __ENV.BASE_URL || "http://127.0.0.1:7002";
-// 后台任务最长轮询次数与间隔：30 次 × 0.2s = 6s 预算，够 L3 落盘走完。
-const TASK_POLL_MAX = 30;
-const TASK_POLL_INTERVAL = 0.2;
+// 每次运行一个唯一前缀：round_id 复用会命中幂等重试路径（那测的是
+// 「重试对账」，不是「新写 + 召回」），测出来的是另一条路径的延迟。
+const RUN_ID = __ENV.K6_RUN_ID || `run-${Date.now()}-${__VU}`;
+// 后台任务轮询预算。L3 抽取要打 LLM，耗时由**模型端点**决定（实测本地
+// 27B 端点在 4 路并发下单轮要 70s+），不是服务自己的延迟。所以这里给足
+// 预算：这条检查要回答的是「写入最终落盘了吗」，不是「模型多快」。
+// 请求延迟（append / recall）另有阈值管。
+const TASK_POLL_MAX = 300;
+const TASK_POLL_INTERVAL = 0.5;
 const TERMINAL_TASK_STATUSES = ["completed", "failed", "dead_letter"];
 
 export const options = {
@@ -34,7 +43,7 @@ export const options = {
 function headers(iter) {
   return {
     "Content-Type": "application/json",
-    "Idempotency-Key": `k6-${__VU}-${iter}`,
+    "Idempotency-Key": `k6-${RUN_ID}-${__VU}-${iter}`,
   };
 }
 
@@ -66,6 +75,26 @@ function recalledText(response) {
   return items.map((item) => item.content || "").join("\n");
 }
 
+// 标记匹配：模型改写句子时可能改大小写或动尾巴，所以按**头部标记**匹配
+// （头部是 k6cat<轮次>- ，每轮唯一），并忽略大小写。
+function containsToken(text, token) {
+  return String(text).toLowerCase().indexOf(String(token).toLowerCase()) !== -1;
+}
+
+// 长期记忆（L3）里是否召回了这个唯一标记。
+// 只看「有没有召回到」会被 L2 拼接摘要兜底：L2 里就有本轮原文，所以哪怕
+// L3 压根没写进去，检查也会过 —— 那正是「写进去了但召不回来」的反面
+// （没写进去却看起来召回了）。必须单独盯 L3。
+function recalledInL3(response, token) {
+  const items = jsonField(response, "items");
+  if (!Array.isArray(items)) {
+    return false;
+  }
+  return items.some(
+    (item) => item.layer === "L3" && containsToken(item.content || "", token),
+  );
+}
+
 // 容错取 JSON 字段：响应不是 JSON（网关 502 的 HTML 等）时返回 undefined，
 // 让 check 判失败，而不是把整个迭代打断成脚本错误。
 function jsonField(response, path) {
@@ -78,17 +107,26 @@ function jsonField(response, path) {
 
 export default function () {
   const ts = new Date().toISOString();
-  // 每轮一个唯一事实：召回必须能把它原样带回来，否则"写进去了但召不回"。
-  const fact = `k6事实-${__VU}-${__ITER}`;
+  // 每轮一个独立用户 + 一个唯一标记。
+  // - 独立用户：共用一个用户时，后端抽取会把后面几轮判定成「已知」
+  //   （既有记忆 + 最近消息都在提示同一件事）→ 抽取返回空 → L3 压根没记忆，
+  //   校验会名存实亡。真实用法也是每个终端用户各自一份记忆。
+  // - 唯一标记放句首：模型改写句子时改的是尾巴，头部标记能原样留下。
+  const token = `k6cat${__ITER}-${RUN_ID.replace(/[^0-9]/g, "")}-${__VU}`;
+  // 匹配用头部标记：模型改写时改的是尾巴，头部每轮唯一。
+  const tokenHead = `k6cat${__ITER}-`;
+  const fact = `我家猫的名字叫 ${token}`;
+  const userId = `k6-user-${RUN_ID}-${__VU}-${__ITER}`;
+  const sessionId = `k6-session-${RUN_ID}-${__VU}-${__ITER}`;
   const append = http.post(
     `${BASE_URL}/memory/append`,
     JSON.stringify({
-      request_id: `k6-${__VU}-${__ITER}`,
-      user_id: "k6-user",
-      session_id: "k6-session",
-      round_id: `k6-round-${__VU}-${__ITER}`,
+      request_id: `k6-${RUN_ID}-${__VU}-${__ITER}`,
+      user_id: userId,
+      session_id: sessionId,
+      round_id: `k6-round-${RUN_ID}-${__VU}-${__ITER}`,
       messages: [
-        { message_id: "m1", role: "user", content: `压测消息：我的编号是 ${fact}`, timestamp: ts },
+        { message_id: "m1", role: "user", content: fact, timestamp: ts },
         { message_id: "m2", role: "assistant", content: "好的，已记住", timestamp: ts },
       ],
       source_timestamp: ts,
@@ -105,15 +143,16 @@ export default function () {
   const recall = http.post(
     `${BASE_URL}/memory/recall`,
     JSON.stringify({
-      user_id: "k6-user",
-      session_id: "k6-session",
-      query: fact,
+      user_id: userId,
+      session_id: sessionId,
+      query: "我家猫的名字叫什么",
     }),
     { headers: headers(__ITER), tags: { op: "recall" } },
   );
   check(recall, { "recall 2xx": (r) => r.status >= 200 && r.status < 300 });
   // 降级召回 = L3 后端不可用，只回了 L1/L2 兜底：算功能故障，不算通过。
   check(recall, { "recall 未降级": (r) => jsonField(r, "degraded") === false });
-  check(recall, { "recall 命中本轮事实": (r) => recalledText(r).indexOf(fact) !== -1 });
+  check(recall, { "recall 命中本轮事实": (r) => containsToken(recalledText(r), tokenHead) });
+  check(recall, { "recall 命中 L3 长期记忆": (r) => recalledInL3(r, tokenHead) });
   sleep(0.2);
 }

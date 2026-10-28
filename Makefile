@@ -78,7 +78,9 @@ test-fuzz:
 audit:
 	uv run --group dev pip-audit
 
-# k6 冒烟压测：需真实后端 + API Key（BASE_URL/API_KEY 环境变量）
+# k6 冒烟压测：需真实后端（BASE_URL 指向被测服务）。
+# 被测服务的单 IP 限流要调高：压测测的是服务容量，不是限流器
+# （MEMORY_RATE_LIMIT_PER_MINUTE=600000 MEMORY_RATE_LIMIT_BURST=10000）。
 load-smoke:
 	k6 run tests/load/smoke.k6.js
 

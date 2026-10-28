@@ -126,6 +126,11 @@ class Settings(BaseSettings):
 
     # ── API 网关 ──────────────────────────────────────────────────────
     memory_api_worker_limit: int = 8
+    # 单客户端 IP 的限流（业务面 /memory/*）。按 IP 分桶是因为内网免鉴权，
+    # 没有调用方身份可用。压测要测的是服务容量、不是限流器，因此这两个值
+    # 可配置：压测时调高，生产保持默认。
+    memory_rate_limit_per_minute: int = 600
+    memory_rate_limit_burst: int = 50
     # 读写路径的等待预算（各自独立的信号量与线程池，这里只是统一的超时值）。
     memory_api_worker_wait_seconds: float = 5.0
     readiness_timeout_seconds: float = 3.0
@@ -210,6 +215,24 @@ class Settings(BaseSettings):
 
         if value < 0:
             raise ValueError("memory_api_worker_wait_seconds must be >= 0")
+        return value
+
+    @field_validator("memory_rate_limit_per_minute")
+    @classmethod
+    def validate_memory_rate_limit_per_minute(cls, value: int) -> int:
+        """限流速率必须 >= 1，否则等于关掉限流但看不出是配置写的。"""
+
+        if value < 1:
+            raise ValueError("memory_rate_limit_per_minute must be >= 1")
+        return value
+
+    @field_validator("memory_rate_limit_burst")
+    @classmethod
+    def validate_memory_rate_limit_burst(cls, value: int) -> int:
+        """突发额度必须 >= 1，否则第一请求就被拒。"""
+
+        if value < 1:
+            raise ValueError("memory_rate_limit_burst must be >= 1")
         return value
 
     @field_validator("task_orphan_running_seconds")
