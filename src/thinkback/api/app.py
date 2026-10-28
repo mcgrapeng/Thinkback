@@ -194,7 +194,12 @@ def _build_lifespan(
         from thinkback.api.dependencies import _memory_service, reset_memory_service
 
         if _memory_service is not None:
-            _memory_service.drain_l3_background_tasks(timeout=30)
+            try:
+                _memory_service.drain_l3_background_tasks(timeout=30)
+            except Exception as exc:  # noqa: BLE001
+                # drain 会把在途任务的失败抛出来；但它不能挡住 executor 关闭：
+                # 否则异常直接冒到 lifespan 之外，SIGTERM 会挂在在途任务上。
+                logger.warning(f"memory l3 drain failed during shutdown: {exc}")
             _memory_service.shutdown_l3_executor(wait=False)
             logger.info("memory l3 background tasks drained")
             # 防御性关闭 SqlAlchemyMemoryRepository 的 worker 事件循环，

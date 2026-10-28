@@ -65,6 +65,8 @@ class L3WriteExecutor:
         self._cleanup_futures: set[Future[Any]] = set()
         # 完成回调的完成信号：future done ≠ 回调跑完（见 drain 的说明）。
         self._callback_events: dict[Future[Any], Event] = {}
+        # 回调（记账）失败：drain 要把它抛出去，不能吞掉后报告成功。
+        self._callback_errors: dict[Future[Any], BaseException] = {}
 
     def reserve_write_slot(self, wait_seconds: float | None = None) -> None:
         """为后台 L3 写入预留一个队列槽位，队列满时快速失败。
@@ -111,9 +113,7 @@ class L3WriteExecutor:
     def track_write(self, future: Future[Any], on_finished: Callable[[Future[Any]], None]) -> None:
         """登记后台写 future 并挂完成回调（回调负责 discard_write + 释放槽位）。"""
 
-        with self._lock:
-            self._write_futures.add(future)
-        self._attach_callback(future, on_finished)
+        self._track(future, on_finished, self._write_futures)
 
     def discard_write(self, future: Future[Any]) -> None:
         with self._lock:
@@ -124,14 +124,19 @@ class L3WriteExecutor:
     ) -> None:
         """登记后台清理 future 并挂完成回调。"""
 
-        with self._lock:
-            self._cleanup_futures.add(future)
-        self._attach_callback(future, on_finished)
+        self._track(future, on_finished, self._cleanup_futures)
 
-    def _attach_callback(
-        self, future: Future[Any], on_finished: Callable[[Future[Any]], None]
+    def _track(
+        self,
+        future: Future[Any],
+        on_finished: Callable[[Future[Any]], None],
+        target: set[Future[Any]],
     ) -> None:
-        """挂完成回调，并登记一个"回调已跑完"的事件。
+        """登记 future 与它的完成回调事件（同一把锁里一次做完）。
+
+        事件必须在 future 入册的同一次加锁里登记：分两次加锁会留下窗口 ——
+        drain 可能看到 future 却看不到它的事件，于是等 future 完成后直接返回，
+        完成回调（记账）还没跑。
 
         ``concurrent.futures`` 在 worker 线程里 ``set_result`` 之后才执行
         done callback，而 ``wait()`` 在 future done 时就返回 —— 两者之间有
@@ -141,11 +146,16 @@ class L3WriteExecutor:
 
         event = Event()
         with self._lock:
+            target.add(future)
             self._callback_events[future] = event
 
         def runner(done: Future[Any]) -> None:
             try:
                 on_finished(done)
+            except BaseException as exc:  # noqa: BLE001 - 记账失败必须让 drain 看见
+                with self._lock:
+                    self._callback_errors[done] = exc
+                raise
             finally:
                 event.set()
                 with self._lock:
@@ -169,20 +179,52 @@ class L3WriteExecutor:
         可能落在 drain 返回之后，调用方会看到半完成状态。
 
         ``timeout`` 是总预算：等 future 与等回调共用同一份时间。
+
+        失败不吞：
+        - future 自己的异常照旧向上抛（只是推迟到回调跑完之后）；
+        - 回调（记账）失败也向上抛 —— 记账没做成却报告成功，比报错更糟；
+        - 预算耗尽仍有回调没跑完：记 error 日志，不假装保证成立。
         """
 
         deadline = None if timeout is None else monotonic() + timeout
         with self._lock:
             futures = list(self._write_futures | self._cleanup_futures)
             events = list(self._callback_events.values())
+
+        errors: list[BaseException] = []
         if futures:
-            wait(futures, timeout=timeout)
+            wait(futures, timeout=self._remaining(deadline))
             for future in futures:
-                if future.done():
+                if not future.done():
+                    continue
+                try:
                     future.result()
+                except BaseException as exc:  # noqa: BLE001 - 推迟到回调跑完后抛
+                    errors.append(exc)
+
+        pending = 0
         for event in events:
-            remaining = None if deadline is None else max(0.0, deadline - monotonic())
-            event.wait(timeout=remaining)
+            if not event.wait(timeout=self._remaining(deadline)):
+                pending += 1
+        if pending:
+            logger.bind(pending_callbacks=pending).error(
+                "memory l3 drain timed out before completion callbacks finished"
+            )
+
+        with self._lock:
+            callback_errors = list(self._callback_errors.values())
+            self._callback_errors.clear()
+        errors.extend(callback_errors)
+        if errors:
+            raise errors[0]
+
+    @staticmethod
+    def _remaining(deadline: float | None) -> float | None:
+        """剩余预算：``None`` 表示不限时；用完就是 0（不阻塞）。"""
+
+        if deadline is None:
+            return None
+        return max(0.0, deadline - monotonic())
 
     def shutdown(self, *, wait: bool = True) -> None:
         """关闭自有的 executor（幂等；注入的 executor 归 caller 管理）。"""

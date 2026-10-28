@@ -11,6 +11,8 @@ from __future__ import annotations
 import threading
 import time
 
+import pytest
+
 from thinkback.memory.l3 import L3WriteExecutor
 
 
@@ -64,4 +66,47 @@ def test_drain_respects_timeout_budget() -> None:
 
     release.set()
     assert elapsed < 5
+    tracker.shutdown()
+
+
+def test_drain_raises_when_completion_callback_fails() -> None:
+    """回调（记账）失败不能被吞成「drain 成功」。
+
+    记账失败意味着 pending 计数没减、任务状态没收敛 —— 调用方必须看见。
+    """
+
+    tracker = L3WriteExecutor(workers=2)
+
+    def on_finished(_done: object) -> None:
+        raise RuntimeError("bookkeeping failed")
+
+    gate, _ = _tracked_future(tracker, on_finished)
+    gate.set()
+
+    with pytest.raises(RuntimeError, match="bookkeeping failed"):
+        tracker.drain(timeout=5)
+    tracker.shutdown()
+
+
+def test_drain_raises_work_failure_after_callbacks_finished() -> None:
+    """任务本身失败时，异常照旧向上抛 —— 但要先等回调跑完。
+
+    顺序很重要：回调里做的是记账，先抛异常会让记账来不及做。
+    """
+
+    tracker = L3WriteExecutor(workers=2)
+    order: list[str] = []
+
+    def on_finished(_done: object) -> None:
+        order.append("callback")
+
+    def work() -> None:
+        raise ValueError("work failed")
+
+    future = tracker.executor.submit(work)
+    tracker.track_cleanup(future, on_finished)
+
+    with pytest.raises(ValueError, match="work failed"):
+        tracker.drain(timeout=5)
+    assert order == ["callback"]
     tracker.shutdown()
