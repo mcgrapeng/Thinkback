@@ -95,7 +95,11 @@
     "thinkback.memory.decay.xǁMemoryDecaySweeperǁmaybe_submit__mutmut_6": "覆盖缺口：后台清扫提交到 executor 的实参未被断言。",
     "thinkback.memory.decay.xǁMemoryDecaySweeperǁmaybe_submit__mutmut_7": "覆盖缺口：后台清扫提交到 executor 的实参未被断言。",
     "thinkback.memory.decay.xǁMemoryDecaySweeperǁmaybe_submit__mutmut_8": "覆盖缺口：后台清扫提交到 executor 的实参未被断言。",
-    "thinkback.memory.decay.xǁMemoryDecaySweeperǁmaybe_submit__mutmut_9": "覆盖缺口：后台清扫提交到 executor 的实参未被断言。"
+    "thinkback.memory.decay.xǁMemoryDecaySweeperǁmaybe_submit__mutmut_9": "覆盖缺口：后台清扫提交到 executor 的实参未被断言。",
+    "thinkback.memory.repositories._l1_cache.xǁL1CacheMixinǁclear_l1__mutmut_20": "等价变异：整 scope 清理循环的 key 全部取自 l1_cache 自身，pop(key) 与 pop(key, None) 行为一致。",
+    "thinkback.memory.repositories._l1_cache.xǁL1CacheMixinǁclose__mutmut_1": "等价变异：内存仓储的 close 是 no-op，默认 timeout 取值没有可观测行为。",
+    "thinkback.memory.repositories._l1_cache.xǁL1CacheMixinǁclose__mutmut_2": "等价变异：close 不使用 timeout，_ = timeout 换成 _ = None 无可观测行为。",
+    "thinkback.memory.repositories._l1_cache.xǁL1CacheMixinǁget_l1__mutmut_22": "等价变异：走到过期分支说明 entries 非空，key 必在 l1_cache 里，pop(key) 不会 KeyError。"
   },
   "accepted_no_tests": {}
 }

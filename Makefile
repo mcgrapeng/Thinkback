@@ -93,7 +93,10 @@ load-smoke:
 # mutmut 3.8 即使有存活变异体也退出 0 —— 光跑 mutmut 不算门禁。
 # 末步拿 tests/eval/mutation_survivors.json（已验收存活 + 理由）比对，
 # 出现**新增**存活 / 无测试变异体即失败。
+# 第一步先自愈：mutmut 的「函数↔测试」映射缓存不含测试文件内容，改了测试
+# 映射还是旧的，会把有覆盖的变异体误判成「无测试」。
 mutation-audit:
+	uv run --group dev python tests/eval/refresh_mutation_stats.py
 	uv run --group dev mutmut run --max-children 8
 	uv run --group dev mutmut results
 	uv run --group dev python tests/eval/check_mutation_survivors.py
