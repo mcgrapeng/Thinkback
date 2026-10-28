@@ -2377,16 +2377,33 @@ L2 更新 (缓存失效)
                     self.backend.delete_all(user_id=request.user_id, memory_scope_id=namespace)
                 elif backend_ids:
                     self.backend.delete_many(backend_ids)
+                # 删除后复核：后端 delete 对「不可见」的记忆按幂等跳过处理，
+                # 光凭调用返回无法证明记录真的没了。列出残留，残留就是擦除
+                # 没完成 —— 任务失败重试，而不是谎报 completed。
+                residual = self._residual_backend_ids(
+                    user_id=request.user_id,
+                    memory_scope_id=namespace,
+                    target_ids=backend_ids,
+                    scope_all=scope_value == DeleteScope.ALL.value,
+                )
+                if residual:
+                    raise RuntimeError(
+                        "erase backend stage incomplete: "
+                        f"{len(residual)} record(s) still present in backend"
+                    )
                 mark_done("backend")
 
             if "history" not in done:
                 purged = self.backend.purge_history(
                     user_id=request.user_id,
                     memory_ids=backend_ids,
-                    # Mem0 的 session scope 只含 user+agent，没有 Thinkback 的
-                    # session/round：按 scope 删原始消息会连别的会话一起删。
-                    # 只有 ALL 范围才清整个 namespace 的消息。
-                    scopes=[namespace] if scope_value == DeleteScope.ALL.value else [],
+                    namespace=namespace,
+                    # Mem0 的原始消息表没有 session 维度（会话标识只有
+                    # user/agent/run），按 scope 删会连别的会话一起删。
+                    # 会话级擦除按被擦除轮次的原文正文精确删；只有 ALL 范围
+                    # 才清空整个作用域的原始消息。
+                    message_texts=self._erased_message_texts(source_refs, namespace),
+                    purge_all_messages=scope_value == DeleteScope.ALL.value,
                 )
 
                 def save_purged(current: TaskEntry) -> None:
@@ -2442,6 +2459,56 @@ L2 更新 (缓存失效)
             affected_memories=len(memory_ids),
             summary_state=SummaryState.DIRTY,
         )
+
+    def _residual_backend_ids(
+        self,
+        *,
+        user_id: str,
+        memory_scope_id: str,
+        target_ids: list[str],
+        scope_all: bool,
+    ) -> list[str]:
+        """擦除后仍留在后端的记录 ID。
+
+        后端 delete 遇到「读不到」的记忆按幂等跳过处理（可能是刚写完的
+        可见性窗口，也可能是真没删掉），单看返回值无法区分。列出实际还在
+        的记录做复核：还在就说明擦除没完成。
+        """
+        try:
+            remaining = self.backend.get_all(
+                user_id=user_id, memory_scope_id=memory_scope_id, limit=10000
+            )
+        except Exception as exc:  # noqa: BLE001 - 复核失败按「未能证明已删」处理
+            logger.bind(
+                user_id=user_id,
+                memory_scope_id=memory_scope_id,
+                error_type=type(exc).__name__,
+            ).warning("erase backend verification failed")
+            return list(target_ids) if not scope_all else ["*"]
+        present = {str(item.get("id", "")) for item in remaining}
+        if scope_all:
+            return sorted(present) if present else []
+        return sorted(memory_id for memory_id in target_ids if memory_id in present)
+
+    def _erased_message_texts(
+        self,
+        source_refs: list[dict[str, str]],
+        namespace: str,
+    ) -> list[str]:
+        """被擦除轮次的原始消息正文（用于精确删除引擎侧的原始消息）。"""
+        texts: list[str] = []
+        for ref in source_refs:
+            round_id = str(ref.get("round_id", ""))
+            if not round_id:
+                continue
+            entry = self.repository.get_round(round_id)
+            if entry is None or entry.namespace != namespace:
+                continue
+            for message in entry.messages:
+                content = str(message.get("content", "")).strip()
+                if content and content not in texts:
+                    texts.append(content)
+        return texts
 
     def _existing_erase_response(self, task: TaskEntry) -> DeleteMemoryResponse:
         return DeleteMemoryResponse(

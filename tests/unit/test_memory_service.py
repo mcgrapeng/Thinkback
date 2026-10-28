@@ -9039,8 +9039,15 @@ class _FailsOncePurgeBackend(FakeMemoryBackend):
         self.fail_next_purge = True
 
     def purge_history(
-        self, *, user_id: str, memory_ids: list[str], scopes: list[str]
+        self,
+        *,
+        user_id: str,
+        memory_ids: list[str],
+        namespace: str,
+        message_texts: list[str],
+        purge_all_messages: bool,
     ) -> dict[str, int]:
+        _ = (user_id, memory_ids, namespace, message_texts, purge_all_messages)
         self.purge_calls += 1
         if self.fail_next_purge:
             self.fail_next_purge = False
@@ -9101,7 +9108,7 @@ def test_erase_task_id_is_queryable() -> None:
 
 
 def test_erase_scoped_does_not_purge_namespace_messages() -> None:
-    """按条目/会话擦除不得清掉同 namespace 下别的会话的原始消息。"""
+    """按条目/会话擦除不得清空同 namespace 下别的会话的原始消息。"""
 
     class _RecordingPurgeBackend(FakeMemoryBackend):
         def __init__(self) -> None:
@@ -9109,10 +9116,22 @@ def test_erase_scoped_does_not_purge_namespace_messages() -> None:
             self.purge_calls: list[dict[str, Any]] = []
 
         def purge_history(
-            self, *, user_id: str, memory_ids: list[str], scopes: list[str]
+            self,
+            *,
+            user_id: str,
+            memory_ids: list[str],
+            namespace: str,
+            message_texts: list[str],
+            purge_all_messages: bool,
         ) -> dict[str, int]:
             self.purge_calls.append(
-                {"user_id": user_id, "memory_ids": list(memory_ids), "scopes": list(scopes)}
+                {
+                    "user_id": user_id,
+                    "memory_ids": list(memory_ids),
+                    "namespace": namespace,
+                    "message_texts": list(message_texts),
+                    "purge_all_messages": purge_all_messages,
+                }
             )
             return {"history": 1, "messages": 0, "supported": True}
 
@@ -9132,7 +9151,45 @@ def test_erase_scoped_does_not_purge_namespace_messages() -> None:
         )
     )
 
-    assert backend.purge_calls[0]["scopes"] == []
+    call = backend.purge_calls[0]
+    # 只按正文精确删，不得整片清空。
+    assert call["purge_all_messages"] is False
+    assert call["message_texts"] == ["我负责 3nm 良率提升", "我会注意这个边界。"]
+
+
+def test_erase_fails_when_backend_records_remain() -> None:
+    """后端记录删不掉时，擦除不得谎报 completed。
+
+    后端 delete 对「读不到」的记忆按幂等跳过处理（可能是刚写完的可见性
+    窗口），返回值看不出真假。删除后必须复核：记录还在就是没擦干净，任务
+    失败重试，而不是报 completed。
+    """
+
+    class _StickyDeleteBackend(FakeMemoryBackend):
+        """delete 不真的删：模拟「删了但仍可见」。"""
+
+        def delete(self, memory_id: str) -> None:
+            _ = memory_id
+
+        def delete_many(self, memory_ids: list[str]) -> int:
+            return len([memory_id for memory_id in memory_ids if memory_id])
+
+    backend = _StickyDeleteBackend()
+    repository = InMemoryMemoryRepository()
+    service = MemoryService(repository=repository, backend=backend, l3_write_mode="sync")
+    service.append(make_append(round_id="r-erase-sticky", content="我的门禁卡号是 C12345"))
+    memory = repository.active_memories("user-1", "thinkback")[0]
+
+    with pytest.raises(RuntimeError, match="erase backend stage incomplete"):
+        service.erase(
+            DeleteMemoryRequest(
+                request_id="req-erase-sticky",
+                user_id="user-1",
+                scope=DeleteScope.MEMORY,
+                operation_id="op-erase-sticky",
+                memory_id=memory.memory_id,
+            )
+        )
 
 
 def test_erase_audit_reports_purge_state_instead_of_unconditional_true() -> None:
@@ -9140,8 +9197,15 @@ def test_erase_audit_reports_purge_state_instead_of_unconditional_true() -> None
 
     class _RecordingPurgeBackend(FakeMemoryBackend):
         def purge_history(
-            self, *, user_id: str, memory_ids: list[str], scopes: list[str]
+            self,
+            *,
+            user_id: str,
+            memory_ids: list[str],
+            namespace: str,
+            message_texts: list[str],
+            purge_all_messages: bool,
         ) -> dict[str, int]:
+            _ = (user_id, memory_ids, namespace, message_texts, purge_all_messages)
             return {"history": 1, "messages": 0, "supported": True}
 
     repository = InMemoryMemoryRepository()
@@ -9401,7 +9465,7 @@ def test_recovery_processes_more_than_one_page_of_pending_tasks() -> None:
 
 
 def test_erase_purges_engine_history_with_backend_ids_and_scope() -> None:
-    """erase 必须把被删的后端 ID 与作用域交给引擎侧清理（历史 + 原始消息）。"""
+    """erase 必须把被删的后端 ID、作用域与原始消息正文交给引擎侧清理。"""
 
     class _RecordingPurgeBackend(FakeMemoryBackend):
         def __init__(self) -> None:
@@ -9409,10 +9473,22 @@ def test_erase_purges_engine_history_with_backend_ids_and_scope() -> None:
             self.purge_calls: list[dict[str, Any]] = []
 
         def purge_history(
-            self, *, user_id: str, memory_ids: list[str], scopes: list[str]
+            self,
+            *,
+            user_id: str,
+            memory_ids: list[str],
+            namespace: str,
+            message_texts: list[str],
+            purge_all_messages: bool,
         ) -> dict[str, int]:
             self.purge_calls.append(
-                {"user_id": user_id, "memory_ids": list(memory_ids), "scopes": list(scopes)}
+                {
+                    "user_id": user_id,
+                    "memory_ids": list(memory_ids),
+                    "namespace": namespace,
+                    "message_texts": list(message_texts),
+                    "purge_all_messages": purge_all_messages,
+                }
             )
             return {"history": 1, "messages": 2, "supported": True}
 
@@ -9435,8 +9511,11 @@ def test_erase_purges_engine_history_with_backend_ids_and_scope() -> None:
     assert len(backend.purge_calls) == 1
     call = backend.purge_calls[0]
     assert call["user_id"] == "user-1"
-    # 单条擦除不得按 namespace 清原始消息（会连别的会话一起删）。
-    assert call["scopes"] == []
+    assert call["namespace"] == "thinkback"
+    # 单条擦除不得按 namespace 清空原始消息（会连别的会话一起删）。
+    assert call["purge_all_messages"] is False
+    # 必须带上被删轮次的原文正文，引擎才能精确删掉那几条消息。
+    assert call["message_texts"], "必须带上被擦除轮次的原始消息正文"
     assert call["memory_ids"], "必须带上被删的后端记忆 ID，否则引擎历史清不掉"
 
     audit = repository.list_admin_audit()[-1]

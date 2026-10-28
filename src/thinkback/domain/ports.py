@@ -427,14 +427,23 @@ class MemoryBackend(Protocol):
         ...
 
     def purge_history(
-        self, *, user_id: str, memory_ids: list[str], scopes: list[str]
+        self,
+        *,
+        user_id: str,
+        memory_ids: list[str],
+        namespace: str,
+        message_texts: list[str],
+        purge_all_messages: bool,
     ) -> dict[str, int]:
         """物理擦除引擎侧残留：事实抽取历史 + 原始消息。
 
-        ``memory_ids`` 是被擦除的后端记忆 ID（对应引擎历史里的 memory_id）；
-        ``scopes`` 是被擦除的记忆作用域（引擎按 user+scope 存原始消息）。
-        空 ``scopes`` 表示不动原始消息——引擎的会话标识里没有 Thinkback 的
-        session/round，按 scope 删会连别的会话一起删。
+        ``memory_ids`` 是被擦除的后端记忆 ID（对应引擎历史里的 memory_id）。
+        ``namespace`` 是被擦除的记忆作用域（引擎按 user+namespace 存原始
+        消息，**没有 session 维度**）。
+        ``message_texts`` 是被擦除轮次的原始消息正文：会话级擦除靠它精确
+        删除自己那几条原文，不必连别的会话一起删。
+        ``purge_all_messages=True``（ALL 范围）清掉该作用域下的全部原始
+        消息。
 
         返回 ``{"history": n, "messages": n, "supported": bool}``：实际删除的
         行数，以及该后端是否真的支持清理引擎历史（没有 history 库时为 false）。
