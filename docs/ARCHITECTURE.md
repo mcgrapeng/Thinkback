@@ -143,7 +143,7 @@ src/thinkback/
 
 ```text
 POST /v2/memory/events
-  → schemas 校验（完整 user→assistant 轮次、id≤128、metadata≤64KB）
+  → schemas 校验（一条原始事件：event_id 全局唯一即幂等锚点、id≤128、metadata≤64KB）
   → get_round(round_id) 幂等锚点
       ├─ 存在且指纹不同 → 409 conflict
       └─ 存在且任务 PENDING/RUNNING/COMPLETED → already_done
@@ -229,7 +229,7 @@ GetTask / GetL3BackgroundStatus`，server reflection 已启用；
 
 ### 4.3 幂等契约
 
-- `append`：`round_id` 为幂等锚点（指纹不同 = 冲突 409，相同 = already_done）。
+- `append`：`event.event_id` 为幂等锚点（全局唯一；指纹不同 = 冲突 409，相同 = already_done）。
 - `delete` / `update` / `rebuild`：`operation_id` 幂等，重复提交回放任务结果。
 - 503 后重试必须复用原 `round_id` / `operation_id`。
 

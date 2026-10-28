@@ -73,6 +73,7 @@ def _prepare_environment() -> None:
 _prepare_environment()
 
 from thinkback.api.dependencies import build_registry_provider, get_memory_backend  # noqa: E402
+from thinkback.domain.enums import MemoryStatus  # noqa: E402
 from thinkback.infra.config import Settings, get_settings  # noqa: E402
 from thinkback.infra.milvus import ensure_milvus_database  # noqa: E402
 from thinkback.memory.repositories import SqlAlchemyMemoryRepository  # noqa: E402
@@ -487,7 +488,12 @@ def main() -> int:
             operation_id=f"op-erase-{user_id}",
         )
     )
-    index_rows = len(repository.list_memories(user_id, scope))
+    # 墓碑行（DELETED）是删除屏障的一部分，不是残留：它要留下来阻止旧事实复活。
+    index_rows = sum(
+        1
+        for memory in repository.list_memories(user_id, scope)
+        if memory.memory_status != MemoryStatus.DELETED
+    )
     history_hits, message_hits = history_residue(settings.mem0_history_db_path, marker)
     milvus_rows = _milvus_rows(settings, user_id)
     residue = index_rows + history_hits + message_hits + max(milvus_rows, 0)
