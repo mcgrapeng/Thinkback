@@ -8,8 +8,13 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from thinkback.domain.recall_policy import dedupe_and_clip, estimate_tokens
+from thinkback.memory.backends import FakeMemoryBackend
+from thinkback.memory.repositories import InMemoryMemoryRepository
 from thinkback.memory.schemas import MemoryItem
+from thinkback.memory.service import MemoryService
 
 
 def _l3(content: str, *, memory_type: str, score: float = 0.9) -> MemoryItem:
@@ -103,3 +108,49 @@ def test_empty_layer_gets_one_item_from_the_global_budget() -> None:
     layers = {item.layer for item in kept}
     assert "L1" in layers, "L1 是保底层，层配额不够也要留下一条"
     assert sum(estimate_tokens(item.content.strip()) for item in kept) <= 1200
+
+
+# ---------------------------------------------------------------------------
+# 类型注册表坏了不能让召回整个挂掉（此前 0 覆盖）
+# ---------------------------------------------------------------------------
+
+
+def test_a_broken_type_registry_skips_the_type_caps_instead_of_raising() -> None:
+    """注册表读不出来 → 跳过类型上限，召回照常。
+
+    注册表坏了是一次配置事故；让它把整个召回打挂，等于把「配置坏了」
+    升级成「服务不可用」。这里 fail-open。
+    """
+
+    def _broken_registry(_namespace: str) -> Any:
+        raise RuntimeError("registry is corrupted")
+
+    service = MemoryService(
+        repository=InMemoryMemoryRepository(),
+        backend=FakeMemoryBackend(),
+        registry_provider=_broken_registry,
+    )
+
+    assert service._type_recall_caps("thinkback") == {}, "注册表坏掉时应跳过类型上限"
+
+
+def test_a_broken_type_registry_still_clips_recall_to_the_token_budget() -> None:
+    """没有类型上限不等于没有预算上限：全局 token 预算照样生效。"""
+    items = [
+        _l3("画像条目一的内容比较长一些", memory_type="profile", score=0.9),
+        _l3("画像条目二的内容也比较长一些", memory_type="profile", score=0.8),
+    ]
+
+    def _broken_registry(_namespace: str) -> Any:
+        raise RuntimeError("registry is corrupted")
+
+    service = MemoryService(
+        repository=InMemoryMemoryRepository(),
+        backend=FakeMemoryBackend(),
+        registry_provider=_broken_registry,
+    )
+
+    kept = service._dedupe_and_clip(items, 1000, namespace="thinkback")
+
+    assert kept, "注册表坏掉不该让召回返回空包"
+    assert sum(estimate_tokens(item.content.strip()) for item in kept) <= 1000

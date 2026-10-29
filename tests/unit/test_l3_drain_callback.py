@@ -110,3 +110,66 @@ def test_drain_raises_work_failure_after_callbacks_finished() -> None:
         tracker.drain(timeout=5)
     assert order == ["callback"]
     tracker.shutdown()
+
+
+# ---------------------------------------------------------------------------
+# 构造参数校验与 drain 的无预算路径（此前 0 覆盖）
+# ---------------------------------------------------------------------------
+
+
+def test_l3_executor_rejects_invalid_construction_parameters() -> None:
+    """三个容量参数的下界必须在构造时挡住。
+
+    ``workers=0`` 会让 ThreadPoolExecutor 起不来线程；``max_pending_tasks=0``
+    会让 BoundedSemaphore(0) 永远拿不到槽位（每次 append 都 500）；
+    ``queue_wait_seconds<0`` 会让 Semaphore.acquire 直接抛 ValueError。
+    这三个值都来自配置 —— 配置写错必须在启动时炸，而不是在服务跑起来之后
+    以「append 一直失败」的形式出现。
+    """
+    with pytest.raises(ValueError, match="l3_executor_workers must be >= 1"):
+        L3WriteExecutor(workers=0)
+    with pytest.raises(ValueError, match="l3_max_pending_tasks must be >= 1"):
+        L3WriteExecutor(max_pending_tasks=0)
+    with pytest.raises(ValueError, match="l3_queue_wait_seconds must be >= 0"):
+        L3WriteExecutor(queue_wait_seconds=-0.1)
+
+
+def test_drain_without_a_timeout_budget_still_waits_for_the_callback() -> None:
+    """``drain()`` 不给预算时是「无限等」，不是「不等」。
+
+    关停路径用的就是无预算 drain：它必须等到完成回调真的跑完才返回。
+    之前所有用例都传了 timeout，无预算分支（``_remaining`` 返回 None）
+    从没被执行过 —— 而它恰好是关停语义本身。
+    """
+    tracker = L3WriteExecutor(workers=2)
+    finished = threading.Event()
+
+    def on_finished(_done: object) -> None:
+        finished.set()
+
+    gate, _ = _tracked_future(tracker, on_finished)
+    gate.set()
+
+    tracker.drain()
+
+    assert finished.is_set(), "drain() 没等完成回调就返回了"
+    tracker.shutdown()
+
+
+def test_drain_tolerates_a_future_that_is_still_running() -> None:
+    """预算耗尽时任务还在跑 → drain 不抛异常，只是放弃等待。
+
+    future 未完成时不能去 ``result()``（会阻塞到天荒地老）；也不能把
+    「没等到」当成失败抛出去 —— drain 的契约是「尽量等」，等不到就返回，
+    由关停方决定要不要强杀。
+    """
+    tracker = L3WriteExecutor(workers=2)
+    release = threading.Event()
+
+    future = tracker.executor.submit(release.wait, 30)
+    tracker.track_cleanup(future, lambda _done: None)
+
+    tracker.drain(timeout=0.2)  # 不得抛出
+
+    release.set()
+    tracker.shutdown()

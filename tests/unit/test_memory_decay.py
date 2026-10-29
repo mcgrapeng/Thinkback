@@ -17,6 +17,7 @@ from typing import Any
 
 import pytest
 
+from thinkback.domain.entities import MemoryIndexEntry
 from thinkback.memory.backends import FakeMemoryBackend
 from thinkback.memory.decay import MemoryDecaySweeper
 from thinkback.memory.repositories import InMemoryMemoryRepository
@@ -378,3 +379,79 @@ def test_recall_touch_debounced_within_window() -> None:
     # （FakeMemoryBackend 返回全部记忆，backend 命中路径触发 touch）
     touched = repository.list_memories("user-1", "thinkback")[0]
     assert touched.recall_count == 1
+
+
+# ── 清扫器自身的失败路径（此前 0 覆盖） ───────────────────────────────
+#
+# 下面是两条「一旦坏掉就永久静默」的路径：sweeper 把 _sweeping 置 True 之后
+# 只有复位才可能再跑。复位漏了，这个进程余生都不再遗忘任何记忆 —— 而且
+# 没有任何报错，只有「记忆越来越多」。
+
+
+def test_maybe_submit_resets_sweeping_when_the_executor_rejects() -> None:
+    """executor 拒收（已关停/队列满）时必须复位 _sweeping。
+
+    否则第一次提交失败就把清扫器永久卡死：后续 append 全部被 _sweeping
+    短路，记忆再也不被遗忘 —— 静默劣化，没有任何告警。
+    """
+
+    class _RejectingExecutor:
+        def submit(self, *_args: object, **_kwargs: object) -> object:
+            raise RuntimeError("executor is shut down")
+
+    sweeper = MemoryDecaySweeper(
+        repository=InMemoryMemoryRepository(),
+        executor=_RejectingExecutor(),  # type: ignore[arg-type]
+        sweep_interval_seconds=0.0,
+    )
+
+    sweeper.maybe_submit("user-1", "thinkback")  # 提交失败不得抛给 append 主链路
+
+    assert sweeper.sweeping is False, "提交失败后 _sweeping 没复位：清扫器被永久卡死"
+
+
+def test_sweep_failure_does_not_wedge_the_sweeper() -> None:
+    """清扫过程中抛异常也不能把 _sweeping 留在 True。
+
+    仓储抖一下（连接断开）不该让遗忘功能从此下线。
+    """
+
+    class _ExplodingRepository(InMemoryMemoryRepository):
+        def list_memories(self, user_id: str, memory_scope_id: str) -> list[MemoryIndexEntry]:
+            raise RuntimeError("database is down")
+
+    sweeper = MemoryDecaySweeper(
+        repository=_ExplodingRepository(),
+        executor=ThreadPoolExecutor(max_workers=1),
+        sweep_interval_seconds=0.0,
+    )
+
+    sweeper.maybe_submit("user-1", "thinkback")
+
+    import time
+
+    deadline = time.monotonic() + 5
+    while sweeper.sweeping and time.monotonic() < deadline:
+        time.sleep(0.01)
+
+    assert sweeper.sweeping is False, "清扫失败后 _sweeping 没复位：清扫器被永久卡死"
+
+
+def test_decay_normalizes_naive_timestamps_to_utc() -> None:
+    """naive datetime 按 UTC 处理（asyncpg 默认会返回 naive）。
+
+    valid_at 与 last_recalled_at 都要归一：不归一的话，naive 与 aware
+    比较直接抛 TypeError，清扫在真实 PG 上会整段失败。
+    """
+    repository = InMemoryMemoryRepository()
+    entry = _add(
+        repository,
+        backend_id="naive-1",
+        text="某个长尾事实",
+        valid_at=datetime(2020, 1, 1),  # 无 tzinfo
+    )
+    entry.last_recalled_at = datetime(2020, 1, 2)  # 无 tzinfo
+
+    # 远老 + 远未召回 → 应被清扫（naive 被当 UTC 后仍在阈值之外）
+    suppressed = make_sweeper(repository).sweep_now("user-1", "thinkback")
+    assert suppressed == 1
