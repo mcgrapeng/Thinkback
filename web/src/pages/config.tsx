@@ -70,9 +70,8 @@ const SECRET_PATTERNS = [
   /password/i,
   /secret/i,
   /token/i,
-  /api[_-]?key/i,
+  /key/i,
   /credential/i,
-  /private[_-]?key/i,
 ];
 
 function isSecret(name: string, value: unknown): boolean {

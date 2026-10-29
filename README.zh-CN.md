@@ -509,7 +509,7 @@ make test-e2e          # Playwright 端到端 + axe 可访问性扫描
 | `GET` | `/health/ready` | 就绪探针(PostgreSQL / Milvus / Mem0) |
 | `GET` | `/health/metrics` | Prometheus 指标 |
 
-**管理端 —— `/admin/api/*`**(`Authorization: Bearer <ADMIN_TOKEN>`)
+**管理端 —— `/admin/api/*`**(免鉴权，仅内网可达)
 
 | 方法 | 路径 | 用途 |
 | --- | --- | --- |

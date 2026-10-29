@@ -40,7 +40,7 @@ from thinkback.memory.service import MemoryService
 # - negative_data_rejection 关闭：pydantic 默认宽松 coercion（字符串数字/
 #   布尔被接受）是全模型约定，收紧为 strict 属 API 策略变更，列为 backlog。
 # - not_a_server_error 放行 503：503 是**契约内**的合法答案（限流过载 /
-#   管理面未配置 / 依赖未就绪），不是"服务炸了"。放行的只是这个检查，
+#   依赖未就绪），不是"服务炸了"。放行的只是这个检查，
 #   503 仍必须写进 OpenAPI——status_code_conformance 照查，契约不许撒谎。
 fuzz_config = SchemathesisConfig(
     projects=ProjectsConfig(

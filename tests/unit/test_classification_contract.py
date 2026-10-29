@@ -64,7 +64,7 @@ def test_classification_key_lookup_is_case_sensitive() -> None:
 
 def test_unknown_classification_raises_with_the_offending_value() -> None:
     """未知值报错，且消息里带上那个值 —— 静默降级等于按更低级别存了下去。"""
-    with pytest.raises(ValueError) as excinfo:
+    with pytest.raises(ValueError, match="unknown data_classification") as excinfo:
         resolve_classification({"data_classification": "top-secret"})
     assert "top-secret" in str(excinfo.value)
 
@@ -120,7 +120,7 @@ def test_strictest_ignores_empty_arguments() -> None:
 
 
 def test_strictest_rejects_unknown_values_with_the_offending_value() -> None:
-    with pytest.raises(ValueError) as excinfo:
+    with pytest.raises(ValueError, match="unknown data_classification") as excinfo:
         strictest_classification("normal", "not-a-level")
     assert "not-a-level" in str(excinfo.value)
 

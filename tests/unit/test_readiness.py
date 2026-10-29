@@ -169,7 +169,7 @@ async def test_production_readiness_fails_when_memory_llm_key_missing(monkeypatc
     monkeypatch.setattr(
         readiness,
         "settings",
-        Settings(environment="production", memory_llm_key="", admin_token="test-admin-token"),
+        Settings(environment="production", memory_llm_key=""),
     )
 
     class FailMilvusClient:

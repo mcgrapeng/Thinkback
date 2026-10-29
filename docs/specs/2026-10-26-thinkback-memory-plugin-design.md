@@ -29,7 +29,7 @@
 | D7 | L2 保留为层，重写实现而不是删层 | 10-19 Task 3.5「删 L2」不采纳，改为“有界 + 版本化 + 可失效”的上下文视图 |
 | D8 | legacy `/v2/memory/*` 在生产不可达 | 10-19 Task 3.1「旧路由保持可用」不采纳 |
 | D9 | 引擎优先原则：引擎能做的交给引擎，引擎做不好的才补，引擎完全没有的才自己做 | 见 §2.4 能力划分、§2.5 删除清单 |
-| D10 | 部署在内网，业务接口不做鉴权；信任边界是网络边界 | 删除 API Key / Scope / X-Tenant-Id 校验；`/admin/api/*` 保留 ADMIN_TOKEN 作为破坏性操作闸门；namespace 降为业务分组标签，靠字符集校验避免碰撞 |
+| D10 | 部署在内网，全部接口不做鉴权；信任边界是网络边界 | 删除 API Key / Scope / X-Tenant-Id 校验与 `/admin/api/*` 的 ADMIN_TOKEN 闸门（服务只在内网可达）；namespace 降为业务分组标签，靠字符集校验避免碰撞 |
 | D11 | 擦除分四档对外声明：不可召回、逻辑删除、物理擦除、备份过期 | 当前只宣称前两档与单副本下的第三档；引擎侧清理加版本护栏，见 ADR-0001 |
 | D12 | 数据分类的判定权在服务端，调用方只能更严格 | SENSITIVE/RESTRICTED 连 L1 都不写，见 ADR-0002 |
 | D13 | 引擎分数只在同一次查询内可比 | 服务层可叠加显式信号重排，不重写分数量纲，见 ADR-0003 |
@@ -412,7 +412,7 @@ Mem0 的公开 CRUD 不清理 history 与 messages 表，`delete` 还会追加�
 | legacy `/v2/memory/*` | 删除或并入 v2 单一业务面；免鉴权后两套路由没有安全差别，重复面只剩维护成本 |
 | namespace | 业务分组标签，靠字符集校验（禁 `:`、限长）避免与 user_id 拼接碰撞；`ins_memory.memory_scope_id` 列已存在，直接承载 namespace，不做 schema 迁移 |
 | 业务鉴权 | 不做。内网信任边界 = 网络边界，需要在部署文档写明「服务不暴露到内网之外」，并在 k8s 补 NetworkPolicy 或等效约束 |
-| admin 闸门 | `/admin/api/*` 保留 ADMIN_TOKEN：它能删任意用户全部记忆、吊销密钥、改抽取提示词，是不可逆操作 |
+| admin 闸门 | 无。`/admin/api/*` 与业务面一样免鉴权：它能删任意用户全部记忆、改抽取提示词，是不可逆操作 —— 靠网络边界兜住（NetworkPolicy 默认拒绝 + 不对公网暴露） |
 | 分类准入 | 在 journal 写入、LLM 调用、embedding 之前执行；SENSITIVE/RESTRICTED 不落库、不外发（判定方见问题 6） |
 | 限流 | 免鉴权后按来源 IP 限速，防失控重试与脚本打爆；不再按 key 分桶 |
 | 日志 | 只留字段路径与错误类型，不留正文、metadata、密钥与后端地址（免鉴权不代表可以泄露内容） |
@@ -447,7 +447,7 @@ GET  /v2/memory/sources/{ref} 取原始证据
 ```
 
 - 幂等：写入的锚点是请求体里的事件 ID（全局唯一，D15/D22）；范围类写操作（suppress/erase）用 `Idempotency-Key`，DB 唯一键为 `(namespace, method, path, key)`。召回这类读形态的 POST 不进幂等缓存。
-- 免鉴权：业务端点不要求 Authorization 或 X-Tenant-Id（D10）。namespace 由请求体显式给出，按字符集校验。`/admin/api/*` 仍要求 ADMIN_TOKEN。
+- 免鉴权：业务端点与管理端点都不要求 Authorization 或 X-Tenant-Id（D10）。namespace 由请求体显式给出，按字符集校验。
 - 错误码沿用 TB-XXXX，新增“操作未完成”“需要审批”两类。
 - SDK：契约稳定后由 OpenAPI 与 proto 生成，不手写。
 - MCP：作为 TransportAdapter 在 P3 加入，tools 用于写搜删查，resources 用于记录与证据，状态查询回退普通 API。
@@ -515,7 +515,7 @@ ContextPackage
 | --- | --- | --- |
 | P0 正确性 | 删除与在飞写入的删除屏障、L2 版本化写入、backend.update 失败不再谎报 completed、幂等键加 method/path、指纹 canonical 化、来源信任（assistant 不进用户事实）、分类准入 | 删除后无复活；删除后摘要不回退；失败注入门禁全绿；assistant 断言不进用户事实 |
 | P0 引擎与门禁 | 升级 mem0 2.1.0 → 2.2.x 拿混合检索与 entity matching；真实 Mem0 契约套件作为本地必跑门禁（不进 CI） | 真实 Mem0 契约套件本地全绿；`make check` 本地全绿 |
-| P1 内网化收口 | 免鉴权：删 API Key / Scope / X-Tenant-Id 校验；业务面收敛为 v2 单一契约；namespace 字符集校验；admin 保留 ADMIN_TOKEN；限流改按 IP | 免鉴权后无鉴权死代码；namespace 无碰撞；admin 缺 token 时拒绝 |
+| P1 内网化收口 | 免鉴权：删 API Key / Scope / X-Tenant-Id 校验与 admin 的 ADMIN_TOKEN；业务面收敛为 v2 单一契约；namespace 字符集校验；限流改按 IP | 免鉴权后无鉴权死代码；namespace 无碰撞；管理面靠网络边界约束 |
 | P2 插件模型 | 类型注册表、抽取前统一准入、召回装配重写、删除固定 L3 scope 常量、suppress/erase | 新增类型只改配置与注册项；erase 全链路物理校验通过；召回负向用例全绿 |
 | P3 接入生态 | SDK 生成、MCP、审计导出、文档 | SDK 覆盖 Python/TS 样例；MCP 客户端矩阵通过 |
 
@@ -533,7 +533,7 @@ P0 与 P1 完成前不发布新接入方。P2 完成才算“插件形态”成�
 | 9 | 10-19 Phase 1/2/3/4 范围 | 保留 Phase 1 评测（语料重写），Phase 2 降级为类型注册表，Phase 3 删除按 D6/D7 调整，Phase 4 不默认关 Milvus |
 | 11 | 接受 mem0 2.1.0 → 2.2.x 行为变化 | 接受，threshold 与 rerank 重测 |
 | 12 | 真实引擎门禁进不进 CI | 不进 CI。真实 Mem0/Milvus 契约套件作为本地必跑门禁，CI 维持现状（ruff、mypy、pytest、fuzz、pip-audit、docker build） |
-| 13 | 鉴权 | 业务接口免鉴权，仅内网可达（D10）；`/admin/api/*` 保留 ADMIN_TOKEN |
+| 13 | 鉴权 | 业务接口与管理接口全部免鉴权，仅内网可达（D10） |
 | 14 | `make check` 是否进 CI | 不进。本地跑完 format-check、lint、typecheck、mutation-audit、eval 即可；CI 保持现状 |
 | 15 | 评测语料场景 | 已决：垂类对话助手，先半导体（工艺咨询、设备选型、良率分析、客户支持），结构上可扩展到其它行业 |
 

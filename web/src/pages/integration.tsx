@@ -1,9 +1,8 @@
 /** 集成页面：当前接入契约参考。
  *
- * 内网部署（决策 D10）：业务端点不做调用方鉴权，信任边界是网络边界
- * （k8s NetworkPolicy 默认拒绝 + 服务不对公网暴露）；管理端点用共享
- * ADMIN_TOKEN Bearer。v1 公开 API（API Key / Scope / X-Tenant-Id）已下线，
- * 本页是只读参考，没有任何写操作。
+ * 内网部署（决策 D10）：业务端点与管理端点都不做调用方鉴权，信任边界是
+ * 网络边界（k8s NetworkPolicy 默认拒绝 + 服务不对公网暴露）。v1 公开 API
+ * （API Key / Scope / X-Tenant-Id）已下线，本页是只读参考，没有任何写操作。
  *
  * 端点清单来源：src/thinkback/api/memory.py（prefix=/memory）、
  * src/thinkback/api/admin.py（prefix=/admin/api）、
@@ -50,7 +49,7 @@ const BUSINESS_ENDPOINTS: EndpointRow[] = [
   { method: "GET", path: "/v2/memory/l3/background-status", desc: "L3 后台写队列状态：写模式 / 线程数 / 剩余容量" },
 ];
 
-/** 管理面：/admin/api/*，全部需要 Authorization: Bearer <ADMIN_TOKEN>。 */
+/** 管理面：/admin/api/*，内网直连，无调用方鉴权。 */
 const ADMIN_ENDPOINTS: EndpointRow[] = [
   { method: "GET", path: "/admin/api/overview", desc: "总览聚合：状态计数、分布、5min 吞吐、Top-5 失败任务、最近审计" },
   { method: "GET", path: "/admin/api/tasks", desc: "任务列表：按状态 / 年龄过滤，分页" },
@@ -68,7 +67,6 @@ const ADMIN_ENDPOINTS: EndpointRow[] = [
 /** 错误码：src/thinkback/api/errors_standard.py 的 code_map + COMMON_ERROR_RESPONSES。 */
 const ERROR_CODES = [
   { code: "TB-1001", http: 400, desc: "请求业务规则校验失败" },
-  { code: "TB-1002", http: 401, desc: "管理面 Bearer token 校验失败" },
   { code: "TB-1003", http: 403, desc: "fail-closed 拒绝（敏感内容策略拦截）" },
   { code: "TB-1004", http: 404, desc: "资源不存在（记忆 / 记忆项 / 任务）" },
   { code: "TB-1005", http: 409, desc: "冲突：幂等键复用不同请求体、擦除后重写同一轮次" },
@@ -76,7 +74,7 @@ const ERROR_CODES = [
   { code: "TB-1007", http: 429, desc: "限流：按客户端 IP 分桶，超限带 Retry-After" },
   { code: "TB-2001", http: 500, desc: "服务内部错误" },
   { code: "TB-2002", http: 502, desc: "上游依赖故障（Milvus / Mem0）" },
-  { code: "TB-2003", http: 503, desc: "服务过载、依赖未就绪，或管理面未配置 ADMIN_TOKEN" },
+  { code: "TB-2003", http: 503, desc: "服务过载或依赖未就绪" },
 ];
 
 const METHOD_TONE: Record<string, string> = {
@@ -86,7 +84,7 @@ const METHOD_TONE: Record<string, string> = {
 
 const FACTS = [
   { icon: ShieldCheck, title: "业务面免鉴权", desc: "信任边界 = 网络边界" },
-  { icon: Lock, title: "管理面 Bearer", desc: "共享 ADMIN_TOKEN" },
+  { icon: Lock, title: "管理面免鉴权", desc: "同样只靠内网可达性" },
   { icon: Hash, title: "Idempotency-Key", desc: "仅写操作 · 24h 缓存" },
   { icon: AlertTriangle, title: "错误码 TB-1xxx", desc: "标准化错误响应" },
 ];
@@ -123,9 +121,8 @@ curl -X POST https://thinkback.internal/v2/memory/recall \\
     "namespace": "thinkback"
   }'`;
 
-const ADMIN_CURL = `# 管理面：共享 Bearer token；未配置 ADMIN_TOKEN 时返回 503
-curl -X GET https://thinkback.internal/admin/api/overview \\
-  -H "Authorization: Bearer $ADMIN_TOKEN"`;
+const ADMIN_CURL = `# 管理面：内网直连，无鉴权头
+curl -X GET https://thinkback.internal/admin/api/overview`;
 
 function CopyButton({ text, label = "已复制" }: { text: string; label?: string }) {
   const [copied, setCopied] = useState(false);
@@ -212,11 +209,11 @@ export function IntegrationPage() {
     <div className="space-y-6">
       <PageHeader
         title="INTEGRATION · 接入协议"
-        description="业务面 /v2/memory/* · 管理面 /admin/api/* · 内网部署，业务端点免鉴权"
+        description="业务面 /v2/memory/* · 管理面 /admin/api/* · 内网部署，全部端点免鉴权"
         actions={
           <div className="flex items-center gap-2">
             <Badge variant="info">业务面免鉴权</Badge>
-            <Badge variant="warning">管理面需 ADMIN_TOKEN</Badge>
+            <Badge variant="info">管理面免鉴权</Badge>
           </div>
         }
       />
@@ -238,9 +235,9 @@ export function IntegrationPage() {
             </p>
             <p>
               管理端点 <code className="font-mono text-foreground-emphasis">/admin/api/*</code>{" "}
-              <span className="font-medium text-foreground-emphasis">需要共享 Bearer token</span>
-              ：<code className="font-mono">Authorization: Bearer &lt;ADMIN_TOKEN&gt;</code>。
-              未配置 <code className="font-mono">ADMIN_TOKEN</code> 时管理面 fail-closed，直接返回 503。
+              <span className="font-medium text-foreground-emphasis">同样不做调用方鉴权</span>
+              ：没有 Bearer token，也没有 fail-closed 的 503。
+              它能删任意用户全部记忆、触发重建，因此必须由网络边界兜住。
             </p>
             <p>
               v1 公开 API（<code className="font-mono">/v1/memory/*</code>、API Key、Scope、租户头）
@@ -296,7 +293,7 @@ export function IntegrationPage() {
         </h2>
         <EndpointTable
           rows={ADMIN_ENDPOINTS}
-          authNote="鉴权：Authorization: Bearer <ADMIN_TOKEN>（共享 token，未配置时 503 fail-closed）。"
+          authNote="鉴权：无。管理面同样只靠内网可达性约束调用方。"
         />
       </section>
 

@@ -1,6 +1,7 @@
 """治理台 M1 API 契约测试：/admin/api/overview + /admin/api/tasks。
 
-覆盖：聚合形状、任务过滤/分页、非法参数早失败、Bearer token 开关。
+覆盖：聚合形状、任务过滤/分页、非法参数早失败。管理面免鉴权（内网部署，
+决策 D10），所以这里不带任何 Authorization 头 —— 契约变了要看得见。
 """
 
 from __future__ import annotations
@@ -16,19 +17,10 @@ from thinkback.api.admin import router as admin_router
 from thinkback.api.dependencies import get_memory_service
 from thinkback.domain.entities import TaskEntry
 from thinkback.domain.enums import OperationType, TaskStatus
-from thinkback.infra import config
 from thinkback.memory.backends import FakeMemoryBackend
 from thinkback.memory.repositories import InMemoryMemoryRepository
 from thinkback.memory.schemas import AppendMemoryRequest
 from thinkback.memory.service import MemoryService
-
-ADMIN_TOKEN = "test-admin-token"
-
-
-@pytest.fixture(autouse=True)
-def _admin_token(monkeypatch: Any) -> None:
-    """管理面默认带 token；token 为空时是 503 拒绝，不是放行。"""
-    monkeypatch.setattr(config.settings, "admin_token", ADMIN_TOKEN)
 
 
 def make_task(task_id: str, *, status: TaskStatus) -> TaskEntry:
@@ -43,9 +35,7 @@ def make_task(task_id: str, *, status: TaskStatus) -> TaskEntry:
     )
 
 
-def build_client(
-    *, with_auth: bool = True, **service_kwargs: Any
-) -> tuple[TestClient, MemoryService]:
+def build_client(**service_kwargs: Any) -> tuple[TestClient, MemoryService]:
     service = MemoryService(
         repository=InMemoryMemoryRepository(),
         backend=FakeMemoryBackend(),
@@ -54,8 +44,7 @@ def build_client(
     app = FastAPI()
     app.include_router(admin_router)
     app.dependency_overrides[get_memory_service] = lambda: service
-    headers = {"Authorization": f"Bearer {ADMIN_TOKEN}"} if with_auth else {}
-    return TestClient(app, headers=headers), service
+    return TestClient(app), service
 
 
 def seed(service: MemoryService) -> None:
@@ -249,34 +238,16 @@ def test_admin_tasks_list_filters_and_paginates() -> None:
     assert client.get("/admin/api/tasks", params={"statuses": "bogus"}).status_code == 400
 
 
-def test_admin_token_enforced_when_configured(monkeypatch: Any) -> None:
-    monkeypatch.setattr(config.settings, "admin_token", "secret-token")
-    client, _service = build_client(with_auth=False)
+def test_admin_endpoints_are_reachable_without_authentication() -> None:
+    """管理面免鉴权：内网部署，信任边界是网络边界（决策 D10）。
 
-    assert client.get("/admin/api/overview").status_code == 401
-    assert (
-        client.get("/admin/api/overview", headers={"Authorization": "Bearer wrong"}).status_code
-        == 401
-    )
-    assert (
-        client.get(
-            "/admin/api/overview", headers={"Authorization": "Bearer secret-token"}
-        ).status_code
-        == 200
-    )
-
-
-def test_admin_token_empty_rejects_anonymous(monkeypatch: Any) -> None:
-    """token 未配置时必须拒绝（503），不能放行 ——
-
-    原来这里是 fail-open：/admin/api/* 能删任意用户全部记忆、
-    按 user_id 不传即列出全库记忆。fail-open 的另一端是启动时 fail fast
-    （见 infra/config.py 的生产环境校验）。
+    这条用例钉的是「不再需要 Authorization 头」—— 哪天有人把鉴权加回来，
+    它会红。
     """
-    monkeypatch.setattr(config.settings, "admin_token", "")
     client, _service = build_client()
 
-    assert client.get("/admin/api/overview").status_code == 503
+    assert client.get("/admin/api/overview").status_code == 200
+    assert client.get("/admin/api/tasks").status_code == 200
 
 
 # ── M2：记忆检索 + 来源反链 ──────────────────────────────────────────
@@ -558,4 +529,6 @@ def test_admin_config_masks_sensitive_values() -> None:
     assert body["environment"]
     fields = {field["name"]: field["value"] for field in body["fields"]}
     assert fields.get("postgres_password") == "***"
+    # 管理面免鉴权后，这个端点对内网可达者全开放 —— 密钥必须真的脱敏。
+    assert fields.get("memory_llm_key") == "***"
     assert "app_name" in fields and fields["app_name"]
