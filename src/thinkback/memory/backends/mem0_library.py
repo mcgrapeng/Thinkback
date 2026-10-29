@@ -52,6 +52,12 @@ _READ_OPERATIONS = frozenset({"search", "get_all", "get"})
 #: 分片数固定 = 锁表不随用户数增长；分片冲突只会多一次串行，不会出错。
 _WRITE_LOCK_STRIPES = 64
 
+#: 引擎侧历史清理遇到 SQLite 锁时的重试次数与退避基数（秒）。
+#: mem0 自己开着一条连接写同一个 history.db，回滚日志模式下我们的 DELETE
+#: 可能撞上「升级为排他锁」的瞬时冲突。写事务通常只持锁几毫秒，重试即可。
+_PURGE_LOCK_RETRIES = 3
+_PURGE_LOCK_BACKOFF_SECONDS = 0.2
+
 #: 兼容旧引用名：默认指令现在住在 domain/prompts.py。
 THINKBACK_CUSTOM_INSTRUCTIONS = DEFAULT_EXTRACTION_INSTRUCTIONS
 
@@ -726,12 +732,53 @@ class Mem0LibraryMemoryBackend:
 
         已知边界：``history.db`` 是进程本地文件，多副本部署时每个副本各有一份，
         一次擦除只清到当前副本（与本适配器里记录的既有边界一致）。
+
+        锁冲突：mem0 自己开着一条连接写同一个文件，本方法再开一条。回滚日志
+        模式下，事务先读后写时若期间有别的连接写过，会立刻拿到
+        ``database is locked``（busy_timeout 对这种「升级为排他锁」的场景
+        不起作用）。写事务通常只持锁几毫秒，所以这里做有限重试 —— 擦除
+        不该因为一次瞬时锁就失败，而向量已经删掉了。
         """
         counts = {"history": 0, "messages": 0, "supported": False}
         history_db_path = self.config.get("history_db_path")
         if not isinstance(history_db_path, str) or not history_db_path:
             return counts
         counts["supported"] = True
+        last_error: sqlite3.OperationalError | None = None
+        for attempt in range(_PURGE_LOCK_RETRIES):
+            try:
+                return self._purge_history_once(
+                    history_db_path=history_db_path,
+                    user_id=user_id,
+                    memory_ids=memory_ids,
+                    namespace=namespace,
+                    message_texts=message_texts,
+                    purge_all_messages=purge_all_messages,
+                )
+            except sqlite3.OperationalError as exc:
+                if "locked" not in str(exc) and "busy" not in str(exc):
+                    raise
+                last_error = exc
+                logger.bind(attempt=attempt + 1, error=str(exc)).warning(
+                    "memory backend history purge hit sqlite lock, retrying"
+                )
+                time.sleep(_PURGE_LOCK_BACKOFF_SECONDS * (attempt + 1))
+        raise RuntimeError(
+            f"mem0 history purge failed after {_PURGE_LOCK_RETRIES} attempts: {last_error}"
+        )
+
+    def _purge_history_once(
+        self,
+        *,
+        history_db_path: str,
+        user_id: str,
+        memory_ids: list[str],
+        namespace: str,
+        message_texts: list[str],
+        purge_all_messages: bool,
+    ) -> dict[str, int]:
+        """执行一次定向 DELETE；锁冲突由调用方重试。"""
+        counts = {"history": 0, "messages": 0, "supported": True}
         connection = sqlite3.connect(history_db_path, timeout=10.0)
         try:
             tables = {

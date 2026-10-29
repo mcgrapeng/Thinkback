@@ -516,6 +516,7 @@ M  tests/unit/…                           +700 -2  回归测试（含接入契
 | 7 | must fix | mem0 的 `Memory` 不是线程安全的，并发写会丢 entity link | ✅ 已修：写/更新/删除按 (user, scope) 分片加锁 |
 | 8 | should fix | fake 与真后端的删除语义不一致（`update` 对缺失 ID 静默 no-op、`delete_many` 返回删除数而非尝试数） | ✅ 已修：fake 的 `update` 对缺失 ID 抛异常，`delete_many` 返回尝试条数；契约统一（`delete_all` 返回 ID、`get` 点查） |
 | 10 | should fix | 审计永远写"只清了一部分" | ✅ 已修：审计按实际清掉的行数判定 —— 清掉原始消息写 `complete`，一条没清写 `partial`，两者不再长得一样 |
+| 11 | should fix | 擦除时我们开第二条 SQLite 连接删 `history.db`，与 mem0 自己的连接争锁 → 报 `database is locked`，擦除在负载下间歇失败 | ✅ 已修：锁冲突做有限重试（写事务通常只持锁几毫秒，busy_timeout 对"升级为排他锁"这种瞬时冲突不起作用）。更彻底的解法是给文件开 WAL，但那会改引擎存储格式，留给多副本那一批 |
 | 12 | should fix | 衰减清扫与并发写交错，被压制的记忆可能复活 | ⬜ 未做（需要真实栈验证收益） |
 | 15 | nice | 重试对账看不到已过期记忆 | ✅ 已修：对账走的是同一个 `get_all`，带上 `show_expired` 后过期记录也能被认出来 |
 | 16 | nice | 并发限流把实体查找变成串行循环 | ⬜ 未做 |
