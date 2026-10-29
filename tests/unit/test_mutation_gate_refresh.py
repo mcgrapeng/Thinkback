@@ -22,6 +22,8 @@ from tests.eval.refresh_mutation_stats import (
     scope_changed,
 )
 
+REPO_ROOT = Path(__file__).resolve().parents[2]
+
 _SCOPE = """
 [tool.mutmut]
 source_paths = ["src"]
@@ -152,3 +154,52 @@ def test_an_out_of_scope_file_keeps_no_stale_mutant_records(
     assert removed == ["src/thinkback/left_scope.py"]
     assert not meta.exists()
     assert not spans.exists()
+
+
+def test_a_do_not_mutate_file_is_out_of_scope() -> None:
+    """``do_not_mutate`` 命中 → 出范围（mutmut 的 should_mutate 是「包含且不忽略」）。"""
+    assert refresh.in_scope("src/a.py", ["src/a.py"], ["src/a.py"]) is False
+    assert refresh.in_scope("src/a.py", ["src/a.py"], []) is True
+
+
+def test_an_empty_only_mutate_means_every_python_file_is_in_scope() -> None:
+    """``only_mutate`` 为空 → 整个 source_paths 都在范围内。"""
+    assert refresh.in_scope("src/a.py", [], []) is True
+    assert refresh.in_scope("src/a.txt", [], []) is False
+
+
+def test_the_scope_matches_mutmut_exactly(monkeypatch: pytest.MonkeyPatch) -> None:
+    """清理脚本的范围判定必须与 mutmut 的 ``should_mutate`` 完全一致。
+
+    两边口径不一致时，清理脚本会把 mutmut 还要变异的文件当残留删掉，或者
+    把 mutmut 不变异的文件留在审计范围里 —— 两边都静默，门禁照样绿。
+    这里直接拿 mutmut 自己的实现逐条比对，不靠人肉复述它的规则。
+    """
+    import dataclasses
+
+    from mutmut.configuration import config, reset_config
+
+    monkeypatch.chdir(REPO_ROOT)
+    reset_config()
+    try:
+        cfg = dataclasses.replace(
+            config(),
+            only_mutate=["src/thinkback/domain/*.py", "src/thinkback/memory/decay.py"],
+            do_not_mutate=["src/thinkback/domain/safety.py"],
+        )
+    finally:
+        reset_config()
+
+    patterns = [str(pattern) for pattern in cfg.only_mutate]
+    ignores = [str(pattern) for pattern in cfg.do_not_mutate]
+    table = [
+        "src/thinkback/domain/keys.py",  # 命中 only_mutate 的 glob
+        "src/thinkback/domain/summarization.py",
+        "src/thinkback/memory/decay.py",  # 命中 only_mutate 的字面量
+        "src/thinkback/domain/safety.py",  # 命中 do_not_mutate
+        "src/thinkback/memory/service.py",  # 不在范围内
+        "src/thinkback/domain/keys.txt",  # 非 .py
+        "README.md",  # 非 .py
+    ]
+    for path in table:
+        assert refresh.in_scope(path, patterns, ignores) == cfg.should_mutate(Path(path)), path
