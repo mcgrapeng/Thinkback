@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import time
 from collections import defaultdict
-from dataclasses import dataclass
 
 from fastapi import Request, Response
 from loguru import logger
@@ -23,37 +22,19 @@ from starlette.responses import JSONResponse
 from starlette.types import ASGIApp
 
 from thinkback.api.idempotency import _caller_identity
+from thinkback.infra.token_bucket import TokenBucket
 
 # 内网默认限流：单调用方 600 请求/分钟、突发 50。替代原先按 API key plan 的配额。
 _RATE_LIMIT_PER_MINUTE = 600
 _RATE_LIMIT_BURST = 50
 
 
-@dataclass
-class TokenBucket:
-    tokens: float
-    last_refill: float
-    rate_per_second: float
-    burst: int
-
-    def consume(self, n: int = 1) -> tuple[bool, float]:
-        """尝试消费 n 个 token,返回 (是否成功, 需等待秒数)。"""
-        now = time.time()
-        elapsed = now - self.last_refill
-        self.tokens = min(self.burst, self.tokens + elapsed * self.rate_per_second)
-        self.last_refill = now
-
-        if self.tokens >= n:
-            self.tokens -= n
-            return True, 0.0
-        wait = (n - self.tokens) / self.rate_per_second
-        return False, wait
-
-
 class RateLimitMiddleware(BaseHTTPMiddleware):
-    """只对 /v1/* 路径做 API key 级限流。
+    """按调用方分桶的限流中间件。
 
-    /v2/memory/*、/admin/api/*、/health 等内部路径不走限流。
+    覆盖 /v2/memory/*（业务面）与 /admin/api/*（治理面）—— 治理面能删任意
+    用户的全部记忆、列出全库，它的破坏力不比业务面小，不能因为「没有鉴权」
+    就把速率一并放开。/health、/docs 等不走限流。
     """
 
     def __init__(

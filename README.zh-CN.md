@@ -120,7 +120,7 @@ Postgres + Milvus + Mem0,全部开源。K8s 原生,带存活/就绪探针与 Pro
 | **生命周期** | 索引状态机:`ACTIVE` / `DELETED` / `SUPERSEDED` / `SUPPRESSED`,与后端存储状态解耦 |
 | **可靠性** | 任务状态机,乐观锁、重试预算、死信队列,冷启动时回收孤儿任务 |
 | **治理** | 作用域删除(`MEMORY` / `SESSION` / `ALL`)配合墓碑标记,外加完整审计 |
-| **接入** | 内网部署的一套 HTTP / gRPC 接口面 —— 业务面免鉴权、按客户端 IP 限流、`Idempotency-Key` 幂等 |
+| **接入** | 内网部署的一套 HTTP / gRPC 接口面 —— 业务面免鉴权、按调用方（namespace + user_id）限流、`Idempotency-Key` 幂等 |
 | **类型 profile** | `profiles/` 里按 namespace 定义准入、保留期与 TTL |
 | **运维** | K8s 清单、Helm chart、Alembic 迁移、Prometheus 指标、确定性测试套件 |
 

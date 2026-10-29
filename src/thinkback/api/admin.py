@@ -24,6 +24,7 @@ from loguru import logger
 from thinkback.api.dependencies import get_memory_service
 from thinkback.api.errors import service_error_to_http
 from thinkback.api.errors_standard import COMMON_ERROR_RESPONSES
+from thinkback.api.metrics import record_admin_audit_write_failure
 from thinkback.domain.entities import AdminAuditEntry
 from thinkback.domain.enums import MemoryStatus, TaskStatus
 from thinkback.memory.schemas import (
@@ -66,6 +67,13 @@ def _parse_statuses(raw: str | None) -> list[str] | None:
     return statuses or None
 
 
+# 审计动作集合：运行时校验与 OpenAPI 契约共用一份。
+# 两处各写一遍必然漂移 —— 上一轮就漂了：运行时认了 "list"，schema 的 pattern
+# 还停在旧集合，按 schema 生成的客户端会拒掉合法的过滤参数。
+_AUDIT_ACTIONS = ("delete", "update", "rebuild", "list")
+_AUDIT_ACTION_PATTERN = r"^(|" + "|".join(_AUDIT_ACTIONS) + r")$"
+
+
 def _parse_audit_action(raw: str | None) -> str | None:
     """audit?action= 校验：值必须在已知动作集合内（delete / update / rebuild）。
 
@@ -73,7 +81,7 @@ def _parse_audit_action(raw: str | None) -> str | None:
     让操作员误以为"动作没产生数据"。"""
     if not raw:
         return None
-    known = {"delete", "update", "rebuild", "list"}
+    known = set(_AUDIT_ACTIONS)
     if raw not in known:
         raise HTTPException(
             status_code=400,
@@ -200,6 +208,10 @@ async def admin_list_memories(
     不传 ``user_id`` = 一次读走**所有用户**的记忆（治理台的默认视图）。
     免鉴权的前提下这是数据面最大的一次暴露，所以留痕：什么时候、对端是谁、
     拉走了多少条。留痕不写正文 —— 与治理操作同一口径。
+
+    留痕写不成就不给读：跨用户读取没有别的兜底（没有幂等、没有事务），
+    审计是它唯一的控制点，审计表坏了还照样把全库端出去，等于控制失效。
+    带 ``user_id`` 的查询不写审计（常规视图），也就不受这条约束。
     """
 
     result = await asyncio.to_thread(
@@ -211,7 +223,7 @@ async def admin_list_memories(
         offset=offset,
     )
     if user_id is None:
-        _audit(
+        audited = await _audit(
             service,
             "list",
             memory_scope_id or "memories",
@@ -219,9 +231,17 @@ async def admin_list_memories(
                 "scope": memory_scope_id or "",
                 "returned": len(result.get("items", [])),
                 "total": result.get("total", 0),
+                # 管理面没有调用方身份（免鉴权，D10）：这里记的是**传输对端**，
+                # 不是「谁做的」。写清楚 peer_kind，免得日后把它当成行为人。
+                "peer_kind": "gateway",
                 "peer": request.client.host if request.client else "unknown",
             },
         )
+        if not audited:
+            raise HTTPException(
+                status_code=503,
+                detail="admin audit write failed: refusing to serve an untracked cross-user listing",
+            )
     return result
 
 
@@ -245,23 +265,33 @@ async def admin_memory_source(
 _SENSITIVE_MARKERS = ("password", "token", "secret", "key", "url")
 
 
-def _audit(service: MemoryService, action: str, target: str, detail: dict[str, Any]) -> None:
-    """治理动作留痕（best-effort：审计写失败不阻断操作，落 error 日志）。"""
+async def _audit(service: MemoryService, action: str, target: str, detail: dict[str, Any]) -> bool:
+    """治理动作留痕。返回 False = 没写成。
+
+    best-effort：审计写失败**不阻断**治理操作 —— 删除不该因为审计表坏了而
+    做不成（出事时正需要能删）。但失败不能只躺在一行日志里：计数器
+    ``admin_audit_write_fail`` 会进 Prometheus，可以被告警。
+
+    写审计是同步的（repository 内部有独立的 worker loop），直接在协程里调
+    会把事件循环卡住 —— 读路径尤其明显（治理台每 30 秒轮询一次）。
+    """
     from datetime import UTC, datetime
 
+    entry = AdminAuditEntry(
+        audit_id=f"audit-{uuid4()}",
+        created_at=datetime.now(UTC),
+        operator="admin",
+        action=action,
+        target=target[:256],
+        detail=detail,
+    )
     try:
-        service.repository.save_admin_audit(
-            AdminAuditEntry(
-                audit_id=f"audit-{uuid4()}",
-                created_at=datetime.now(UTC),
-                operator="admin",
-                action=action,
-                target=target[:256],
-                detail=detail,
-            )
-        )
+        await asyncio.to_thread(service.repository.save_admin_audit, entry)
     except Exception as exc:  # noqa: BLE001
         logger.opt(exception=exc).error("admin audit write failed")
+        record_admin_audit_write_failure()
+        return False
+    return True
 
 
 async def _run_admin_call[R](method: Callable[..., R], *args: Any) -> R:
@@ -283,7 +313,7 @@ async def admin_delete_memory(
 ) -> DeleteMemoryResponse:
     """受控删除（单条/session/all，幂等与业务路由同语义）+ 审计留痕。"""
     response = await _run_admin_call(service.delete, request)
-    _audit(
+    await _audit(
         service,
         action="delete",
         target=request.user_id,
@@ -308,7 +338,7 @@ async def admin_update_memory(
     # 审计日志只保留指纹 + 长度 + memory_type，不写原文——防止任何人凭
     # audit 接口窥探用户记忆正文（PII / 凭据 / 隐私泄漏面）。
     content_fingerprint = hashlib.sha256(request.content.encode("utf-8")).hexdigest()
-    _audit(
+    await _audit(
         service,
         action="update",
         target=request.memory_id,
@@ -329,7 +359,7 @@ async def admin_rebuild_memory(
 ) -> RebuildMemoryResponse:
     """受控 rebuild 触发（此前 service 有能力但无 HTTP 路由）+ 审计留痕。"""
     response = await _run_admin_call(service.rebuild, request)
-    _audit(
+    await _audit(
         service,
         action="rebuild",
         target=request.user_id,
@@ -346,9 +376,7 @@ async def admin_rebuild_memory(
 @router.get("/audit", operation_id="admin_list_audit")
 async def admin_list_audit(
     service: MemoryService = Depends(get_memory_service),
-    action: str | None = Query(
-        default=None, json_schema_extra={"pattern": r"^(|delete|update|rebuild)$"}
-    ),
+    action: str | None = Query(default=None, json_schema_extra={"pattern": _AUDIT_ACTION_PATTERN}),
     operator: str | None = Query(default=None),
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
