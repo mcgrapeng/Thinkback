@@ -538,7 +538,7 @@ The MCP server (`thinkback-mcp`) projects them onto MCP tools for assistants tha
 | `GET` | `/health/ready` | Readiness probe (PostgreSQL / Milvus / Mem0) |
 | `GET` | `/health/metrics` | Prometheus metrics |
 
-**Admin — `/admin/api/*`** (`Authorization: Bearer <ADMIN_TOKEN>`)
+**Admin — `/admin/api/*`** (no auth; internal network only)
 
 | Method | Path | Purpose |
 | --- | --- | --- |

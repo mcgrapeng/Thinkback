@@ -22,13 +22,15 @@ describe("IntegrationPage", () => {
     expect(screen.queryByText("API Keys")).not.toBeInTheDocument();
   });
 
-  it("说明信任边界是网络边界，管理端点用 ADMIN_TOKEN", () => {
+  it("说明信任边界是网络边界，管理端点同样免鉴权", () => {
     renderPage();
 
     expect(screen.getAllByText("业务面免鉴权").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("管理面免鉴权").length).toBeGreaterThan(0);
     expect(screen.getAllByText("信任边界 = 网络边界").length).toBeGreaterThan(0);
     expect(screen.getByText("管理端点")).toBeInTheDocument();
     expect(screen.getAllByText("/admin/api/overview").length).toBeGreaterThan(0);
+    expect(screen.queryByText("ADMIN_TOKEN")).not.toBeInTheDocument();
   });
 
   it("写明异步写入返回 accepted、擦除后同一 round 不可重写", () => {
@@ -45,5 +47,6 @@ describe("IntegrationPage", () => {
 
     expect(screen.getByText("TB-1005")).toBeInTheDocument();
     expect(screen.getByText("TB-1007")).toBeInTheDocument();
+    expect(screen.queryByText("TB-1002")).not.toBeInTheDocument();
   });
 });

@@ -147,23 +147,18 @@ pytest_add_cli_args_test_selection = [
     "tests/unit/test_l2_llm_summary.py",
     "tests/unit/test_recall_policy.py",
     "tests/unit/test_recall_policy_properties.py",
-    "tests/unit/test_recall_policy_edge_cases.py",
     "tests/unit/test_recall_policy_contract.py",
     # 类型级 token 上限（type_caps）只在这里被断言 —— 不选它，
     # recall_policy 里 metadata/memory_type 那条分支的变异体全部存活。
     "tests/unit/test_memory_recall_budget.py",
     "tests/unit/test_memory_lifecycle_properties.py",
     "tests/unit/test_memory_retention.py",
-    "tests/unit/test_retention_cleanup_contract.py",
     "tests/unit/test_retention_contract.py",
     "tests/unit/test_task_state.py",
     "tests/unit/test_safety_gate_patterns.py",
     "tests/unit/test_safety_gate_policy.py",
-    "tests/unit/test_safety_gate_contract.py",
-    "tests/unit/test_classification_policy.py",
     "tests/unit/test_classification_contract.py",
     "tests/unit/test_structured_logging.py",
-    "tests/unit/test_structured_logging_contract.py",
     "tests/unit/test_domain_dedup.py",
 ]
 

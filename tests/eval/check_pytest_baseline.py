@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -89,18 +90,27 @@ def collect_test_ids(suite: str) -> list[str]:
 def _junit_key(node_id: str) -> tuple[str, str]:
     """把 pytest 的用例 ID 转成 junit XML 里的 (classname, name)。
 
-    junit 的 classname 是「模块点路径 + 可选的类名」，name 是用例名（含参数化后缀）。
-    这里从用例 ID 反推，规则与 pytest 的 junitxml 一致：
-    ``tests/unit/test_x.py::TestGroup::test_in`` → (``tests.unit.test_x.TestGroup``, ``test_in``）
+    规则与 pytest 自己的 ``_pytest.junitxml.mangle_test_address`` 一致：
+    先按**第一个** ``[`` 切成「路径部分」与「参数部分」，路径部分再按
+    ``::`` 切，参数部分原样挂回最后一段。
+
+    不能直接 ``split("::")``：参数化 ID 里可以出现 ``::``（IPv6 的
+    ``::1`` 就是）。那样切会把 ``test_foo[::1]`` 切成三段，键就算错了 ——
+    那条用例永远对不上 junit 报告，在门禁里表现为「没真的跑」，而它
+    其实跑了。基线会把它当成「已删除」，白丢一条保护。
+
+    ``tests/unit/test_x.py::TestGroup::test_in`` -> (``tests.unit.test_x.TestGroup``, ``test_in``)
     """
-    parts = node_id.split("::")
-    path = parts[0]
-    module = path[:-3].replace("/", ".") if path.endswith(".py") else path.replace("/", ".")
+    path, bracket, params = node_id.partition("[")
+    parts = path.split("::")
+    module = parts[0].replace(os.sep, ".")
+    if module.endswith(".py"):
+        module = module[: -len(".py")]
+    parts[-1] += bracket + params
     if len(parts) == 1:
         return (module, "")
-    name = parts[-1]
     classname = ".".join([module, *parts[1:-1]]) if len(parts) > 2 else module
-    return (classname, name)
+    return (classname, parts[-1])
 
 
 def load_baseline(path: Path) -> list[str]:

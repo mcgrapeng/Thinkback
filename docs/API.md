@@ -4,15 +4,11 @@ Thinkback exposes three API surfaces: **Memory core** (for application code), **
 
 ## Authentication
 
-### Business surface (`/v2/memory/*`)
-
-No authentication. Thinkback is deployed on an internal network and the business surface is not exposed publicly — the network is the trust boundary, not a token. There is no API key, no scope, and no tenant header.
+Thinkback is deployed on an internal network and no surface is exposed publicly — the network is the trust boundary, not a token. There is no API key, no scope, no tenant header, and no bearer token, on the business surface (`/v2/memory/*`) or on the admin surface (`/admin/api/*`).
 
 Rate limiting still applies: `/v2/memory/*` is throttled per client IP (600 requests/minute, burst 50). The v1 public integration protocol (API key + scope + tenant) was removed; see the [historical spec](specs/2026-10-08-thinkback-integration-protocol-v1.md).
 
-### Admin (`/admin/api/*`)
-
-Requires `Authorization: Bearer <ADMIN_TOKEN>`. Not configured means 503 (fail-closed), never open.
+The admin surface can delete every memory of a user and trigger rebuilds, so it must be kept off the public network by the deployment's network policy — the same boundary that protects the business surface.
 
 ## Memory core (`/v2/memory/*`)
 
@@ -42,7 +38,7 @@ Request bodies use the same Pydantic schemas as the service (`thinkback.memory.s
 
 ## Admin (`/admin/api/*`)
 
-Requires `Authorization: Bearer <ADMIN_TOKEN>`.
+No authentication; reachable from the internal network only.
 
 | Method | Path | Purpose |
 | --- | --- | --- |

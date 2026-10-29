@@ -2,8 +2,8 @@
 
 设计约束（见 docs/管理后台设计方案-2026-09.md §1）：
 - 薄聚合：业务逻辑在 ``MemoryService`` / 仓储层，这里只做参数解析与编排；
-- 鉴权：``settings.admin_token`` 非空时强制共享 Bearer token（防御纵深，
-  Q8 决策）；为空放行（本地开发 / 网关隔离完备的内网）；
+- 免鉴权：服务只部署在内网，信任边界是网络边界（D10 决策）；管理面与
+  业务面一样不校验 Authorization —— 删掉的是一层已确认不需要的闸门；
 - 同步 service 调用经 ``asyncio.to_thread`` 下桥，管理面流量极低，
   不复用 /memory 路由的专用线程池预算（那是为业务读写延迟兜底的）；
 - 审计留痕**不写记忆正文**：update 路径只记录内容长度与指纹，
@@ -14,12 +14,11 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import secrets
 from collections.abc import Callable
-from typing import Annotated, Any
+from typing import Any
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from loguru import logger
 
 from thinkback.api.dependencies import get_memory_service
@@ -41,36 +40,8 @@ from thinkback.memory.service import MemoryService
 router = APIRouter(
     prefix="/admin/api",
     tags=["admin"],
-    # 401：Bearer token 校验失败；503：ADMIN_TOKEN 未配置（fail-closed）。
-    responses={
-        **COMMON_ERROR_RESPONSES,
-        401: {"description": "管理面 Bearer token 校验失败"},
-    },
+    responses={**COMMON_ERROR_RESPONSES},
 )
-
-
-def require_admin_token(authorization: Annotated[str, Header()] = "") -> None:
-    """共享 Bearer token 校验。
-
-    原来「token 未配置时放行」= fail-open：admin_token 默认空串、.env.example 与
-    k8s ConfigMap 都没这一项，于是默认部署下 /admin/api/* 全部裸奔 ——
-    其中包括删任意用户全部记忆、按 user_id 不传即返回全库所有用户记忆。
-
-    现在：**未配置 = 拒绝**（503，可运维的信号）；比较用常量时间函数。
-    生产环境缺 ADMIN_TOKEN 另在启动时 fail fast（见 infra/config.py）。
-    """
-
-    from thinkback.infra.config import settings
-
-    token = settings.admin_token
-    if not token:
-        raise HTTPException(
-            status_code=503,
-            detail="admin API is not configured: ADMIN_TOKEN is missing",
-        )
-    if not secrets.compare_digest(authorization, f"Bearer {token}"):
-        raise HTTPException(status_code=401, detail="invalid admin token")
-
 
 _TASK_STATUS_CSV_PATTERN = (
     r"^$|^\s*(pending|running|completed|failed|dead_letter)"
@@ -113,7 +84,6 @@ def _parse_audit_action(raw: str | None) -> str | None:
 
 @router.get("/overview", operation_id="admin_get_overview")
 async def admin_overview(
-    _: None = Depends(require_admin_token),
     service: MemoryService = Depends(get_memory_service),
 ) -> dict[str, Any]:
     """总览聚合：记忆/任务状态计数 + 数据分类 + 来源类型 + L3 后台写 +
@@ -177,7 +147,6 @@ async def admin_overview(
 
 @router.get("/tasks", operation_id="admin_list_tasks")
 async def admin_list_tasks(
-    _: None = Depends(require_admin_token),
     service: MemoryService = Depends(get_memory_service),
     statuses: str | None = Query(
         default=None,
@@ -214,7 +183,6 @@ def _parse_memory_statuses(raw: str | None) -> list[str] | None:
 
 @router.get("/memories", operation_id="admin_list_memories")
 async def admin_list_memories(
-    _: None = Depends(require_admin_token),
     service: MemoryService = Depends(get_memory_service),
     user_id: str | None = Query(default=None, description="用户 ID（不传=全量）"),
     memory_scope_id: str | None = Query(default=None),
@@ -241,7 +209,6 @@ async def admin_list_memories(
 @router.get("/memories/{memory_id}/source", operation_id="admin_memory_source")
 async def admin_memory_source(
     memory_id: str,
-    _: None = Depends(require_admin_token),
     service: MemoryService = Depends(get_memory_service),
 ) -> dict[str, Any]:
     """来源反链：记忆条目 + source_refs 指向的 journal 原文回合。"""
@@ -254,7 +221,9 @@ async def admin_memory_source(
 
 # ── M3：治理操作 + 审计 + 配置 ────────────────────────────────────────
 
-_SENSITIVE_MARKERS = ("password", "token", "secret", "api_key", "url")
+# 「key」覆盖 api_key 与 memory_llm_key —— 后者不含 api_key 子串，靠旧标记
+# 漏掩，LLM 密钥会随 /admin/api/config 明文返回。
+_SENSITIVE_MARKERS = ("password", "token", "secret", "key", "url")
 
 
 def _audit(service: MemoryService, action: str, target: str, detail: dict[str, Any]) -> None:
@@ -291,7 +260,6 @@ async def _run_admin_call[R](method: Callable[..., R], *args: Any) -> R:
 @router.post("/delete", operation_id="admin_delete_memory")
 async def admin_delete_memory(
     request: DeleteMemoryRequest,
-    _: None = Depends(require_admin_token),
     service: MemoryService = Depends(get_memory_service),
 ) -> DeleteMemoryResponse:
     """受控删除（单条/session/all，幂等与业务路由同语义）+ 审计留痕。"""
@@ -314,7 +282,6 @@ async def admin_delete_memory(
 @router.post("/update", operation_id="admin_update_memory")
 async def admin_update_memory(
     request: UpdateMemoryRequest,
-    _: None = Depends(require_admin_token),
     service: MemoryService = Depends(get_memory_service),
 ) -> UpdateMemoryResponse:
     """受控更新单条记忆（幂等同业务路由）+ 审计留痕（不存正文，仅留指纹）。"""
@@ -339,7 +306,6 @@ async def admin_update_memory(
 @router.post("/rebuild", operation_id="admin_rebuild_memory")
 async def admin_rebuild_memory(
     request: RebuildMemoryRequest,
-    _: None = Depends(require_admin_token),
     service: MemoryService = Depends(get_memory_service),
 ) -> RebuildMemoryResponse:
     """受控 rebuild 触发（此前 service 有能力但无 HTTP 路由）+ 审计留痕。"""
@@ -360,7 +326,6 @@ async def admin_rebuild_memory(
 
 @router.get("/audit", operation_id="admin_list_audit")
 async def admin_list_audit(
-    _: None = Depends(require_admin_token),
     service: MemoryService = Depends(get_memory_service),
     action: str | None = Query(
         default=None, json_schema_extra={"pattern": r"^(|delete|update|rebuild)$"}
@@ -393,7 +358,6 @@ async def admin_list_audit(
 
 @router.post("/maintenance/reclaim-orphan-tasks", operation_id="admin_reclaim_orphan_tasks")
 async def admin_reclaim_orphan_tasks(
-    _: None = Depends(require_admin_token),
     service: MemoryService = Depends(get_memory_service),
 ) -> dict[str, Any]:
     """维护：把超过 ``task_orphan_running_seconds`` 没更新的 running 任务回收为 failed。
@@ -407,9 +371,7 @@ async def admin_reclaim_orphan_tasks(
 
 
 @router.get("/health/detail", operation_id="admin_get_health_detail")
-async def admin_health_detail(
-    _admin_auth: None = Depends(require_admin_token),
-) -> dict[str, Any]:
+async def admin_health_detail() -> dict[str, Any]:
     """运行时身份 / 健康详情：服务卡直接消费。
 
     返回：进程启动时间、当前 uptime、alembic head、DB 连接池占用、gRPC 端口、
@@ -484,9 +446,7 @@ async def admin_health_detail(
 
 
 @router.get("/config", operation_id="admin_get_config")
-async def admin_get_config(
-    _: None = Depends(require_admin_token),
-) -> dict[str, Any]:
+async def admin_get_config() -> dict[str, Any]:
     """运行配置只读视图：敏感值脱敏（显隐在治理台 P6 页完成，本端点不回明文）。"""
 
     from thinkback.infra.config import settings

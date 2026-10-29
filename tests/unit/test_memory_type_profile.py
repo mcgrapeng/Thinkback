@@ -71,9 +71,7 @@ def test_development_falls_back_to_default_registry(tmp_path: Path) -> None:
 
 def test_production_fails_when_profile_missing(tmp_path: Path) -> None:
     """生产环境：非默认 namespace 缺 profile → 直接报错。"""
-    settings = Settings(
-        memory_type_profile_dir=str(tmp_path), environment="production", admin_token="t"
-    )
+    settings = Settings(memory_type_profile_dir=str(tmp_path), environment="production")
     provider = build_registry_provider(settings)
 
     with pytest.raises(RuntimeError, match="no memory type profile"):
@@ -84,9 +82,7 @@ def test_production_fails_when_profile_invalid(tmp_path: Path) -> None:
     """生产环境：profile 损坏 → 直接报错，不静默换策略。"""
     _write_profile(tmp_path, "semiconductor", {"profile": {"extractor": "profile"}})
     (tmp_path / "semiconductor.json").write_text("{ broken json", encoding="utf-8")
-    settings = Settings(
-        memory_type_profile_dir=str(tmp_path), environment="production", admin_token="t"
-    )
+    settings = Settings(memory_type_profile_dir=str(tmp_path), environment="production")
     provider = build_registry_provider(settings)
 
     with pytest.raises(RuntimeError, match="could not be loaded"):
@@ -95,9 +91,7 @@ def test_production_fails_when_profile_invalid(tmp_path: Path) -> None:
 
 def test_production_allows_default_namespace_without_profile(tmp_path: Path) -> None:
     """生产环境：默认 namespace 没有 profile 是正常的（内置类型集）。"""
-    settings = Settings(
-        memory_type_profile_dir=str(tmp_path), environment="production", admin_token="t"
-    )
+    settings = Settings(memory_type_profile_dir=str(tmp_path), environment="production")
     provider = build_registry_provider(settings)
 
     registry = provider("thinkback")

@@ -8,46 +8,38 @@
 namespace 由部署方决定（``--namespace`` 或 ``THINKBACK_MCP_NAMESPACE``），
 助手侧无法切换：namespace 是租户/业务分组的边界。
 
-http 传输下可配 ``--token`` / ``THINKBACK_MCP_TOKEN``，未配置时服务**不鉴权**
-（只适合受信内网）。stdio 传输不需要 token：进程边界本身就是信任边界。
+服务只部署在内网，信任边界是网络边界（决策 D10）：不做调用方鉴权。
+stdio 传输的进程边界本身就是信任边界；http 传输请只在内网可达地址上监听。
+
+「信任边界是网络边界」这句是部署方的承诺，代码本身验不了。所以绑定到非回环
+地址时必须显式加 ``--allow-unauthenticated``：确认外侧已经用 NetworkPolicy
+或带鉴权的网关把这个端口收口了，再把服务暴露出去。没有这一步就直接退出，
+免得一个忘了收口的部署静默变成「谁都能读写任意记忆」。
 """
 
 from __future__ import annotations
 
 import argparse
+import ipaddress
 import os
 import sys
-
-from starlette.types import ASGIApp, Receive, Scope, Send
 
 from thinkback.domain.keys import DEFAULT_NAMESPACE
 from thinkback.mcp.server import create_mcp_server
 
 
-class _BearerTokenMiddleware:
-    """给 streamable-http 加一道 Bearer 校验。
+def _is_loopback(host: str) -> bool:
+    """这个监听地址是不是只有本机够得着。
 
-    没配 token 时不启用（保持内网零配置可用）；配了就必须带对。
+    回环地址 = 碰不到别人，不需要额外收口。其余一律当外露处理：主机名
+    可能解析到哪去代码不知道，不能拿「大概是回环」当放行理由。
     """
-
-    def __init__(self, app: ASGIApp, token: str) -> None:
-        self.app = app
-        self.token = token
-
-    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if scope["type"] == "http":
-            headers = {k.decode().lower(): v.decode() for k, v in scope.get("headers", [])}
-            if headers.get("authorization") != f"Bearer {self.token}":
-                await send(
-                    {
-                        "type": "http.response.start",
-                        "status": 401,
-                        "headers": [(b"content-type", b"text/plain; charset=utf-8")],
-                    }
-                )
-                await send({"type": "http.response.body", "body": b"unauthorized"})
-                return
-        await self.app(scope, receive, send)
+    if host.strip().lower() == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -75,9 +67,12 @@ def _build_parser() -> argparse.ArgumentParser:
         help="http 传输的监听端口。",
     )
     parser.add_argument(
-        "--token",
-        default=os.environ.get("THINKBACK_MCP_TOKEN", ""),
-        help="http 传输的 Bearer token；留空表示不鉴权（仅限受信内网）。",
+        "--allow-unauthenticated",
+        action="store_true",
+        default=os.environ.get("THINKBACK_MCP_ALLOW_UNAUTHENTICATED", "").lower()
+        in {"1", "true", "yes", "on"},
+        help="允许在非回环地址上启动不鉴权的 http 传输。决策 D10 下信任边界是网络边界，"
+        "确认外侧已用 NetworkPolicy / 带鉴权的网关收口后再加。",
     )
     return parser
 
@@ -96,11 +91,19 @@ def main(argv: list[str] | None = None) -> int:
         server.run(transport="stdio")
         return 0
 
+    if not _is_loopback(args.host) and not args.allow_unauthenticated:
+        print(
+            f"thinkback-mcp: 拒绝在 {args.host} 上启动不鉴权的 MCP 服务。\n"
+            "决策 D10：MCP 不做调用方鉴权，信任边界是网络边界。\n"
+            "绑定非回环地址前，先用 NetworkPolicy 或带鉴权的网关把这个端口收口，\n"
+            "再显式加 --allow-unauthenticated 启动。",
+            file=sys.stderr,
+        )
+        return 2
+
     import uvicorn
 
     app = server.streamable_http_app()
-    if args.token:
-        app = _BearerTokenMiddleware(app, args.token)  # type: ignore[assignment]
     uvicorn.run(app, host=args.host, port=args.port)
     return 0
 

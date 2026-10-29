@@ -1,6 +1,4 @@
-/** /admin/api 统一客户端：Bearer token（localStorage 覆盖构建期注入）+ 错误规整。 */
-
-const TOKEN_KEY = "thinkback-admin-token";
+/** /admin/api 统一客户端：错误规整。内网直连，不带鉴权头。 */
 
 export class ApiError extends Error {
   constructor(
@@ -12,21 +10,10 @@ export class ApiError extends Error {
   }
 }
 
-export function getAdminToken(): string {
-  return localStorage.getItem(TOKEN_KEY) ?? import.meta.env.VITE_ADMIN_TOKEN ?? "";
-}
-
-export function setAdminToken(token: string): void {
-  if (token) localStorage.setItem(TOKEN_KEY, token);
-  else localStorage.removeItem(TOKEN_KEY);
-}
-
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const token = getAdminToken();
   const response = await fetch(path, {
     ...init,
     headers: {
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...init?.headers,
     },
   });
@@ -173,12 +160,10 @@ export interface ConfigResponse {
 }
 
 async function post<T>(path: string, body: unknown): Promise<T> {
-  const token = getAdminToken();
   const response = await fetch(path, {
     method: "POST",
     headers: {
       "content-type": "application/json",
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
     },
     body: JSON.stringify(body),
   });

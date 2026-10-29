@@ -10,6 +10,8 @@ from pathlib import Path
 
 import yaml
 
+from tests.eval import check_pytest_baseline as baseline
+
 
 def _ci_workflow() -> dict:
     return yaml.safe_load(Path(".github/workflows/ci.yml").read_text(encoding="utf-8"))
@@ -125,3 +127,37 @@ def test_python_dependencies_include_playwright_for_e2e() -> None:
     """e2e 依赖必须声明在 dev 组里：干净环境跑 make test-e2e 不能缺模块。"""
     pyproject = Path("pyproject.toml").read_text(encoding="utf-8")
     assert "playwright" in pyproject
+
+
+def test_the_junit_key_survives_param_ids_containing_double_colons() -> None:
+    """参数化 ID 里带 ``::`` 的用例，基线工具不能把键算错。
+
+    IPv6 回环地址 ``::1`` 就是这种 ID。按普通 ``split("::")`` 切，
+    ``test_foo[::1]`` 会被切成三段 —— 键跟 junit 报告对不上，那条用例
+    在门禁里表现为「没真的跑」，而它其实跑了。基线于是把它当成
+    「已删除」，白丢一条保护。
+    """
+    key = baseline._junit_key(
+        "tests/unit/test_mcp_cli.py::test_loopback_hosts_need_no_extra_opt_in[::1]"
+    )
+
+    assert key == (
+        "tests.unit.test_mcp_cli",
+        "test_loopback_hosts_need_no_extra_opt_in[::1]",
+    )
+
+
+def test_the_junit_key_matches_pytest_for_the_ordinary_shapes() -> None:
+    """普通形状（函数、类方法、无参数）不能被改坏。"""
+    assert baseline._junit_key("tests/unit/test_x.py::test_in") == (
+        "tests.unit.test_x",
+        "test_in",
+    )
+    assert baseline._junit_key("tests/unit/test_x.py::TestGroup::test_in") == (
+        "tests.unit.test_x.TestGroup",
+        "test_in",
+    )
+    assert baseline._junit_key("tests/unit/test_x.py::test_in[1-2]") == (
+        "tests.unit.test_x",
+        "test_in[1-2]",
+    )

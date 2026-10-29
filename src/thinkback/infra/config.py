@@ -15,7 +15,7 @@ from functools import lru_cache
 from typing import Any, Literal
 from urllib.parse import quote_plus
 
-from pydantic import AliasChoices, Field, field_validator, model_validator
+from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -177,9 +177,6 @@ class Settings(BaseSettings):
     # ── gRPC ──────────────────────────────────────────────────────────
     grpc_enabled: bool = True
     # ── 管理后台（治理台 M1）────────────────────────────────────────
-    # /admin/api 的共享 Bearer token：非空即强制校验（防御纵深，见管理后台
-    # 设计方案 Q8）；为空放行（本地开发 / 网关隔离完备时可关）。
-    admin_token: str = ""
     # 治理台 SPA 的 CORS 白名单（逗号分隔 origin，空 = 不启用 CORS 中间件）。
     admin_cors_allow_origins: str = ""
     grpc_host: str = "0.0.0.0"
@@ -189,22 +186,6 @@ class Settings(BaseSettings):
     grpc_shutdown_grace_seconds: float = 5.0
 
     # ── 字段校验 ──────────────────────────────────────────────────────
-    @model_validator(mode="after")
-    def validate_production_admin_token(self) -> "Settings":
-        """生产环境必须配置 ADMIN_TOKEN，否则启动即失败。
-
-        admin_token 默认空串，/admin/api/* 在空 token 时放行 —— 而
-        .env.example 与 k8s ConfigMap 都没这一项，于是默认部署下治理台全裸奔：
-        能删任意用户全部记忆、能按 user_id 不传即列出全库记忆。
-        「运行时才发现」太晚 —— 缺配置应该在启动时就炸。
-        """
-        if self.environment == "production" and not self.admin_token:
-            raise ValueError(
-                "ADMIN_TOKEN must be set when ENVIRONMENT=production "
-                "(/admin/api/* is unauthenticated without it)"
-            )
-        return self
-
     @field_validator("memory_l3_executor_workers")
     @classmethod
     def validate_memory_l3_executor_workers(cls, value: int) -> int:

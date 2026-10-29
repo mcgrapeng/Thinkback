@@ -87,8 +87,6 @@ Manifests are in `k8s/`:
   If namespace labels are not available in your cluster, edit the one marked
   `# >>> 部署方改这里 <<<` in `k8s/networkpolicy.yaml` and replace the
   `namespaceSelector.matchLabels` with `kubernetes.io/metadata.name: <your-gateway-ns>`.
-- `ADMIN_TOKEN` in the Secret. `/admin/api/*` fails closed without it, and with
-  `ENVIRONMENT=production` the process refuses to start if it is missing.
 - `ENVIRONMENT=production` disables `.env` fallback: runtime config must come from the
   ConfigMap and Secret.
 
@@ -200,7 +198,6 @@ See [README](../README.md#configuration). Key environment variables:
 | `MEMORY_L3_WRITE_MODE` | `async` | `sync` for debugging |
 | `MEMORY_L3_EXECUTOR_WORKERS` | `16` | Scale for throughput |
 | `GRPC_ENABLED` | `true` | Set `false` to disable gRPC |
-| `ADMIN_TOKEN` | — | Required when `ENVIRONMENT=production`; guards `/admin/api/*` |
 
 ## Scaling
 

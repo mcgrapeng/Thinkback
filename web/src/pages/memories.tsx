@@ -530,7 +530,7 @@ export function MemoriesPage() {
           variant="error"
           icon={AlertTriangle}
           title="无法加载记忆列表"
-          description="请确认后端服务可达、管理 token 正确。"
+          description="请确认后端服务可达、且在内网可访问。"
           action={{ label: "重试", onClick: () => window.location.reload() }}
         />
       ) : null}

@@ -10,20 +10,24 @@ MCP 的意义是「让任何能挂 MCP 的助手接上记忆」：Claude Desktop
 ## 启动
 
 ```bash
-# stdio：助手本地拉起进程（进程边界就是信任边界，不需要 token）
+# stdio：助手本地拉起进程（进程边界就是信任边界）
 thinkback-mcp --namespace semiconductor
 
 # streamable-http：容器/集群里跑，客户端按 URL 连
+# 绑到非回环地址（= 对外暴露）必须显式声明外侧已收口
 thinkback-mcp --transport http --host 0.0.0.0 --port 8765 \
-  --namespace semiconductor --token "$THINKBACK_MCP_TOKEN"
+  --namespace semiconductor --allow-unauthenticated
 ```
 
 也可用 `python -m thinkback.mcp`。参数与环境变量一一对应：
 `--namespace` / `THINKBACK_MCP_NAMESPACE`、`--transport` / `THINKBACK_MCP_TRANSPORT`、
-`--host` / `THINKBACK_MCP_HOST`、`--port` / `THINKBACK_MCP_PORT`、`--token` / `THINKBACK_MCP_TOKEN`。
+`--host` / `THINKBACK_MCP_HOST`、`--port` / `THINKBACK_MCP_PORT`、
+`--allow-unauthenticated` / `THINKBACK_MCP_ALLOW_UNAUTHENTICATED`。
 
-http 传输下配了 token 就必须带 `Authorization: Bearer <token>`；没配就是**不鉴权**，
-只适合受信内网。
+服务只部署在内网，不做调用方鉴权（决策 D10）：信任边界是网络边界。
+所以 http 传输绑到非回环地址时必须加 `--allow-unauthenticated` —— 先用
+NetworkPolicy 或带鉴权的网关把这个端口收口，再启动。忘了加会直接退出（退出码 2），
+不会静默变成「谁都能读写任意记忆」。
 
 ## 工具面
 

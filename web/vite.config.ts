@@ -14,7 +14,7 @@ export default defineConfig({
   server: {
     // 默认端口 7001（FRONTEND_PORT 可覆盖）；被占用时 vite 自动顺延
     port: Number(process.env.FRONTEND_PORT ?? 7001),
-    // 本地开发代理到后端服务，避免 CORS 与 token 跨域配置
+    // 本地开发代理到后端服务，避免 CORS 跨域配置
     // VITE_USE_MOCK=1 时 mock 插件直接接管 /admin/api/*，proxy 不需要
     proxy: process.env.VITE_USE_MOCK === "1"
       ? undefined

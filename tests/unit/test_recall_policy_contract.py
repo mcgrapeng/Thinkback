@@ -198,6 +198,35 @@ def test_a_future_recall_is_clamped_to_no_decay() -> None:
     assert _strength(item, now=NOW) == pytest.approx(1.0 * (1 + math.log1p(3)))
 
 
+def test_a_future_last_recalled_at_outranks_a_stale_one_at_equal_scores() -> None:
+    """同槽位同分时比的是强度，而强度依赖传入的 now。
+
+    ``last_recalled_at`` 落在未来（时钟回拨 / 并发写入）时，相对 ``now``
+    的差值被截到 0 → 强度最高。换成真实时钟后这条关系会反过来 ——
+    所以「用哪个 now」是可观察的，不能随手改。
+    """
+    fresh = _item(
+        "L3",
+        "User birthday: 1990-01-01",
+        memory_id="m-fresh",
+        score=0.5,
+        recall_count=1,
+        last_recalled_at=NOW + timedelta(hours=1),
+        valid_at=NOW,
+    )
+    stale = _item(
+        "L3",
+        "User birthday: 1991-02-02",
+        memory_id="m-stale",
+        score=0.5,
+        recall_count=10,
+        last_recalled_at=NOW - timedelta(hours=100),
+        valid_at=NOW,
+    )
+    kept = dedupe_and_clip([stale, fresh], token_budget=4000, now=NOW)
+    assert [item.memory_id for item in kept] == ["m-fresh"]
+
+
 def test_the_recall_count_enters_the_strength() -> None:
     """召回次数越多越强 —— 频率因子是 1 + ln(1+count)。"""
     low = _item("L3", memory_id="m1", recall_count=1, last_recalled_at=NOW - timedelta(hours=1))
@@ -532,6 +561,15 @@ def test_an_item_that_exceeds_its_layer_share_is_dropped() -> None:
     assert _cjk(30, "甲") in contents
 
 
+def test_the_main_loop_skips_an_item_over_the_layer_limit_and_keeps_the_next_one() -> None:
+    """主循环里装不下的条目要跳过继续看下一条 —— 放弃整层会白丢一条。"""
+    too_big = _item("L3", "a" * 48, memory_id="m-big", score=0.5)  # 12 token
+    fits = _item("L3", "b" * 12, memory_id="m-fits", score=0.5)  # 3 token
+    l1 = _item("L1", "c" * 12)  # 3 token
+    kept = dedupe_and_clip([too_big, fits, l1], token_budget=5, now=NOW)
+    assert "m-fits" in {item.memory_id for item in kept}
+
+
 def test_every_layer_keeps_at_least_one_item_when_the_budget_allows() -> None:
     """层配额装不下任何一条时，用全局余额给空层补一条。
 
@@ -732,6 +770,20 @@ def test_the_fallback_takes_an_item_whose_cost_equals_the_remaining_budget() -> 
     kept = dedupe_and_clip(items, token_budget=100, now=NOW)
     contents = [item.content for item in kept]
     assert _cjk(100, "乙") in contents, "成本正好等于余额 → 装得下"
+
+
+def test_the_fallback_gives_the_budget_to_l2_before_l3() -> None:
+    """补位顺序是 L1 → L2 → L3：轮到 L2 时，它得先于 L3 拿到全局余额。
+
+    L2 拿到 24（份额 20 + 回流），那条 25 token 装不进；L3 那条 80 也装不进
+    自己的份额。两层都要补位时，按 L1 → L2 → L3 走 → L2 先拿。
+    """
+    l2 = _item("L2", _cjk(25, "乙"))
+    l3 = _item("L3", _cjk(80, "丙"), memory_id="m1", score=0.5)
+    kept = dedupe_and_clip([l2, l3], token_budget=100, now=NOW)
+    contents = [item.content for item in kept]
+    assert _cjk(25, "乙") in contents, "L2 应当先拿到全局余额"
+    assert _cjk(80, "丙") not in contents, "全局余额给了 L2，L3 让位"
 
 
 def test_the_fallback_prefers_l1_then_l2_then_l3() -> None:
