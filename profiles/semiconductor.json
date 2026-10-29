@@ -2,16 +2,16 @@
   "namespace": "semiconductor",
   "types": {
     "profile": {
-      "extractor": "profile",
+      "extractor": "mem0",
       "source_roles": [
         "user"
       ],
       "conflict": "overwrite",
       "retention": "forever",
       "classification": "personal",
+      "extraction_prompt": "prompts/semiconductor/profile.v1.md",
       "description": "用户画像：角色、负责的产线与工艺段",
       "recall": {
-        "path": "fact",
         "budget": 200
       }
     },
@@ -23,9 +23,9 @@
       "conflict": "overwrite",
       "retention": "forever",
       "classification": "personal",
+      "extraction_prompt": "prompts/semiconductor/preference.v1.md",
       "description": "偏好与习惯（如常用 EDA 工具、报表口径）",
       "recall": {
-        "path": "fact",
         "budget": 200
       }
     },
@@ -37,9 +37,9 @@
       "conflict": "overwrite",
       "retention": "forever",
       "classification": "personal",
+      "extraction_prompt": "prompts/semiconductor/process_preference.v1.md",
       "description": "工艺与设备相关的事实：制程节点偏好、常用机台、良率敏感点",
       "recall": {
-        "path": "fact",
         "budget": 400
       }
     },
@@ -55,7 +55,6 @@
       "classification": "personal",
       "description": "设备与量测上下文，时效性强",
       "recall": {
-        "path": "fact",
         "budget": 300
       }
     },
@@ -70,7 +69,6 @@
       "classification": "personal",
       "description": "已发生的事件：流片、异常、验收、交付节点",
       "recall": {
-        "path": "fact",
         "budget": 300
       }
     },
@@ -84,9 +82,9 @@
       "retention": "ttl",
       "ttl_days": 90,
       "classification": "personal",
+      "extraction_prompt": "prompts/semiconductor/state.v1.md",
       "description": "会过期的状态：当前批次良率、在手工单",
       "recall": {
-        "path": "fact",
         "budget": 200
       }
     },
@@ -102,7 +100,6 @@
       "classification": "personal",
       "description": "承诺与待办：什么时候回复、什么时候复测",
       "recall": {
-        "path": "fact",
         "budget": 200
       }
     },
