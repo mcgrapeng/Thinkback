@@ -31,6 +31,7 @@ const ACTION_OPTIONS = [
   { value: "update", label: "更新" },
   { value: "rebuild", label: "重建" },
   { value: "list", label: "读取" },
+  { value: "source", label: "读原文" },
 ] as const;
 
 const ACTION_LABELS: Record<string, string> = {
@@ -38,6 +39,7 @@ const ACTION_LABELS: Record<string, string> = {
   update: "更新",
   rebuild: "重建",
   list: "读取",
+  source: "读原文",
 };
 
 const ACTION_TONE: Record<string, "error" | "info" | "violet" | "neutral"> = {
@@ -45,6 +47,7 @@ const ACTION_TONE: Record<string, "error" | "info" | "violet" | "neutral"> = {
   update: "info",
   rebuild: "violet",
   list: "neutral",
+  source: "neutral",
 };
 
 const PAGE_SIZE = 50;

@@ -559,10 +559,11 @@ def test_the_unfiltered_memory_listing_is_audited() -> None:
     assert "User likes coffee" not in json.dumps(audit[0])
 
 
-def test_a_listing_scoped_to_one_user_is_not_audited() -> None:
-    """带 user_id 的查询是常规视图，不必每次留痕。
+def test_a_listing_scoped_to_one_user_is_audited_too() -> None:
+    """带 user_id 的查询同样留痕。
 
-    留痕的价值在「谁扫了全库」，不是「谁看了一条」。
+    管理面没有调用方身份：知道 user_id 的人并不是那个 user_id 的主人 ——
+    「只看一个用户」和「看全库」在追责上是同一件事，都得留痕。
     """
     client, service = build_client()
     seed(service)
@@ -570,7 +571,44 @@ def test_a_listing_scoped_to_one_user_is_not_audited() -> None:
     response = client.get("/admin/api/memories", params={"user_id": "user-1"})
 
     assert response.status_code == 200
-    assert client.get("/admin/api/audit", params={"action": "list"}).json() == []
+    audit = client.get("/admin/api/audit", params={"action": "list"}).json()
+    assert len(audit) == 1
+    assert audit[0]["detail"]["user_id"] == "user-1"
+
+
+def test_reading_a_memory_source_is_audited() -> None:
+    """来源反链返回的是用户原话（PII 最重的一处），必须留痕。"""
+    client, service = build_client()
+    seed(service)
+
+    memory_id = client.get("/admin/api/memories").json()["items"][0]["memory_id"]
+    response = client.get(f"/admin/api/memories/{memory_id}/source")
+
+    assert response.status_code == 200
+    audit = client.get("/admin/api/audit", params={"action": "source"}).json()
+    assert len(audit) == 1
+    assert audit[0]["target"] == memory_id
+    assert audit[0]["detail"]["memory_id"] == memory_id
+    # 留痕不写正文
+    assert "User likes coffee" not in json.dumps(audit[0])
+
+
+def test_an_untracked_source_read_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
+    """留不下痕就不给读 —— 与列表端点同一口径。"""
+    client, service = build_client()
+    seed(service)
+
+    # 先把 id 拿到手：审计一坏，列表端点也会 503（同一口径）。
+    memory_id = client.get("/admin/api/memories").json()["items"][0]["memory_id"]
+
+    def _boom(entry: Any) -> None:
+        raise RuntimeError("audit table is down")
+
+    monkeypatch.setattr(service.repository, "save_admin_audit", _boom)
+
+    response = client.get(f"/admin/api/memories/{memory_id}/source")
+
+    assert response.status_code == 503
 
 
 def test_the_openapi_pattern_matches_the_runtime_action_set() -> None:

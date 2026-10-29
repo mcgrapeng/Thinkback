@@ -117,3 +117,19 @@ def test_admin_traffic_does_not_consume_the_peer_ip_fallback_bucket() -> None:
         assert client.get("/admin/api/memories").status_code == 200
         assert client.get("/admin/api/memories").status_code == 200
         assert client.get("/admin/api/memories").status_code == 429
+
+
+def test_rotating_the_caller_key_cannot_escape_the_peer_ceiling() -> None:
+    """轮换 user_id 换的是「每调用方」那把桶 —— 按对端 IP 的天花板换不掉。
+
+    分桶键是调用方给的，不压一层按 IP 的总闸，限额就只是个摆设：换个
+    user_id 就是一把满额的新桶。
+    """
+    with TestClient(_app(rate_limit_per_minute=1, burst=1)) as client:
+        # 天花板是每调用方限额的 20 倍 → 这里能过 20 次
+        for index in range(20):
+            response = client.post("/v2/memory/append", json=_body("t1", f"u{index}"))
+            assert response.status_code == 200
+
+        rejected = client.post("/v2/memory/append", json=_body("t1", "u999"))
+        assert rejected.status_code == 429

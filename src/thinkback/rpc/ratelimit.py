@@ -13,14 +13,16 @@
 
 from __future__ import annotations
 
-import time
-from threading import Lock
 from typing import Any
 
 import grpc
 
 from thinkback.domain.keys import DEFAULT_NAMESPACE
-from thinkback.infra.token_bucket import TokenBucket
+from thinkback.infra.token_bucket import BucketRegistry
+
+# 按对端 IP 的天花板 = 每调用方限额的多少倍。与 HTTP 面同一个口径：
+# 分桶键是调用方给的，轮换 key 就换一把新桶，天花板按 IP 分桶换不掉。
+_PEER_CEILING_FACTOR = 20
 
 
 def caller_identity(request: Any) -> str:
@@ -38,14 +40,44 @@ def caller_identity(request: Any) -> str:
     return f"{namespace}:{user_id}"
 
 
+def peer_address(context: grpc.ServicerContext) -> str:
+    """对端**地址**（不含端口）。
+
+    ``context.peer()`` 给的是 ``ipv4:<ip>:<port>``，端口是客户端临时端口 ——
+    每条 TCP 连接都不同。带端口分桶等于每条连接一把新桶，限额永远咬不到。
+    所以只取地址部分。
+    """
+
+    try:
+        peer = context.peer() or ""
+    except Exception:  # noqa: BLE001 - 拿不到 peer 就退化成统一桶
+        return "unknown"
+    if not peer:
+        return "unknown"
+    address, separator, _port = peer.rpartition(":")
+    # "ipv4:1.2.3.4:5678" → rpartition 拿到 ("ipv4:1.2.3.4", ":", "5678")；
+    # 没有端口时（如 unix socket）rpartition 返回 ("", "", peer)。
+    return address if separator and address else peer
+
+
 class GrpcRateLimiter:
     """按调用方分桶的令牌桶，超限直接 abort。"""
 
-    def __init__(self, rate_limit_per_minute: int, burst: int) -> None:
+    def __init__(
+        self,
+        rate_limit_per_minute: int,
+        burst: int,
+        *,
+        max_buckets: int = 10_000,
+    ) -> None:
         self.rate_limit_per_minute = rate_limit_per_minute
         self.burst = burst
-        self._buckets: dict[str, TokenBucket] = {}
-        self._lock = Lock()
+        self.buckets = BucketRegistry(rate_limit_per_minute, burst, max_buckets=max_buckets)
+        self.peer_buckets = BucketRegistry(
+            rate_limit_per_minute * _PEER_CEILING_FACTOR,
+            burst * _PEER_CEILING_FACTOR,
+            max_buckets=max_buckets,
+        )
 
     @classmethod
     def from_settings(cls) -> GrpcRateLimiter:
@@ -58,19 +90,6 @@ class GrpcRateLimiter:
             burst=settings.memory_rate_limit_burst,
         )
 
-    def _bucket(self, client_id: str) -> TokenBucket:
-        with self._lock:
-            bucket = self._buckets.get(client_id)
-            if bucket is None:
-                bucket = TokenBucket(
-                    tokens=float(self.burst),
-                    last_refill=time.time(),
-                    rate_per_second=self.rate_limit_per_minute / 60.0,
-                    burst=self.burst,
-                )
-                self._buckets[client_id] = bucket
-            return bucket
-
     def check(self, request: Any, context: grpc.ServicerContext) -> None:
         """超限就 abort（抛 ``grpc.RpcError``）。
 
@@ -79,20 +98,15 @@ class GrpcRateLimiter:
         限额拒绝会变成「服务端内部错误」。
         """
 
-        client_id = caller_identity(request) or _peer(context)
-        ok, wait = self._bucket(client_id).consume(1)
+        client_id = caller_identity(request) or peer_address(context)
+        # 先扣每调用方的桶：超了就是超了，不该再去动共享的天花板。
+        ok, wait = self.buckets.consume(client_id)
+        if ok:
+            # 再扣按对端地址的天花板：轮换分桶键（换 user_id）绕不开这一层。
+            ok, wait = self.peer_buckets.consume(peer_address(context))
         if not ok:
             retry_after = max(1, int(wait) + 1)
             context.abort(
                 grpc.StatusCode.RESOURCE_EXHAUSTED,
                 f"Rate limit exceeded. Retry after {retry_after}s",
             )
-
-
-def _peer(context: grpc.ServicerContext) -> str:
-    """对端标识（取不到调用方身份时的兜底分桶键）。"""
-
-    try:
-        return context.peer() or "unknown"
-    except Exception:  # noqa: BLE001 - 拿不到 peer 就退化成统一桶
-        return "unknown"

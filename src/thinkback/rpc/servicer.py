@@ -105,6 +105,7 @@ class MemoryServicer(memory_pb2_grpc.MemoryServiceServicer):
         self, request: pb.AppendEventRequest, context: grpc.ServicerContext
     ) -> pb.AppendEventResponse:
         """v2 写入契约：一次一条原始事件（与 HTTP /v2/memory/events 同形）。"""
+        self._limiter.check(request, context)
         try:
             resp = self._svc.append(to_append_event_request(request).to_internal())
             return pb.AppendEventResponse(

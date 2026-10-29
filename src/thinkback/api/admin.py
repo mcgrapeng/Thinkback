@@ -70,7 +70,7 @@ def _parse_statuses(raw: str | None) -> list[str] | None:
 # 审计动作集合：运行时校验与 OpenAPI 契约共用一份。
 # 两处各写一遍必然漂移 —— 上一轮就漂了：运行时认了 "list"，schema 的 pattern
 # 还停在旧集合，按 schema 生成的客户端会拒掉合法的过滤参数。
-_AUDIT_ACTIONS = ("delete", "update", "rebuild", "list")
+_AUDIT_ACTIONS = ("delete", "update", "rebuild", "list", "source")
 _AUDIT_ACTION_PATTERN = r"^(|" + "|".join(_AUDIT_ACTIONS) + r")$"
 
 
@@ -222,39 +222,66 @@ async def admin_list_memories(
         limit=limit,
         offset=offset,
     )
-    if user_id is None:
-        audited = await _audit(
-            service,
-            "list",
-            memory_scope_id or "memories",
-            {
-                "scope": memory_scope_id or "",
-                "returned": len(result.get("items", [])),
-                "total": result.get("total", 0),
-                # 管理面没有调用方身份（免鉴权，D10）：这里记的是**传输对端**，
-                # 不是「谁做的」。写清楚 peer_kind，免得日后把它当成行为人。
-                "peer_kind": "gateway",
-                "peer": request.client.host if request.client else "unknown",
-            },
+    # 管理面没有调用方身份：谁都可能在读**别人**的记忆 —— 带 user_id 的
+    # 查询也不该例外（知道 user_id 的人并不是那个 user_id 的主人）。所以
+    # 两种查询都留痕，都留不下痕就不给读。
+    audited = await _audit(
+        service,
+        "list",
+        memory_scope_id or user_id or "memories",
+        {
+            "scope": memory_scope_id or "",
+            "user_id": user_id or "",
+            "returned": len(result.get("items", [])),
+            "total": result.get("total", 0),
+            # 这里记的是**传输对端**，不是「谁做的」。写清楚 peer_kind，
+            # 免得日后把它当成行为人。
+            "peer_kind": "gateway",
+            "peer": request.client.host if request.client else "unknown",
+        },
+    )
+    if not audited:
+        raise HTTPException(
+            status_code=503,
+            detail="admin audit write failed: refusing to serve an untracked cross-user listing",
         )
-        if not audited:
-            raise HTTPException(
-                status_code=503,
-                detail="admin audit write failed: refusing to serve an untracked cross-user listing",
-            )
     return result
 
 
 @router.get("/memories/{memory_id}/source", operation_id="admin_memory_source")
 async def admin_memory_source(
+    request: Request,
     memory_id: str,
     service: MemoryService = Depends(get_memory_service),
 ) -> dict[str, Any]:
-    """来源反链：记忆条目 + source_refs 指向的 journal 原文回合。"""
+    """来源反链：记忆条目 + source_refs 指向的 journal 原文回合。
+
+    原文回合是 PII 最重的一处（用户原话，可能带凭据），所以留痕；留不下痕
+    就不给读 —— 与列表端点同一口径。
+    """
 
     source = await asyncio.to_thread(service.memory_source, memory_id)
     if source is None:
         raise HTTPException(status_code=404, detail="memory not found")
+
+    rounds = source.get("rounds", []) if isinstance(source, dict) else []
+    audited = await _audit(
+        service,
+        "source",
+        memory_id,
+        {
+            "memory_id": memory_id,
+            "rounds": len(rounds),
+            # 留痕不写正文：只记 id 与条数。
+            "peer_kind": "gateway",
+            "peer": request.client.host if request.client else "unknown",
+        },
+    )
+    if not audited:
+        raise HTTPException(
+            status_code=503,
+            detail="admin audit write failed: refusing to serve an untracked source read",
+        )
     return source
 
 
