@@ -17,10 +17,11 @@ dependencies = [
     "openai>=2.12.0,<3",
     "httpx>=0.28.0,<0.29",
     "python-dotenv>=1.0.0,<2",
-    "mem0ai>=2.2.1,<3",
+    "mem0ai==2.2.1",
     "pymilvus>=3.0.0,<4",
     "grpcio>=1.60,<2.0",
     "grpcio-reflection>=1.60,<2.0",
+    "mcp>=1.2,<2",
 ]
 
 [dependency-groups]
@@ -41,6 +42,9 @@ dev = [
     "playwright>=1.49.0",
     "schemathesis>=4.30.1",
 ]
+
+[project.scripts]
+thinkback-mcp = "thinkback.mcp.__main__:main"
 
 [build-system]
 requires = ["hatchling"]
