@@ -1375,7 +1375,10 @@ class Mem0LibraryMemoryBackend:
     @staticmethod
     def _results(result: object) -> list[dict[str, Any]]:
         if isinstance(result, dict):
-            raw_results = result.get("results", result.get("memories", []))
+            # 默认值不能给 []：给了它，raw_results 永远是 list，下面那条
+            # 「单条 {"id","memory"}」的分支就永远走不到（死分支）。这里与
+            # _result_summary 取值方式保持一致。
+            raw_results = result.get("results", result.get("memories"))
             if isinstance(raw_results, list):
                 return [dict(item) for item in raw_results if isinstance(item, dict)]
             if {"id", "memory"} <= result.keys():
