@@ -109,13 +109,32 @@ omit = [
 [tool.mutmut]
 # 变异测试审计范围：小而纯的逻辑模块。source_paths 必须整棵 src
 # （mutants 树要能 import 完整包），用 only_mutate 收窄变异目标；
-# service.py（1500+ 行）全量变异留给 CI 夜间任务。
+# service.py（6000+ 行）全量变异留给 CI 夜间任务。
+#
+# 收窄标准：**纯函数 + 有判定分支**。这类模块的变异体才代表真实缺陷
+# （比较方向翻转、阈值差一、份额写反）；胶水代码的变异体只会是
+# 「日志文案变了」这种噪音，登记成存活只会稀释门禁的信噪比。
+#
+# recall_policy 是记忆系统里逻辑最密的一块（去重 / 槽位仲裁 / 预算分配 /
+# 逐层裁剪），此前**一个变异体都没有** —— 第四轮审计把它列成了缺口。
 source_paths = ["src"]
+# mutmut 的超时 = (估算用时 + 1) × timeout_multiplier。估算值来自空载机器上的
+# 单次测试耗时，而实际是 8 个 worker 并行跑 —— 墙钟时间会膨胀 3~5 倍。
+# 倍数太小会出现**假超时**：明明跑完了、被判成 timeout，白白算成「没杀掉」。
+# 60 倍给并行留够余量（单个体约 12~30 秒）。
+timeout_multiplier = 60
 only_mutate = [
     "src/thinkback/domain/keys.py",
     "src/thinkback/domain/summarization.py",
+    "src/thinkback/domain/recall_policy.py",
+    "src/thinkback/domain/dedup.py",
+    "src/thinkback/domain/classification.py",
+    "src/thinkback/domain/safety.py",
     "src/thinkback/memory/decay.py",
+    "src/thinkback/memory/task_state.py",
+    "src/thinkback/memory/retention.py",
     "src/thinkback/memory/repositories/_l1_cache.py",
+    "src/thinkback/infra/structured_logging.py",
 ]
 pytest_add_cli_args_test_selection = [
     "tests/unit/test_memory_decay.py",
@@ -123,6 +142,26 @@ pytest_add_cli_args_test_selection = [
     "tests/unit/test_repository_contract.py",
     "tests/unit/test_domain_pure_functions.py",
     "tests/unit/test_l2_llm_summary.py",
+    "tests/unit/test_recall_policy.py",
+    "tests/unit/test_recall_policy_properties.py",
+    "tests/unit/test_recall_policy_edge_cases.py",
+    "tests/unit/test_recall_policy_contract.py",
+    # 类型级 token 上限（type_caps）只在这里被断言 —— 不选它，
+    # recall_policy 里 metadata/memory_type 那条分支的变异体全部存活。
+    "tests/unit/test_memory_recall_budget.py",
+    "tests/unit/test_memory_lifecycle_properties.py",
+    "tests/unit/test_memory_retention.py",
+    "tests/unit/test_retention_cleanup_contract.py",
+    "tests/unit/test_retention_contract.py",
+    "tests/unit/test_task_state.py",
+    "tests/unit/test_safety_gate_patterns.py",
+    "tests/unit/test_safety_gate_policy.py",
+    "tests/unit/test_safety_gate_contract.py",
+    "tests/unit/test_classification_policy.py",
+    "tests/unit/test_classification_contract.py",
+    "tests/unit/test_structured_logging.py",
+    "tests/unit/test_structured_logging_contract.py",
+    "tests/unit/test_domain_dedup.py",
 ]
 
 [tool.hatch.build.targets.wheel.force-include]

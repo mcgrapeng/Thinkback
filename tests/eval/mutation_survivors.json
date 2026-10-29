@@ -1,6 +1,6 @@
 {
-  "_readme": "变异存活基线（make mutation-audit 门禁）\n\n为什么需要它：mutmut 3.8 即使有存活变异体也退出 0，`mutmut results` 只是一张\n给人看的快照——光跑 mutmut 不构成门禁。本文件登记**已验收**的存活 / 无测试变异体，\ntests/eval/check_mutation_survivors.py 拿它与当前结果比对：\n\n- 出现本文件之外的存活或无测试变异体 → 门禁失败（新增盲区，必须补测试或登记理由）\n- 本文件里已被杀死的变异体 → 只提示，不失败（是进步，可顺手清理基线）\n\n每条都必须写明理由，理由分三类：\n1. 等价变异：改了写法但行为不变（例：codec 名 utf-8 → UTF-8）。\n2. 覆盖缺口：逻辑是真的，但现有用例没断言到（例：异常文案、日志文案）。\n3. 刻意不钉死：LLM prompt 文案、后台线程调度编排等本就随调优变动的部分\n   （见 docs/report/testing-toolchain-audit.md 的\"接受存活\"清单）。\n\n复跑 / 重新登记：make mutation-audit 后看 `uv run mutmut results` 的输出，\n新增条目写清理由再登记。范围见 pyproject [tool.mutmut]。\n",
-  "_scope": "mutmut 3.8，范围见 pyproject [tool.mutmut]（keys.py / summarization.py / decay.py / _l1_cache.py）",
+  "_readme": "变异存活基线（make mutation-audit 门禁）\n\n为什么需要它：mutmut 3.8 即使有存活变异体也退出 0，`mutmut results` 只是一张\n给人看的快照——光跑 mutmut 不构成门禁。本文件登记**已验收**的存活 / 无测试变异体，\ntests/eval/check_mutation_survivors.py 拿它与当前结果比对：\n\n- 出现本文件之外的存活或无测试变异体 → 门禁失败（新增盲区，必须补测试或登记理由）\n- 本文件里已被杀死的变异体 → 只提示，不失败（是进步，可顺手清理基线）\n\n每条都必须写明理由，理由分三类：\n1. 等价变异：改了写法但行为不变（例：codec 名 utf-8 → UTF-8）。\n2. 覆盖缺口：逻辑是真的，但现有用例没断言到（例：异常文案、日志文案）。\n3. 刻意不钉死：LLM prompt 文案、后台线程调度编排等本就随调优变动的部分\n   （见 docs/report/testing-toolchain-audit.md 的\"接受存活\"清单）。\n\n复跑 / 重新登记：make mutation-audit 后看 `uv run mutmut results` 的输出，\n新增条目写清理由再登记。范围见 pyproject [tool.mutmut]。\n\n**范围变了要重生成**：mutmut 靠 mutants/ 里副本的 mtime 判断「这份文件已有变异体」。\n新增文件进范围时，那份旧副本比源文件新 → mutmut 复用那个空的变异体集合，\n一个变异体都不生成，门禁照样绿。tests/eval/refresh_mutation_stats.py 会对\n范围取指纹，指纹变了就精确清掉这些遮蔽物。\n\n**超时也要登记**：mutmut 的 timeout（测试没跑完）既不是 survived 也不是 no tests，\n以前直接从门禁视野里消失。基线的 accepted_timeouts 收它。\n",
+  "_scope": "mutmut 3.8，范围见 pyproject [tool.mutmut]（11 个文件：domain/keys.py、domain/summarization.py、domain/recall_policy.py、domain/dedup.py、domain/classification.py、domain/safety.py、memory/decay.py、memory/task_state.py、memory/retention.py、memory/repositories/_l1_cache.py、infra/structured_logging.py）",
   "accepted_survivors": {
     "thinkback.domain.keys.x__canonical__mutmut_2": "等价变异：ensure_ascii=None 与 ensure_ascii=False 同为假值，json.dumps 行为一致。",
     "thinkback.domain.keys.x__canonical__mutmut_6": "覆盖缺口：非 ASCII 正文下 ensure_ascii 默认值（False → True）的差异未被断言。",
@@ -85,7 +85,30 @@
     "thinkback.memory.repositories._l1_cache.xǁL1CacheMixinǁclear_l1__mutmut_20": "等价变异：整 scope 清理循环的 key 全部取自 l1_cache 自身，pop(key) 与 pop(key, None) 行为一致。",
     "thinkback.memory.repositories._l1_cache.xǁL1CacheMixinǁclose__mutmut_1": "等价变异：内存仓储的 close 是 no-op，默认 timeout 取值没有可观测行为。",
     "thinkback.memory.repositories._l1_cache.xǁL1CacheMixinǁclose__mutmut_2": "等价变异：close 不使用 timeout，_ = timeout 换成 _ = None 无可观测行为。",
-    "thinkback.memory.repositories._l1_cache.xǁL1CacheMixinǁget_l1__mutmut_22": "等价变异：走到过期分支说明 entries 非空，key 必在 l1_cache 里，pop(key) 不会 KeyError。"
+    "thinkback.memory.repositories._l1_cache.xǁL1CacheMixinǁget_l1__mutmut_22": "等价变异：走到过期分支说明 entries 非空，key 必在 l1_cache 里，pop(key) 不会 KeyError。",
+    "thinkback.domain.recall_policy.x__allocate_by_layer__mutmut_26": "等价变异：remaining 归零时再分配也只会加 0，分配结果不变。",
+    "thinkback.domain.recall_policy.x__allocate_by_layer__mutmut_27": "等价变异：同上（remaining == 0 与 remaining < 0 的效果相同）。",
+    "thinkback.domain.recall_policy.x__clip_by_layer__mutmut_10": "等价变异：只有一层时 _allocate_by_layer 会复现同一条额度（取 min(需要, 份额) 后全额回流）。",
+    "thinkback.domain.recall_policy.x__clip_by_layer__mutmut_102": "等价变异：picked_cost 的初值只在 picked 为 None 时存在，而那条分支直接 continue，初值从不被读。",
+    "thinkback.domain.recall_policy.x__clip_by_layer__mutmut_103": "等价变异：同上。",
+    "thinkback.domain.recall_policy.x__clip_by_layer__mutmut_34": "等价变异：limits 的键就是 groups 的键，defaults 分支取不到。",
+    "thinkback.domain.recall_policy.x__clip_by_layer__mutmut_36": "等价变异：同上。",
+    "thinkback.domain.recall_policy.x__clip_by_layer__mutmut_37": "等价变异：同上。",
+    "thinkback.domain.recall_policy.x__clip_by_layer__mutmut_117": "等价变异：兜底分支里 type_used 必为空字典（主循环没选中任何条目才会进兜底），两个键取值相同。",
+    "thinkback.domain.recall_policy.x__clip_by_layer__mutmut_124": "等价变异：兜底分支的类型记账写完就不再被读（该层的兜底只跑一次）。",
+    "thinkback.domain.recall_policy.x__clip_by_layer__mutmut_125": "等价变异：同上。",
+    "thinkback.domain.recall_policy.x__clip_by_layer__mutmut_126": "等价变异：同上。",
+    "thinkback.domain.recall_policy.x__clip_by_layer__mutmut_130": "等价变异：同上。",
+    "thinkback.domain.recall_policy.x__order_items__mutmut_22": "等价变异：L3 的条目被重复放进 by_layer，但输出只读 L2/L1 两个键，by_layer[\"L3\"] 永远不会被读到 —— 顺序不变。",
+    "thinkback.domain.recall_policy.x__order_items__mutmut_23": "等价变异：同上。",
+    "thinkback.domain.recall_policy.x__prefer_item__mutmut_10": "等价变异：这处比较在 != 守卫内，等值时根本走不到，> 与 >= 等价。",
+    "thinkback.domain.recall_policy.x__prefer_item__mutmut_18": "等价变异：同上。",
+    "thinkback.domain.safety.x_messages_are_restricted_or_unsafe__mutmut_9": "等价变异：消息缺 content 时默认值参与匹配，「XXXX」不命中任何模式，与空串同结果。",
+    "thinkback.domain.safety.x_restricted_reason__mutmut_8": "等价变异：同上。",
+    "thinkback.domain.safety.x_restricted_reason__mutmut_10": "等价变异：词表用 re.IGNORECASE 编译，lower / upper 不改变匹配结果。",
+    "thinkback.domain.safety.x_text_is_restricted_or_unsafe__mutmut_2": "等价变异：同上。",
+    "thinkback.infra.structured_logging.xǁStructuredLoggerǁmetric__mutmut_4": "等价变异：or True 让条件恒真；unit 为空串时结果与原式相同。"
   },
-  "accepted_no_tests": {}
+  "accepted_no_tests": {},
+  "accepted_timeouts": {}
 }

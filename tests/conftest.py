@@ -1,7 +1,9 @@
+import os
 from collections.abc import Generator
 
 import pytest
 from fastapi.testclient import TestClient
+from hypothesis import settings as hypothesis_settings
 
 from thinkback.api import app as app_module
 from thinkback.api import dependencies as dependencies_module
@@ -12,6 +14,20 @@ from thinkback.infra import config as config_module
 from thinkback.infra import logging as logging_module
 from thinkback.infra import readiness as readiness_module
 from thinkback.infra.database import engine as engine_module
+
+# hypothesis 的样例数与 deadline 在这里统一设，用例文件里不再各写一份。
+#
+# - ``deadline=None``：这些属性测试跑的是纯函数，但里面夹着槽位抽取的正则，
+#   单次执行偶尔会超过 hypothesis 默认的 200ms 上限 —— 那不是被测代码变慢，
+#   是 deadline 太紧，会变成随机 flaky。
+# - 变异审计下样例数压到 20：每个变异体都要把选中的测试整套重跑一遍，
+#   1000 个变异体 × 200 个样例 = 门禁跑几小时。20 个样例足以杀掉真变异体
+#   —— 杀不掉的那些是「样例再多也杀不掉」的等价变异，本来就该登记为存活。
+hypothesis_settings.register_profile("thinkback", max_examples=100, deadline=None)
+hypothesis_settings.register_profile("thinkback-mutation", max_examples=20, deadline=None)
+hypothesis_settings.load_profile(
+    "thinkback-mutation" if os.environ.get("MUTANT_UNDER_TEST") else "thinkback"
+)
 
 
 @pytest.fixture(autouse=True)
