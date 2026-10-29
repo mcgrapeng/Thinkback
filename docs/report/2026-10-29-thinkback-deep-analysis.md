@@ -33,7 +33,7 @@
 | 分层记忆 | Zep 保留 episode 与派生事实；LangMem 区分 collection/profile/episodic/procedural | L1 轮次原文 / L2 会话视图 / L3 派生事实 | ✅ 同向 |
 | 长期记忆引擎 | mem0 / Zep / cognee 各自承担抽取与检索 | 固定 mem0，Thinkback 只做治理索引 | ✅ 合理 |
 | 抽取质量归属 | 主流都交给引擎 + 领域 prompt | mem0 `add(prompt=...)` + Thinkback 拼全局/类型两段 | ✅ 方向对 |
-| 冲突与"当前事实" | mem0 OSS 2.2.1 是 **ADD-only**（`ADDITIVE_EXTRACTION_PROMPT` 原文："Your sole operation is ADD"），没有 UPDATE/DELETE 决策 | Thinkback 自建 supersede | ✅ **该自建**，但实现绑错了词表，见 §3.1 |
+| 冲突与"当前事实" | mem0 OSS 2.2.1 的**写入路径**是 ADD-only（`ADDITIVE_EXTRACTION_PROMPT` 原文："Your sole operation is ADD"）。它另有 `DEFAULT_UPDATE_MEMORY_PROMPT`（ADD/UPDATE/DELETE/NONE）走的是 update 路径，Thinkback 不用那条 | Thinkback 自建 supersede | ✅ **该自建**，但实现绑错了词表，见 §3.1 |
 | 时间语义 | Graphiti 区分事实时间/记录时间/参考时间 | `valid_at` / `recorded_at` / `expires_at` 三元组 | ✅ 同向（尚未做 as-of 查询） |
 | 删除 | 主流普遍只做逻辑删除，物理残留是普遍痛点 | suppress / erase 四档对外声明 | ✅ 超出主流 |
 | 持久执行 | mem0 `Memory.add` 是同步方法，无任务语义；`AsyncMemory` 非持久队列 | operation + lease + attempt + 恢复 + 对账 | ✅ 超出主流 |
@@ -45,13 +45,13 @@
 
 | 能力 | mem0 OSS 2.2.1 现状 | Thinkback 现状 | 评价 |
 | --- | --- | --- | --- |
-| 事实抽取 | 有（ADD-only） | 复用 | ✅ 没重复造 |
+| 事实抽取 | 有（写入路径 ADD-only） | 复用 | ✅ 没重复造 |
 | 混合检索 BM25 | 有，但**集合 schema 不带 analyzer_params 时中文 BM25 恒为 0** | Thinkback 预建集合（ADR-0007） | ✅ 补的是引擎的缺口 |
 | 实体 NER | 需 `mem0ai[nlp]` extras，检索侧固定 `en_core_web_sm` | 明确不装，词表只做抽取提示 | ✅ 判断正确 |
 | as-of 查询 | `timestamp` / `reference_date` 是 Platform-only | 只做失效标记 | ✅ 判断正确 |
 | 过期 | `expiration_date` + `show_expired`（**只隐藏不删**） | 保留期三段：不可达 → 宽限 → 物理清理 | ✅ 补的是引擎的缺口 |
 | 删除时清历史 | 无（`delete` 只删向量行，history/messages 表留旧值） | 定向删 mem0 SQLite | ✅ 补的是引擎的缺口，见 §4.1 的实现缺陷 |
-| 冲突/覆盖 | 无（ADD-only） | 自建 supersede | ✅ 方向对，实现错（§3.1） |
+| 冲突/覆盖 | 写入路径无（ADD-only） | 自建 supersede | ✅ 方向对，实现错（§3.1） |
 | 队列/重试/崩溃恢复 | 无 | operation + CAS + 恢复 | ✅ 必须自建 |
 | 上下文装配/预算 | 无（`search` 只回 top-k） | 分层预算 + 类型上限 + 质量/强度排序 | ✅ 必须自建 |
 | 身份/信任/分类 | 无 | 类型 `source_roles` + 服务端推导 trust + 分类取严 | ✅ 必须自建 |
