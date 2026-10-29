@@ -15,6 +15,8 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+import pytest
+
 from thinkback.memory.backends import FakeMemoryBackend
 from thinkback.memory.decay import MemoryDecaySweeper
 from thinkback.memory.repositories import InMemoryMemoryRepository
@@ -155,6 +157,120 @@ def test_decay_skips_legacy_rows_without_valid_at() -> None:
     entry.valid_at = None  # 模拟遗留行
     suppressed = make_sweeper(repository).sweep_now("user-1", "thinkback")
     assert suppressed == 0
+
+
+# ── 阈值边界（变异审计暴露的覆盖缺口）────────────────────────────────
+#
+# 下面的用例不是「多测一点」，是钉死判定方向。衰减的两个阈值都是闭区间判定：
+#   年龄：valid_at <= now - min_age_days        才算候选（判定是 `>` 跳过）
+#   未召回：last_recalled_at <= now - unrecalled_days 才算候选
+# 方向反了不会让任何既有用例变红 —— 老/新样本离阈值差几十天，
+# 边界翻转对它们没有区别，于是「差一天就衰减错」这种错要等生产上才发现。
+
+
+def test_decay_age_threshold_boundary_is_inclusive() -> None:
+    """valid_at 恰好等于 min_age_days 时应当算候选（差一秒则不算）。"""
+    repository = InMemoryMemoryRepository()
+    now = datetime.now(UTC)
+    _add(
+        repository,
+        backend_id="edge-aged",
+        text="User enjoys hiking in the mountains",
+        valid_at=now - timedelta(days=90),
+    )
+    _add(
+        repository,
+        backend_id="edge-young",
+        text="User enjoys reading about sailing",
+        valid_at=now - timedelta(days=90) + timedelta(seconds=1),
+    )
+
+    suppressed = make_sweeper(repository).sweep_now("user-1", "thinkback")
+
+    assert suppressed == 1, "恰好到龄的记忆应当被衰减"
+    remaining = [m.backend_memory_id for m in repository.active_memories("user-1", "thinkback")]
+    assert remaining == ["edge-young"], "未到龄的记忆必须留下"
+
+
+def test_decay_unrecalled_threshold_boundary_is_inclusive() -> None:
+    """last_recalled_at 恰好等于 unrecalled_days 时应当算候选（差一秒则不算）。"""
+    repository = InMemoryMemoryRepository()
+    now = datetime.now(UTC)
+    at_boundary = _add(
+        repository,
+        backend_id="edge-stale",
+        text="User enjoys hiking in the mountains",
+        valid_at=OLD,
+    )
+    within_window = _add(
+        repository,
+        backend_id="edge-recent",
+        text="User enjoys reading about sailing",
+        valid_at=OLD,
+    )
+    at_boundary.last_recalled_at = now - timedelta(days=60)
+    within_window.last_recalled_at = now - timedelta(days=60) + timedelta(seconds=1)
+
+    suppressed = make_sweeper(repository).sweep_now("user-1", "thinkback")
+
+    assert suppressed == 1, "恰好久未达阈值的记忆应当被衰减"
+    remaining = [m.backend_memory_id for m in repository.active_memories("user-1", "thinkback")]
+    assert remaining == ["edge-recent"], "窗口内被召回过的记忆必须留下"
+
+
+def test_decay_sweeper_rejects_out_of_range_thresholds() -> None:
+    """阈值越界要报错，且异常文案要说清是哪个参数。"""
+    repository = InMemoryMemoryRepository()
+    executor = ThreadPoolExecutor(max_workers=1)
+
+    with pytest.raises(ValueError, match="min_age_days"):
+        MemoryDecaySweeper(repository=repository, executor=executor, min_age_days=0)
+    with pytest.raises(ValueError, match="unrecalled_days"):
+        MemoryDecaySweeper(repository=repository, executor=executor, unrecalled_days=0)
+    with pytest.raises(ValueError, match="sweep_interval_seconds"):
+        MemoryDecaySweeper(repository=repository, executor=executor, sweep_interval_seconds=-1)
+
+
+def test_decay_sweeper_accepts_lowest_valid_thresholds() -> None:
+    """下界本身合法：1 天 / 1 天 / 0 秒间隔都能建起来。"""
+    repository = InMemoryMemoryRepository()
+    sweeper = MemoryDecaySweeper(
+        repository=repository,
+        executor=ThreadPoolExecutor(max_workers=1),
+        min_age_days=1,
+        unrecalled_days=1,
+        sweep_interval_seconds=0,
+    )
+    assert sweeper.min_age_days == 1
+    assert sweeper.unrecalled_days == 1
+    assert sweeper.sweep_interval_seconds == 0
+
+
+def test_decay_sweeper_defaults_are_pinned() -> None:
+    """默认阈值被配置覆盖前是这组数 —— 改了默认值要有人知道。"""
+    sweeper = MemoryDecaySweeper(
+        repository=InMemoryMemoryRepository(),
+        executor=ThreadPoolExecutor(max_workers=1),
+    )
+    assert sweeper.min_age_days == 90
+    assert sweeper.unrecalled_days == 60
+    assert sweeper.sweep_interval_seconds == 3600.0
+
+
+def test_decay_skips_rows_that_are_not_active() -> None:
+    """只有 ACTIVE 行参与清扫：已删除/已抑制的行不能再被计数一次。"""
+    repository = InMemoryMemoryRepository()
+    deleted = _add(
+        repository,
+        backend_id="already-gone",
+        text="User enjoys hiking in the mountains",
+        valid_at=OLD,
+    )
+    repository.mark_memory_deleted(deleted.memory_id)
+
+    suppressed = make_sweeper(repository).sweep_now("user-1", "thinkback")
+
+    assert suppressed == 0, "非 ACTIVE 行不参与清扫"
 
 
 def test_maybe_submit_respects_time_gating() -> None:
