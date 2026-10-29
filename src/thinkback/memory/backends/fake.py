@@ -93,10 +93,16 @@ class FakeMemoryBackend:
         return results[:limit]
 
     def update(self, memory_id: str, data: str) -> None:
-        """更新一条 fake 记忆的内容。缺失 ID 视为 no-op，避免与生产后端语义差异。"""
+        """更新一条 fake 记忆的内容。缺失 ID 抛异常，与生产后端一致。
 
-        if memory_id in self.memories:
-            self.memories[memory_id]["memory"] = data
+        生产后端对不存在的 ID 重试几次后抛 RuntimeError。fake 原来静默
+        no-op，等于骗测试：一条针对「更新不存在的记忆」的用例在 fake 上
+        通过，到生产就炸。宁可让 fake 更严格。
+        """
+
+        if memory_id not in self.memories:
+            raise RuntimeError(f"fake memory {memory_id} not found")
+        self.memories[memory_id]["memory"] = data
 
     def delete(self, memory_id: str) -> None:
         """删除单条 fake 记忆。幂等：缺失 ID 不抛异常。"""
@@ -104,14 +110,19 @@ class FakeMemoryBackend:
         self.memories.pop(memory_id, None)
 
     def delete_many(self, memory_ids: list[str]) -> int:
-        """批量删除 fake 记忆；返回实际被删除的条数。"""
+        """批量删除 fake 记忆；返回实际尝试删除的条数（不含空 ID）。
 
-        deleted = 0
+        与生产后端与协议口径一致：``delete`` 是幂等的，「尝试删除」不等于
+        「确实删掉了」。
+        """
+
+        attempted = 0
         for memory_id in memory_ids:
-            if memory_id in self.memories:
-                self.delete(memory_id)
-                deleted += 1
-        return deleted
+            if not memory_id:
+                continue
+            self.delete(memory_id)
+            attempted += 1
+        return attempted
 
     def get_all(
         self, *, user_id: str, memory_scope_id: str, limit: int = 200
