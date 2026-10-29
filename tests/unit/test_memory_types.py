@@ -17,7 +17,7 @@ from thinkback.domain.memory_types import (
 def test_default_registry_covers_current_behaviour() -> None:
     registry = default_registry()
 
-    assert registry.get("profile").extractor == "profile"
+    assert registry.get("profile").extractor == "mem0"
     assert registry.get("preference").source_roles == ("user",)
     # 程序性规则只能由管理员写入且需审批
     assert registry.get("procedure").source_roles == ("admin",)
@@ -119,6 +119,40 @@ def test_registry_rejects_ttl_without_days() -> None:
                     }
                 }
             },
+            namespace="semiconductor",
+        )
+
+
+def test_registry_rejects_knobs_without_consumer() -> None:
+    """没有运行时消费者的旋钮一律拒绝，不留成"配了也不生效"的假开关。
+
+    这三个旋钮曾经是"空配置"：`layer` 从来没有消费者，`recall.path` 的
+    instruction/schedule 两种路径从未实现，`extractor=profile` 与
+    `extractor=mem0` 行为完全相同。留着它们只会让接入方以为配了就生效。
+    """
+    base = {
+        "extractor": "mem0",
+        "source_roles": ["user"],
+        "conflict": "overwrite",
+        "retention": "forever",
+        "classification": "personal",
+    }
+
+    with pytest.raises(ValueError, match="unknown fields"):
+        registry_from_dict(
+            {"types": {"profile": {**base, "layer": "L3"}}},
+            namespace="semiconductor",
+        )
+
+    with pytest.raises(ValueError, match="unknown fields"):
+        registry_from_dict(
+            {"types": {"profile": {**base, "recall": {"path": "fact"}}}},
+            namespace="semiconductor",
+        )
+
+    with pytest.raises(ValueError, match="unknown extractor"):
+        registry_from_dict(
+            {"types": {"profile": {**base, "extractor": "profile"}}},
             namespace="semiconductor",
         )
 

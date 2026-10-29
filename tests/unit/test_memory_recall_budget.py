@@ -71,3 +71,35 @@ def test_type_cap_does_not_starve_other_layers() -> None:
 
     layers = {item.layer for item in kept}
     assert "L1" in layers
+
+
+def test_layer_quota_below_single_item_cost_must_not_empty_the_package() -> None:
+    """层配额比该层任何一条都小时，不能整层清空成空包。
+
+    budget=100 时 L1 配额 30→48、L3 配额 50→51，而两层各有一条 60 token 的
+    内容：两条都装不下 → 召回返回空包、预算一分未用。契约要求「不返回空包」
+    （插件化设计 §6.4）。
+    """
+    items = [
+        MemoryItem(layer="L1", content="甲" * 60, source="round-1"),
+        _l3("乙" * 60, memory_type="event", score=0.9),
+    ]
+
+    kept = dedupe_and_clip(items, 100)
+
+    assert kept, "预算有余额时不得返回空包"
+    assert estimate_tokens(kept[0].content.strip()) <= 100
+
+
+def test_empty_layer_gets_one_item_from_the_global_budget() -> None:
+    """层配额装不下任何一条时，用全局余额给该层补一条（保底顺序 L1 优先）。"""
+    items = [
+        MemoryItem(layer="L1", content="甲" * 400, source="round-1"),
+        _l3("乙" * 600, memory_type="event", score=0.9),
+    ]
+
+    kept = dedupe_and_clip(items, 1200)
+
+    layers = {item.layer for item in kept}
+    assert "L1" in layers, "L1 是保底层，层配额不够也要留下一条"
+    assert sum(estimate_tokens(item.content.strip()) for item in kept) <= 1200

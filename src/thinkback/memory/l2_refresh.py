@@ -81,6 +81,10 @@ class L2BackgroundRefresher:
         self._append_counters: OrderedDict[ScopeKey, int] = OrderedDict()
         # 已完成过至少一次 llm 刷新的作用域（进程内视角；重启后首 append 会再触发一次，幂等无害）
         self._llm_refreshed_scopes: OrderedDict[ScopeKey, None] = OrderedDict()
+        # 已**尝试**过 llm 刷新的作用域（成功或失败都算）。与上面的区别是：
+        # 失败时也要算数，否则「还没刷过」的条件一直成立，LLM 挂掉期间
+        # 每个 append 都会再提交一次刷新（故障被放大成调用风暴）。
+        self._llm_attempted_scopes: OrderedDict[ScopeKey, None] = OrderedDict()
         # 提交去重 + futures 记账
         self._pending_scopes: set[ScopeKey] = set()
         self._futures: set[Future[None]] = set()
@@ -105,6 +109,8 @@ class L2BackgroundRefresher:
             self._append_counters.popitem(last=False)
         while len(self._llm_refreshed_scopes) > self._max_tracked_scopes:
             self._llm_refreshed_scopes.popitem(last=False)
+        while len(self._llm_attempted_scopes) > self._max_tracked_scopes:
+            self._llm_attempted_scopes.popitem(last=False)
 
     # ── 对外接口 ────────────────────────────────────────────────────
 
@@ -125,7 +131,12 @@ class L2BackgroundRefresher:
                 # 已有一次在飞的刷新，等它完成后计数自然对齐
                 return
             has_llm_summary = scope in self._llm_refreshed_scopes
-            due = not has_llm_summary or counter >= self.refresh_interval_rounds
+            # 「还没刷过」只对**从未尝试过**的 scope 成立。失败也算尝试：
+            # 否则 LLM 挂掉时「还没刷过」恒成立，每个 append 都会再提交一次
+            # 刷新 —— 故障被放大成 LLM 调用风暴，与本模块「无重试风暴」的
+            # 降级语义相反。失败后的重试节奏回到去抖间隔（N 轮一次）。
+            attempted = scope in self._llm_attempted_scopes
+            due = (not has_llm_summary and not attempted) or counter >= self.refresh_interval_rounds
             if not due:
                 return
 
@@ -151,6 +162,8 @@ class L2BackgroundRefresher:
                     self._release_capacity()
                 return
             self._append_counters[scope] = 0
+            self._llm_attempted_scopes.pop(scope, None)
+            self._llm_attempted_scopes[scope] = None
             self._pending_scopes.add(scope)
 
         context = copy_context()

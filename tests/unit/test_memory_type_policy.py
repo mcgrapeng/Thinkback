@@ -211,7 +211,7 @@ def test_type_without_prompt_file_still_records_default_version(tmp_path: Path) 
     registry = MemoryTypeRegistry(
         namespace="acme",
         version="3",
-        types={"profile": MemoryTypeSpec(name="profile", extractor="profile")},
+        types={"profile": MemoryTypeSpec(name="profile", extractor="mem0")},
     )
     backend = _RecordingBackend()
     service = MemoryService(

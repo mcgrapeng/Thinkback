@@ -26,7 +26,12 @@ from thinkback.domain.classification import (
 )
 from thinkback.domain.entities import memory_is_expired
 from thinkback.domain.errors import TaskLockExhaustedError, TaskStaleWriteError
-from thinkback.domain.memory_types import MemoryTypeRegistry, MemoryTypeSpec, default_registry
+from thinkback.domain.memory_types import (
+    MemoryTypeRegistry,
+    MemoryTypeSpec,
+    default_registry,
+    extract_attribute_name,
+)
 from thinkback.domain.ports import (
     MEMORY_LIST_PAGE_LIMIT,
     HistorySource,
@@ -116,6 +121,7 @@ _RESERVED_METADATA_KEYS = frozenset(
     {
         "backend_categories",
         "data_classification",
+        "expires_at",
         "extraction_prompt_version",
         "extractor",
         "force_extract",
@@ -567,6 +573,13 @@ L2 更新 (缓存失效)
             str(effective_metadata.get("data_classification") or ""),
             type_spec.classification,
         )
+        # 到期日随轮次一起落库：TTL 记忆的到期时刻是**写入时**定的，重放
+        # （重试 / 崩溃恢复 / rebuild）必须沿用同一个值 —— 否则每次重放都按
+        # 「重放时刻 + TTL」重算，一条本该写后 90 天过期的事实能被自己的
+        # 恢复机制续命。
+        expiration_date = self._expiration_date(type_spec)
+        if expiration_date:
+            effective_metadata["expires_at"] = expiration_date
         # 存库的类型名以注册表为准，避免「配置说是 state、存下来是 profile」。
         effective_metadata["memory_type"] = type_spec.name
         # 来源时间进生效元数据：事实新旧按它判定（round_id 的字典序与新旧
@@ -593,6 +606,14 @@ L2 更新 (缓存失效)
         )
         append_log.info("memory append started")
         existing = self.repository.get_round(request.round_id)
+        if existing is not None:
+            # 重试/崩溃恢复沿用**首次写入时**定的到期日，不按「重试时刻 + TTL」
+            # 重算 —— 否则一条本该写后 90 天过期的事实能被自己的恢复机制续命。
+            # journal 里已经存着首次的 expires_at（save_round 落的是
+            # effective_metadata），这里取回来覆盖本次重算的值。
+            stored_expiry = (existing.request_metadata or {}).get("expires_at")
+            if stored_expiry:
+                effective_metadata["expires_at"] = stored_expiry
         task_id = f"memory-extract:{request.round_id}"
         if existing:
             self._assert_round_matches_request(existing, request)
@@ -1643,7 +1664,13 @@ L2 更新 (缓存失效)
             memory_scope_id=memory_scope_id,
             source_refs=source_refs,
             request_metadata=write_metadata,
-            expiration_date=self._expiration_date(type_spec),
+            # 引擎侧的到期日同样沿用写入时定的那个：mem0 的 expiration_date
+            # 也是「这天之后失效」，重放重算等于给引擎侧也续命。
+            expiration_date=(
+                str(request_metadata.get("expires_at"))
+                if request_metadata.get("expires_at")
+                else self._expiration_date(type_spec)
+            ),
             extraction_prompt=extraction_prompt,
             allowed_roles=allowed_roles,
             prefetched_events=prefetched_events,
@@ -2333,6 +2360,64 @@ L2 更新 (缓存失效)
                 namespace=self._long_term_scope_id(request),
             ):
                 refs.append({"session_id": entry.session_id, "round_id": entry.round_id})
+        # 软删除（delete）做在前面时，轮次已被标成 deleted_tombstone，
+        # list_rounds 看不到它们 —— 但原文还在引擎侧的消息表里。墓碑记着
+        # 当时的轮次集合，这里取回来，erase 才能按原文正文把引擎侧原文清掉。
+        for ref in self._deleted_round_refs(
+            request.user_id,
+            self._long_term_scope_id(request),
+            request.scope,
+            session_id=request.session_id,
+        ):
+            if ref not in refs:
+                refs.append(ref)
+        return refs
+
+    def _deleted_round_refs(
+        self,
+        user_id: str,
+        namespace: str,
+        scope: DeleteScope,
+        *,
+        session_id: str | None = None,
+    ) -> list[dict[str, str]]:
+        """软删除墓碑里记的轮次集合（delete 先做、erase 后做时用）。
+
+        墓碑只存轮次引用，不存原文 —— 原文仍在 journal 与引擎侧消息表里，
+        擦除阶段按引用回原文。
+
+        会话级擦除只取该会话自己的墓碑：别的会话的原文不能被顺带清掉
+        （引擎侧消息表没有会话维度，清了就找不回来）。
+        """
+        if scope is DeleteScope.MEMORY:
+            return []
+        refs: list[dict[str, str]] = []
+        for memory in self.repository.list_memories(user_id, namespace):
+            metadata = getattr(memory, "metadata", {}) or {}
+            if not isinstance(metadata, dict):
+                continue
+            if metadata.get("delete_all_tombstone") is True:
+                if scope is DeleteScope.SESSION:
+                    # delete-all 墓碑覆盖所有会话，会话级擦除不能据此清别人的原文。
+                    continue
+            elif metadata.get("session_delete_tombstone") is True:
+                if (
+                    scope is DeleteScope.SESSION
+                    and session_id is not None
+                    and str(metadata.get("deleted_session_id") or "") != session_id
+                ):
+                    continue
+            else:
+                continue
+            for ref in memory.source_refs or []:
+                round_id = str(ref.get("round_id") or "")
+                if round_id:
+                    refs.append(
+                        {
+                            "session_id": str(ref.get("session_id") or ""),
+                            "round_id": round_id,
+                        }
+                    )
         return refs
 
     def _add_erase_tombstone(
@@ -2431,19 +2516,34 @@ L2 更新 (缓存失效)
                 mark_done("barrier")
 
             if "backend" not in done:
+                deleted_backend_ids: list[str] = []
                 if scope_value == DeleteScope.ALL.value:
                     # ALL 必须覆盖本地没有索引行的后端记录（抽取后索引失败等
                     # 暗数据），只按本地索引逐条删会留下不可管理的残留。
-                    self.backend.delete_all(user_id=request.user_id, memory_scope_id=namespace)
+                    # 返回值是**实际删掉的 ID 列表**：暗数据也在里面，引擎侧的
+                    # 原文（mem0 的 delete 会把原文写进 history 表）要按这些
+                    # ID 清掉，否则原文留在引擎侧而擦除报「已完成」。
+                    deleted_backend_ids = [
+                        str(item)
+                        for item in self.backend.delete_all(
+                            user_id=request.user_id, memory_scope_id=namespace
+                        )
+                        if item
+                    ]
                 elif backend_ids:
                     self.backend.delete_many(backend_ids)
+                    deleted_backend_ids = list(backend_ids)
                 # 删除后复核：后端 delete 对「不可见」的记忆按幂等跳过处理，
                 # 光凭调用返回无法证明记录真的没了。列出残留，残留就是擦除
                 # 没完成 —— 任务失败重试，而不是谎报 completed。
                 residual = self._residual_backend_ids(
                     user_id=request.user_id,
                     memory_scope_id=namespace,
-                    target_ids=backend_ids,
+                    # ALL 范围复核的是「这次真删掉的那批 ID」：计划里的加上引擎
+                    # 实际删掉的（含没有本地索引行的暗数据），不是作用域里的全部
+                    # 记录。擦除期间用户新写的记忆不属于这次擦除的目标 ——
+                    # 算成残留会让擦除永远失败，而每次重试都会把新记忆删掉。
+                    target_ids=list(dict.fromkeys([*backend_ids, *deleted_backend_ids])),
                     scope_all=scope_value == DeleteScope.ALL.value,
                 )
                 if residual:
@@ -2451,12 +2551,33 @@ L2 更新 (缓存失效)
                         "erase backend stage incomplete: "
                         f"{len(residual)} record(s) still present in backend"
                     )
+
+                def save_deleted_backend_ids(current: TaskEntry) -> None:
+                    # 存进任务结果：阶段可重入，重试时「backend」已 done，
+                    # 拿不到这次的返回值，引擎侧历史就清不掉了。
+                    current.result = {
+                        **current.result,
+                        "deleted_backend_ids": deleted_backend_ids,
+                    }
+
+                self._mutate_task_with_retry(task.task_id, save_deleted_backend_ids, strict=True)
                 mark_done("backend")
 
             if "history" not in done:
+                # 引擎侧历史按「实际删掉的 ID」清，不只是本地索引里有的那批：
+                # ALL 范围的暗数据没有本地索引行，只按 backend_ids 清会漏掉
+                # 它们的原文（mem0 的 delete 把原文写进了 history 表）。
+                history_memory_ids = list(backend_ids)
+                # 重新读任务：``_mutate_task_with_retry`` 改的是仓储里的快照，
+                # 手里这个 task 对象还是旧的（阶段可重入，ids 只存在任务结果里）。
+                current_task = self.repository.get_task(task.task_id) or task
+                for memory_id in current_task.result.get("deleted_backend_ids") or []:
+                    key = str(memory_id)
+                    if key and key not in history_memory_ids:
+                        history_memory_ids.append(key)
                 purged = self.backend.purge_history(
                     user_id=request.user_id,
-                    memory_ids=backend_ids,
+                    memory_ids=history_memory_ids,
                     namespace=namespace,
                     # Mem0 的原始消息表没有 session 维度（会话标识只有
                     # user/agent/run），按 scope 删会连别的会话一起删。
@@ -2549,24 +2670,65 @@ L2 更新 (缓存失效)
             return list(target_ids) if not scope_all else ["*"]
         present = {str(item.get("id", "")) for item in remaining}
         if scope_all:
-            return sorted(present) if present else []
+            # ALL 只复核这次要删的那些 ID：作用域里新写的记录不是这次擦除的
+            # 目标（用户还在用这个账号）。把它们算成残留，擦除会永久失败，
+            # 而每次重试都会把新记忆删掉 —— 用户越重试丢得越多。
+            if len(remaining) >= MEMORY_LIST_PAGE_LIMIT:
+                # 一页取满：后面的记录没列出来，只能逐个点查目标 ID。
+                logger.bind(
+                    user_id=user_id,
+                    memory_scope_id=memory_scope_id,
+                    page_size=len(remaining),
+                ).warning("erase backend verification: page limit reached, checking targets")
+                return sorted(self._present_backend_ids(target_ids))
+            return sorted(present & set(target_ids))
         if len(remaining) >= MEMORY_LIST_PAGE_LIMIT:
-            # 一页取满：后面还有没列出来的记录，无法证明目标已删。
-            # 宁可让擦除任务失败重试，也不谎报「已擦除」。
+            # 一页取满：后面还有没列出来的记录，光看列表判断不了目标还在不在。
+            # 逐个点查目标 ID —— 这才能证明「已删」。不点查就直接判定失败，
+            # 会让后端记录超过一页的用户**每次**擦除都必然失败（重试也撞
+            # 同一条件 → 永久失败）。
             logger.bind(
                 user_id=user_id,
                 memory_scope_id=memory_scope_id,
                 page_size=len(remaining),
-            ).warning("erase backend verification inconclusive: page limit reached")
-            return sorted(target_ids)
+            ).warning("erase backend verification: page limit reached, checking targets")
+            return sorted(self._present_backend_ids(target_ids))
         return sorted(memory_id for memory_id in target_ids if memory_id in present)
+
+    def _present_backend_ids(self, target_ids: list[str]) -> list[str]:
+        """逐个点查目标 ID，返回仍然存在的那些。
+
+        点查失败（后端不可达）按「还在」处理：宁可让擦除任务失败重试，
+        也不谎报「已擦除」。
+        """
+        present: list[str] = []
+        for memory_id in target_ids:
+            if not memory_id:
+                continue
+            try:
+                found = self.backend.get(memory_id)
+            except Exception as exc:  # noqa: BLE001 - 查不到就按「还在」处理
+                logger.bind(
+                    memory_id=memory_id,
+                    error_type=type(exc).__name__,
+                ).warning("erase backend target lookup failed")
+                present.append(memory_id)
+                continue
+            if found:
+                present.append(memory_id)
+        return present
 
     def _erased_message_texts(
         self,
         source_refs: list[dict[str, str]],
         namespace: str,
     ) -> list[str]:
-        """被擦除轮次的原始消息正文（用于精确删除引擎侧的原始消息）。"""
+        """被擦除轮次的原始消息正文（用于精确删除引擎侧的原始消息）。
+
+        必须用**原文**：mem0 的 ``save_messages`` 存的是 ``message["content"]``
+        原样，抹掉首尾空白后再去 ``content IN (...)`` 匹配就匹配不上，
+        原文会留在引擎侧而计数是 0 —— 擦除没做掉却看不出来。
+        """
         texts: list[str] = []
         for ref in source_refs:
             round_id = str(ref.get("round_id", ""))
@@ -2576,7 +2738,7 @@ L2 更新 (缓存失效)
             if entry is None or entry.namespace != namespace:
                 continue
             for message in entry.messages:
-                content = str(message.get("content", "")).strip()
+                content = str(message.get("content", ""))
                 if content and content not in texts:
                     texts.append(content)
         return texts
@@ -2757,8 +2919,12 @@ L2 更新 (缓存失效)
                 "content_fingerprint": content_fingerprint,
                 # 记录的是更新后记忆的真实类型，而不是请求里可能缺省的类型字段；
                 # 幂等重放要拿它跟当前记忆比对，写 None 会误判成冲突。
+                # 取 memory_type_name（原始类型名）优先：自定义类型不在内置
+                # 枚举里，memory_type 会是 None，只记枚举值会让重放把
+                # 「早就成功」误判成冲突。
                 "memory_type": (
-                    response.memory.memory_type.value if response.memory.memory_type else None
+                    response.memory.memory_type_name
+                    or (response.memory.memory_type.value if response.memory.memory_type else None)
                 ),
                 "summary_state": SummaryState.DIRTY.value,
             }
@@ -2965,7 +3131,11 @@ L2 更新 (缓存失效)
             expected_memory_type = existing_task.result["memory_type"]
         else:
             expected_memory_type = existing_task.scope.get("memory_type")
-        if memory.memory_type != expected_memory_type:
+        # 比对**原始类型名**：自定义类型不在内置枚举里，只比枚举值会把
+        # 自定义类型的重放误判成冲突（对外 409，而真相是「早就成功了」）。
+        current_memory_type = str(getattr(memory, "memory_type", "") or "") or None
+        expected = str(expected_memory_type) if expected_memory_type else None
+        if current_memory_type != expected:
             raise ValueError("operation_id conflict: completed update result is no longer current")
         return UpdateMemoryResponse(
             status="already_done",
@@ -3605,6 +3775,7 @@ L2 更新 (缓存失效)
                 memory_scope_id=l3_scope_id,
                 backend_memory_id=current.backend_memory_id,
                 memory_text=request.content,
+                memory_type=resolved_memory_type,
             )
             for source_ref in conflicting.source_refs
         )
@@ -3666,6 +3837,7 @@ L2 更新 (缓存失效)
                 memory_scope_id=l3_scope_id,
                 backend_memory_id=current.backend_memory_id,
                 memory_text=request.content,
+                memory_type=resolved_memory_type,
             )
             pending_backend_writes.extend(supersede_pending)
         except Exception:
@@ -3710,15 +3882,19 @@ L2 更新 (缓存失效)
         memory_scope_id: str,
         backend_memory_id: str,
         memory_text: str,
+        memory_type: str | None = None,
     ) -> list[Any]:
-        slot = self._memory_conflict_slot(memory_text)
-        if slot is None:
+        key = self._conflict_key(memory_text, memory_type, memory_scope_id)
+        if key is None:
             return []
         return [
             memory
             for memory in self.repository.active_memories(user_id, memory_scope_id)
             if memory.backend_memory_id != backend_memory_id
-            and self._memory_conflict_slot(memory.memory_text) == slot
+            and self._conflict_key(
+                memory.memory_text, getattr(memory, "memory_type", None), memory_scope_id
+            )
+            == key
         ]
 
     def _mark_source_refs_dirty(
@@ -4614,6 +4790,13 @@ L2 更新 (缓存失效)
         「更旧」而被跳过 —— 用户纠正偏好后，新值反而进不了索引。
         """
 
+        # 类型自带 per-type 抽取指令时，P0 槽位回填不参与：那份指令才是这个
+        # 类型事实形状的唯一来源（属性名：值），P0 的英文模板文本跟它冲突，
+        # 混进来只会产出既不属于该类型语义、又没法算冲突键的条目。
+        memory_type = str(request_metadata.get("memory_type") or "") or None
+        if self._type_uses_attribute_keys(memory_type, memory_scope_id):
+            return []
+
         backfill_log = logger.bind(
             user_id=user_id,
             memory_scope_id=memory_scope_id,
@@ -4671,6 +4854,7 @@ L2 更新 (缓存失效)
                     memory_scope_id=memory_scope_id,
                     backend_memory_id=backend_id,
                     memory_text=memory_text,
+                    memory_type=str(l3_metadata.get("memory_type") or "") or None,
                 )
                 pending_backend_writes.extend(supersede_pending)
                 self.repository.add_memory_index(
@@ -4854,13 +5038,20 @@ L2 更新 (缓存失效)
             spec = self._type_spec_from_metadata(l3_metadata, memory_scope_id)
         except (KeyError, ValueError):
             spec = None
-        if spec is not None:
+        persisted = l3_metadata.get("expires_at")
+        expiration: str | None
+        if isinstance(persisted, str) and persisted:
+            # 重放沿用写入时的到期日（TTL 不被恢复机制续命）。
+            expiration = persisted
+        elif spec is not None:
             expiration = self._expiration_date(spec)
-            if expiration:
-                # Mem0 的 expiration_date 是「这天之后失效」：按当天结束计。
-                expires_at = datetime.fromisoformat(expiration).replace(tzinfo=UTC) + timedelta(
-                    hours=23, minutes=59, seconds=59, microseconds=999999
-                )
+        else:
+            expiration = None
+        if expiration:
+            # Mem0 的 expiration_date 是「这天之后失效」：按当天结束计。
+            expires_at = datetime.fromisoformat(expiration).replace(tzinfo=UTC) + timedelta(
+                hours=23, minutes=59, seconds=59, microseconds=999999
+            )
         return valid_at, expires_at, recorded_at
 
     @staticmethod
@@ -5108,6 +5299,7 @@ L2 更新 (缓存失效)
                     memory_scope_id=memory_scope_id,
                     backend_memory_id=backend_id,
                     memory_text=memory_text,
+                    memory_type=str(l3_metadata.get("memory_type") or "") or None,
                 )
                 pending_backend_writes.extend(supersede_pending)
         self.repository.add_memory_index(
@@ -5224,16 +5416,22 @@ L2 更新 (缓存失效)
         memory_scope_id: str,
         backend_memory_id: str,
         memory_text: str,
+        memory_type: str | None = None,
     ) -> tuple[list[str], list[Any]]:
-        new_slot = self._memory_conflict_slot(memory_text)
-        if new_slot is None:
+        new_key = self._conflict_key(memory_text, memory_type, memory_scope_id)
+        if new_key is None:
             return [], []
         superseded_ids: list[str] = []
         pending_backend_writes: list[Any] = []
         for memory in self.repository.active_memories(user_id, memory_scope_id):
             if memory.backend_memory_id == backend_memory_id:
                 continue
-            if self._memory_conflict_slot(memory.memory_text) != new_slot:
+            if (
+                self._conflict_key(
+                    memory.memory_text, getattr(memory, "memory_type", None), memory_scope_id
+                )
+                != new_key
+            ):
                 continue
             superseded = self.repository.mark_memory_superseded(memory.memory_id)
             if superseded is None:
@@ -5264,8 +5462,10 @@ L2 更新 (缓存失效)
         memory_text: str,
         l3_metadata: dict[str, Any] | None = None,
     ) -> bool:
-        new_slot = self._memory_conflict_slot(memory_text)
-        if new_slot is None:
+        new_key = self._conflict_key(
+            memory_text, str((l3_metadata or {}).get("memory_type") or "") or None, memory_scope_id
+        )
+        if new_key is None:
             return False
         new_cursor = self._source_cursor(user_id, l3_metadata or {})
         if new_cursor is None:
@@ -5273,7 +5473,12 @@ L2 更新 (缓存失效)
         for memory in self.repository.active_memories(user_id, memory_scope_id):
             if memory.backend_memory_id == backend_memory_id:
                 continue
-            if self._memory_conflict_slot(memory.memory_text) != new_slot:
+            if (
+                self._conflict_key(
+                    memory.memory_text, getattr(memory, "memory_type", None), memory_scope_id
+                )
+                != new_key
+            ):
                 continue
             existing_cursor = self._source_cursor(user_id, memory.metadata)
             if existing_cursor is None:
@@ -5334,6 +5539,43 @@ L2 更新 (缓存失效)
     @staticmethod
     def _memory_conflict_slot(memory_text: str) -> str | None:
         return memory_conflict_slot(memory_text)
+
+    def _type_uses_attribute_keys(self, memory_type: str | None, namespace: str) -> bool:
+        """这个类型的事实是否按「属性名：值」产出。
+
+        判据是**有没有 per-type 抽取指令**：指令是唯一规定事实文本形状的地方，
+        指令要求写 ``<属性名>：<值>`` 时属性名才是可信的冲突键。没有指令的类型
+        回退到旧的 P0 槽位口径 —— 那里槽位本身就是属性名，语义一致。
+        """
+        if not memory_type:
+            return False
+        try:
+            spec = self._type_registry(namespace).get(str(memory_type))
+        except (KeyError, ValueError):
+            return False
+        return bool(spec.extraction_prompt_text)
+
+    def _conflict_key(
+        self, memory_text: str, memory_type: str | None, namespace: str
+    ) -> str | None:
+        """这条事实的冲突键：``<类型>#<属性名>``。
+
+        同类型的同一个属性才算冲突 —— 不同类型互不覆盖，不同属性也互不覆盖。
+        属性名取自 per-type 抽取指令产出的「属性名：值」格式；没有 per-type
+        抽取指令的类型回退到 P0 槽位。
+
+        过去这里只比 P0 槽位（``domain/slots`` 的 9 个中文消费级槽位），企业
+        垂类事实一律落在槽位之外 → 冲突永远不发生 → 类型声明的
+        ``conflict: overwrite`` 成了空配置。
+        """
+        # 没记类型的行按默认类型算：_l3_metadata 与 _resolve_type_name 都把
+        # 缺省当 profile，冲突键的口径必须一致，否则同一条事实算不出同一个键。
+        type_name = str(memory_type or "") or MemoryType.PROFILE.value
+        if self._type_uses_attribute_keys(memory_type, namespace):
+            name = extract_attribute_name(memory_text)
+            return f"{type_name}#{name}" if name else None
+        slot = self._memory_conflict_slot(memory_text)
+        return f"{type_name}#{slot}" if slot else None
 
     @classmethod
     def _memory_supported_by_source(cls, memory_text: str, l3_metadata: dict[str, Any]) -> bool:
@@ -5409,6 +5651,10 @@ L2 更新 (缓存失效)
         if source_timestamp:
             # 来源时间随事件一起落库：事实新旧按它判定，不靠 round_id 猜。
             metadata["source_timestamp"] = source_timestamp
+        expires_at = request_metadata.get("expires_at")
+        if expires_at:
+            # 写入时定的到期日：重放沿用它，不按重放时刻重算 TTL。
+            metadata["expires_at"] = str(expires_at)
         if request_metadata.get("source_text"):
             metadata["source_text"] = str(request_metadata["source_text"])
         # 产生这条事实的策略版本（ADR-0009）：策略或引擎变更后仍能解释它，

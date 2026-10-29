@@ -25,6 +25,15 @@ L1_CACHE_LIMIT = 10
 # 加 TTL 后，缓存最多陈旧这么久就会被判为 miss 并回源 PG。
 L1_CACHE_TTL_SECONDS = 30.0
 
+# 缓存**键**的数量上界。值有上界（L1_CACHE_LIMIT 条/键），键没有：每个
+# (user, namespace, scope, session) 组合一个键，会话只增不减 → 长跑服务里
+# 键空间无界增长（每个键还带着最多 10 条轮次原文）。TTL 是惰性的：只在
+# 命中时判断，不再访问的键永远不过期。所以必须显式淘汰。
+#
+# ponytail: 固定 1000 个键（≈1000×10 条轮次原文）。按并发会话数调；
+# 调大前先确认内存余量，调小会让热点会话互相挤掉缓存。
+L1_CACHE_MAX_KEYS = 1000
+
 
 class L1CacheMixin:
     """L1 短期回合的内存缓存层
@@ -90,6 +99,23 @@ class L1CacheMixin:
             existing.append(entry)
             self.l1_cache[key] = existing[-limit:]
             self._l1_timestamps()[key] = time.monotonic()
+            self._evict_oldest_keys()
+
+    def _evict_oldest_keys(self) -> None:
+        """键数超上界时淘汰最早的键（调用方已持锁）。
+
+        dict 保持插入顺序，最早插入的键排在最前；同一个键重复写入不会改变
+        它的插入位置，所以这是 FIFO 而不是 LRU —— 对「防止无界增长」这个
+        目的够用，不必为真 LRU 再引入 OrderedDict 与 move_to_end 的维护。
+        """
+        stamps = self._l1_timestamps()
+        while len(self.l1_cache) > L1_CACHE_MAX_KEYS:
+            oldest = next(iter(self.l1_cache))
+            del self.l1_cache[oldest]
+            # 时间戳簿记可能已经缺失（脏状态：clear_l1 的整 scope 路径会留下
+            # 「有缓存条目但没有时间戳」的条目）。淘汰跑在每次 append 上，
+            # 不能因为簿记脏就打断写入。
+            stamps.pop(oldest, None)
 
     def clear_l1(
         self,

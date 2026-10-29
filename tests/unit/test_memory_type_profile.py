@@ -32,7 +32,7 @@ def test_profile_defines_namespace_types(tmp_path: Path) -> None:
         "semiconductor",
         {
             "profile": {
-                "extractor": "profile",
+                "extractor": "mem0",
                 "source_roles": ["user"],
                 "conflict": "overwrite",
                 "retention": "forever",
@@ -103,6 +103,35 @@ def test_production_allows_default_namespace_without_profile(tmp_path: Path) -> 
     registry = provider("thinkback")
 
     assert "profile" in registry.names()
+
+
+def test_profile_is_loaded_at_call_time_not_cached(tmp_path: Path) -> None:
+    """profile 每次调用都重读盘：新增/修改 profile 不需要重启服务。
+
+    这是「接入新企业 = 加一份配置」的底座：profile 目录由 ConfigMap 挂进
+    容器，文件一落地就能被下一次调用读到。
+    """
+    settings = Settings(memory_type_profile_dir=str(tmp_path))
+    provider = build_registry_provider(settings)
+
+    _write_profile(
+        tmp_path,
+        "acme",
+        {
+            "profile": {
+                "extractor": "mem0",
+                "source_roles": ["user"],
+                "conflict": "overwrite",
+                "retention": "forever",
+                "classification": "personal",
+            }
+        },
+    )
+
+    registry = provider("acme")
+
+    assert registry.names() == ["profile"]
+    assert registry.namespace == "acme"
 
 
 def test_docker_image_ships_profiles() -> None:

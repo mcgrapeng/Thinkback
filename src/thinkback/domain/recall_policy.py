@@ -279,12 +279,17 @@ def _clip_by_layer(
         limits = _allocate_by_layer(needs, token_budget)
 
     kept: list[MemoryItem] = []
+    selected_by_layer: dict[str, list[MemoryItem]] = {}
+    type_used_by_layer: dict[str, dict[str, int]] = {}
+    candidates_by_layer: dict[str, list[MemoryItem]] = {}
+    used_total = 0
     for layer in _LAYER_OUTPUT_ORDER:
         group = groups.get(layer)
         if not group:
             continue
         limit = limits.get(layer, 0)
         candidates = list(reversed(group)) if layer == "L1" else group
+        candidates_by_layer[layer] = candidates
         selected: list[MemoryItem] = []
         used = 0
         type_used: dict[str, int] = {}
@@ -306,7 +311,44 @@ def _clip_by_layer(
             selected.append(item)
         if layer == "L1":
             selected.reverse()  # 输出仍按时间顺序
+        selected_by_layer[layer] = selected
+        type_used_by_layer[layer] = type_used
+        used_total += used
         kept.extend(selected)
+
+    # 每层至少留一条：层配额可能小于该层任何一条的成本（预算最紧时最明显，
+    # 例如 budget=100 而 L1/L3 各有一条 60 token 的内容 → 配额 48/51，
+    # 两条都装不下 → 整层被清空 → 召回返回空包、预算一分未用）。
+    # 契约要求「不返回空包」（插件化设计 §6.4），所以用全局余额给空层补一条。
+    # 补的顺序按保底顺序（L1 → L2 → L3）：L1 是当前对话，份额本来就是保底。
+    for layer in ("L1", "L2", "L3"):
+        if selected_by_layer.get(layer) or layer not in groups:
+            continue
+        remaining = token_budget - used_total
+        picked: MemoryItem | None = None
+        picked_cost = 0
+        for item in candidates_by_layer[layer]:
+            cost = estimate_tokens(item.content.strip())
+            if cost > remaining:
+                continue
+            type_name = _memory_type_of(item)
+            if type_name:
+                type_used = type_used_by_layer[layer]
+                cap = (type_caps or {}).get(type_name)
+                if cap is not None and type_used.get(type_name, 0) + cost > cap:
+                    continue
+                type_used[type_name] = type_used.get(type_name, 0) + cost
+            picked = item
+            picked_cost = cost
+            break
+        if picked is None:
+            continue
+        selected_by_layer[layer] = [picked]
+        used_total += picked_cost
+
+    kept = []
+    for layer in _LAYER_OUTPUT_ORDER:
+        kept.extend(selected_by_layer.get(layer, []))
     return kept
 
 

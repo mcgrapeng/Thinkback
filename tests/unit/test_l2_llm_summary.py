@@ -175,10 +175,28 @@ def test_llm_failure_keeps_concat_fallback_and_service_alive() -> None:
     assert "杭州" in summary.summary_text
 
     composer.fail = False
+    # 失败后不立刻重试：LLM 挂掉时每个 append 都重发一次刷新 = 调用风暴
+    # （模块 docstring 承诺「无重试风暴」）。重试节奏回到去抖间隔，
+    # 所以要再攒够 interval 轮才会提交下一次刷新。
     service.append(make_append("r2", "我在换工作", index=2))
+    service.append(make_append("r3", "我下周出差", index=3))
     service.drain_l3_background_tasks(timeout=5)
     summary = service.repository.get_summary("user-1", "session-1")
     assert summary is not None and summary.summary_kind == "llm"
+
+
+def test_llm_failure_does_not_retry_on_every_append() -> None:
+    """LLM 失败期间的调用次数必须有上界（不能每个 append 一次）。"""
+    composer = RecordingComposer()
+    composer.fail = True
+    service, _ = make_service(composer, interval=5)
+    for index in range(6):
+        service.append(make_append(f"r{index}", f"第 {index} 轮对话", index=index))
+    service.drain_l3_background_tasks(timeout=5)
+
+    # 6 次 append、去抖间隔 5 → 首次尝试 1 次 + 到间隔后再 1 次 = 2 次；
+    # 旧行为是每个 append 一次 = 6 次（故障被放大成调用风暴）。
+    assert len(composer.calls) <= 2, f"失败期间调用次数失控：{len(composer.calls)}"
 
 
 def test_refreshed_summary_visible_via_recall_l2_layer() -> None:

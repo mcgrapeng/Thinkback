@@ -13,7 +13,7 @@ from thinkback.memory.repositories import (
     SqlAlchemyMemoryRepository,
 )
 from thinkback.memory.repositories import sqlalchemy as repositories_module
-from thinkback.memory.repositories._l1_cache import L1_CACHE_TTL_SECONDS
+from thinkback.memory.repositories._l1_cache import L1_CACHE_MAX_KEYS, L1_CACHE_TTL_SECONDS
 from thinkback.memory.schemas import DataClassification, MemoryStatus, SourceType
 
 
@@ -651,6 +651,72 @@ def test_l1_cache_update_l1_default_limit_is_ten() -> None:
 
     cached = repository.get_l1("user-1", "session-1", "session-1")
     assert [entry.round_id for entry in cached] == [f"r-{index:02d}" for index in range(2, 12)]
+
+
+def test_l1_cache_key_space_is_bounded() -> None:
+    """会话只增不减时，缓存的**键**数必须有上界。
+
+    值有上界（每键 10 条轮次），键没有 → 长跑服务里键空间无界增长，每个键
+    还带着最多 10 条轮次原文。TTL 是惰性的：不再访问的键永远不过期，
+    所以必须显式淘汰。
+    """
+    repository = InMemoryMemoryRepository()
+    for index in range(L1_CACHE_MAX_KEYS + 50):
+        repository.update_l1(
+            _make_l1_entry(
+                round_id=f"r-{index}",
+                user_id="user-1",
+                scope_id="scope-1",
+                session_id=f"s-{index}",
+            )
+        )
+
+    assert len(repository.l1_cache) == L1_CACHE_MAX_KEYS
+    # 淘汰的是最早的键，最新的键仍在（淘汰不能把刚写的也扔掉）
+    assert repository.get_l1("user-1", "scope-1", f"s-{L1_CACHE_MAX_KEYS + 49}")
+
+
+def test_l1_cache_eviction_drops_timestamp_bookkeeping_too() -> None:
+    """淘汰缓存键时必须同步删掉时间戳簿记，否则簿记本身也无界增长。"""
+    repository = InMemoryMemoryRepository()
+    for index in range(L1_CACHE_MAX_KEYS + 10):
+        repository.update_l1(
+            _make_l1_entry(
+                round_id=f"r-{index}",
+                user_id="user-1",
+                scope_id="scope-1",
+                session_id=f"s-{index}",
+            )
+        )
+
+    assert len(repository._l1_timestamps()) == len(repository.l1_cache)
+
+
+def test_l1_cache_eviction_tolerates_a_key_without_timestamp() -> None:
+    """淘汰时遇到「有缓存条目但没有时间戳」的脏状态不能抛异常。
+
+    脏状态是真实存在的（整 scope 清理会留下这种条目）。淘汰跑在每次
+    append 上，这里抛异常等于把一次缓存清理升级成写入失败。
+    """
+    repository = InMemoryMemoryRepository()
+    repository.update_l1(
+        _make_l1_entry(round_id="r-0", user_id="user-1", scope_id="scope-1", session_id="s-0")
+    )
+    oldest = next(iter(repository.l1_cache))
+    repository._l1_timestamps().pop(oldest, None)  # 脏状态：簿记没了，缓存还在
+
+    for index in range(1, L1_CACHE_MAX_KEYS + 1):
+        repository.update_l1(
+            _make_l1_entry(
+                round_id=f"r-{index}",
+                user_id="user-1",
+                scope_id="scope-1",
+                session_id=f"s-{index}",
+            )
+        )
+
+    assert oldest not in repository.l1_cache
+    assert len(repository.l1_cache) == L1_CACHE_MAX_KEYS
 
 
 # ---------------------------------------------------------------------------

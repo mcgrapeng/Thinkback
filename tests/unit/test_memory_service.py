@@ -1,7 +1,7 @@
 import time
 from concurrent.futures import Future
 from contextlib import suppress
-from datetime import date
+from datetime import UTC, date, datetime
 from threading import Barrier, BrokenBarrierError, Event, Lock, Thread
 from typing import Any
 
@@ -8976,6 +8976,125 @@ def test_ttl_type_passes_expiration_to_engine() -> None:
     assert expiration is not None
     # 默认 state 类型保留 90 天
     assert expiration >= date.today().isoformat()
+
+
+def test_ttl_expiry_survives_retry(monkeypatch: pytest.MonkeyPatch) -> None:
+    """重试沿用首次写入时定的到期日，不按「重试时刻 + TTL」续命。
+
+    恢复机制（重试 / 崩溃恢复 / rebuild）如果重算到期日，一条本该写后 90 天
+    过期的事实能被自己的恢复流程反复续命。
+    """
+    import thinkback.memory.service as service_module
+
+    class _Clock(datetime):
+        current = datetime(2026, 5, 4, 10, 0, 0, tzinfo=UTC)
+
+        @classmethod
+        def now(cls, tz=None):  # type: ignore[no-untyped-def]
+            return cls.current if tz is None else cls.current.astimezone(tz)
+
+    monkeypatch.setattr(service_module, "datetime", _Clock)
+
+    class _FailingOnceBackend(_CapturingAddBackend):
+        def __init__(self) -> None:
+            super().__init__()
+            self.fail_next = True
+
+        def add(  # type: ignore[no-untyped-def]
+            self,
+            messages,
+            *,
+            user_id,
+            memory_scope_id,
+            metadata=None,
+            infer=True,
+            expiration_date=None,
+            prompt=None,
+        ):
+            if self.fail_next:
+                self.fail_next = False
+                raise RuntimeError("engine unavailable")
+            return super().add(
+                messages,
+                user_id=user_id,
+                memory_scope_id=memory_scope_id,
+                metadata=metadata,
+                infer=infer,
+                expiration_date=expiration_date,
+                prompt=prompt,
+            )
+
+    backend = _FailingOnceBackend()
+    repository = InMemoryMemoryRepository()
+    service = MemoryService(repository=repository, backend=backend, l3_write_mode="sync")
+
+    with pytest.raises(RuntimeError, match="engine unavailable"):
+        service.append(make_append(round_id="r-ttl-retry", metadata={"memory_type": "state"}))
+    first_task = repository.get_task("memory-extract:r-ttl-retry")
+    assert first_task is not None
+    assert first_task.status is TaskStatus.FAILED
+
+    # 时间前进一个月后再重试：到期日仍应是首次写入时定的那个。
+    _Clock.current = datetime(2026, 6, 4, 10, 0, 0, tzinfo=UTC)
+    service.append(make_append(round_id="r-ttl-retry", metadata={"memory_type": "state"}))
+
+    retry_task = repository.get_task("memory-extract:r-ttl-retry")
+    assert retry_task is not None
+    assert retry_task.status is TaskStatus.COMPLETED
+    assert backend.add_calls[-1]["expiration_date"] == "2026-08-02"
+
+
+def test_rebuild_replay_does_not_extend_ttl(monkeypatch: pytest.MonkeyPatch) -> None:
+    """rebuild 回放也不能给 TTL 事实续命。
+
+    回放若按「回放时刻 + TTL」重算到期日，一条本该写后 90 天过期的事实
+    会被重建流程反复续命 —— rebuild 是运维动作，不该改变事实的保留期。
+    """
+    import thinkback.memory.service as service_module
+
+    class _Clock(datetime):
+        current = datetime(2026, 5, 4, 10, 0, 0, tzinfo=UTC)
+
+        @classmethod
+        def now(cls, tz=None):  # type: ignore[no-untyped-def]
+            return cls.current if tz is None else cls.current.astimezone(tz)
+
+    monkeypatch.setattr(service_module, "datetime", _Clock)
+
+    repository = InMemoryMemoryRepository()
+    service = MemoryService(
+        repository=repository, backend=FakeMemoryBackend(), l3_write_mode="sync"
+    )
+    service.append(
+        make_append(
+            round_id="r-ttl-rebuild",
+            content="当前批次良率 88%",
+            metadata={"memory_type": "state"},
+        )
+    )
+
+    before = repository.active_memories("user-1", "thinkback")
+    assert before
+    original = before[0].expires_at
+    assert original is not None
+
+    # 时间前进一个月后重建：到期日必须还是首次写入时定的那个。
+    _Clock.current = datetime(2026, 6, 4, 10, 0, 0, tzinfo=UTC)
+    service.rebuild(
+        RebuildMemoryRequest(
+            request_id="rebuild-ttl",
+            user_id="user-1",
+            session_id="session-1",
+            operation_id="rebuild-ttl-op",
+            rebuild_l2=False,
+            rebuild_l3=True,
+        )
+    )
+
+    after = repository.active_memories("user-1", "thinkback")
+    assert after
+    for memory in after:
+        assert memory.expires_at == original
 
 
 def test_type_registration_drives_source_roles_and_classification() -> None:

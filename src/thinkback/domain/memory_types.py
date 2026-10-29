@@ -25,15 +25,13 @@ from typing import Literal
 
 from thinkback.domain.enums import DataClassification
 
-Extractor = Literal["mem0", "profile", "none"]
+Extractor = Literal["mem0", "none"]
 Conflict = Literal["overwrite", "append", "none"]
 Retention = Literal["forever", "ttl"]
-RecallPath = Literal["fact", "instruction", "schedule"]
 
 #: 类型定义里允许出现的字段。出现其它字段一律拒绝（不静默忽略）。
 _TYPE_FIELDS = frozenset(
     {
-        "layer",
         "extractor",
         "source_roles",
         "conflict",
@@ -52,12 +50,10 @@ _REQUIRED_TYPE_FIELDS = frozenset(
 )
 #: profile 文件顶层允许出现的字段。
 _PROFILE_FIELDS = frozenset({"version", "namespace", "types"})
-_RECALL_FIELDS = frozenset({"path", "budget"})
-_EXTRACTORS = frozenset({"mem0", "profile", "none"})
+_RECALL_FIELDS = frozenset({"budget"})
+_EXTRACTORS = frozenset({"mem0", "none"})
 _CONFLICTS = frozenset({"overwrite", "append", "none"})
 _RETENTIONS = frozenset({"forever", "ttl"})
-_LAYERS = frozenset({"L1", "L2", "L3"})
-_RECALL_PATHS = frozenset({"fact", "instruction", "schedule"})
 
 _PROMPT_VERSION_PATTERN = re.compile(r"\.v(?P<version>\d+)$")
 
@@ -71,9 +67,8 @@ class MemoryTypeSpec:
 
     字段：
       name: 类型名
-      layer: 所属层（当前实现只落地 L3）
       extractor: 抽取方式。``none`` = 不抽取（策略性条目）；
-        其余值都交给 Mem0 抽取（``mem0`` / ``profile`` 目前行为相同）。
+        ``mem0`` = 交给 Mem0 抽取（唯一真正实现的一种）。
       source_roles: 允许作为该类型来源的角色（assistant 默认不在其中：
         助手的话不是用户事实）。这同时是「这条角色的事件能不能成为
         该类型的事实」的判定依据。
@@ -82,8 +77,6 @@ class MemoryTypeSpec:
       ttl_days: TTL 天数（retention=ttl 时生效，由 Mem0 expiration_date 承担）。
       classification: 该类型的敏感级别（语义由 domain/classification.py 统一执行）。
       review_required: 是否需要审批后才能写入。
-      recall_path: 该类型如何进入上下文（fact 进事实池、instruction 进提示词
-        装配、schedule 走独立到期通道）。
       recall_budget: 该类型的 token 预算上限（None = 不单独限制）。
       extraction_prompt: 抽取指令文件路径（相对 profile 目录）。
       extraction_prompt_text: 指令正文（加载后填入）。
@@ -92,7 +85,6 @@ class MemoryTypeSpec:
     """
 
     name: str
-    layer: Literal["L1", "L2", "L3"] = "L3"
     extractor: Extractor = "mem0"
     # 允许作为该类型来源的角色；assistant 默认不在其中（助手的话不是用户事实）。
     source_roles: tuple[str, ...] = ("user",)
@@ -103,7 +95,6 @@ class MemoryTypeSpec:
     # 分类语义由 domain/classification.py 统一执行，配置不能自造级别。
     classification: str = "personal"
     review_required: bool = False
-    recall_path: RecallPath = "fact"
     recall_budget: int | None = None
     extraction_prompt: str = ""
     extraction_prompt_text: str = ""
@@ -157,7 +148,7 @@ def default_registry() -> MemoryTypeRegistry:
         types={
             "profile": MemoryTypeSpec(
                 name="profile",
-                extractor="profile",
+                extractor="mem0",
                 source_roles=("user",),
                 conflict="overwrite",
                 retention="forever",
@@ -321,11 +312,6 @@ def registry_from_dict(
             raise ValueError(
                 f"{where} has unknown retention {retention!r}; expected one of {sorted(_RETENTIONS)}"
             )
-        layer = str(raw.get("layer", "L3"))
-        if layer not in _LAYERS:
-            raise ValueError(
-                f"{where} has unknown layer {layer!r}; expected one of {sorted(_LAYERS)}"
-            )
 
         source_roles = raw["source_roles"]
         if (
@@ -352,7 +338,6 @@ def registry_from_dict(
             raise ValueError(f"{where}: 'ttl_days' is only allowed when retention='ttl'")
 
         recall = raw.get("recall")
-        recall_path: RecallPath = "fact"
         recall_budget: int | None = None
         if recall is not None:
             if not isinstance(recall, dict):
@@ -360,12 +345,6 @@ def registry_from_dict(
             unknown_recall = sorted(set(recall) - _RECALL_FIELDS)
             if unknown_recall:
                 raise ValueError(f"{where}: 'recall' has unknown fields: {unknown_recall}")
-            raw_path = str(recall.get("path", "fact"))
-            if raw_path not in _RECALL_PATHS:
-                raise ValueError(
-                    f"{where}: 'recall.path' must be one of {sorted(_RECALL_PATHS)}, got {raw_path!r}"
-                )
-            recall_path = raw_path  # type: ignore[assignment]
             raw_budget = recall.get("budget")
             if raw_budget is not None:
                 if (
@@ -388,7 +367,6 @@ def registry_from_dict(
 
         types[name] = MemoryTypeSpec(
             name=name,
-            layer=layer,  # type: ignore[arg-type]
             extractor=extractor,  # type: ignore[arg-type]
             source_roles=tuple(str(role) for role in source_roles),
             conflict=conflict,  # type: ignore[arg-type]
@@ -396,7 +374,6 @@ def registry_from_dict(
             ttl_days=ttl_days,
             classification=classification,
             review_required=review_required,
-            recall_path=recall_path,
             recall_budget=recall_budget,
             extraction_prompt=prompt_path,
             extraction_prompt_text=prompt_text,
@@ -408,6 +385,34 @@ def registry_from_dict(
         version=str(payload.get("version", "1")),
         types=types,
     )
+
+
+#: 属性名（冲突键）的长度上限。冲突键表达的是「这条事实讲的是哪个属性」，
+#: 太长就说明这段文字不是「属性名：值」的结构。
+ATTRIBUTE_NAME_MAX_LEN = 16
+
+
+def extract_attribute_name(text: str) -> str | None:
+    """从「属性名：值」格式的事实文本里取属性名。
+
+    per-type 抽取指令要求每条事实写成 ``<属性名>：<值>``（例 ``工艺节点：3nm``）：
+    属性名是「这条事实讲哪个属性」，值才是变量。
+
+    为什么冲突键不能来自相似度：纠正是**语义不相似**的 ——「用户负责 3nm」与
+    「用户负责 5nm」的向量距离很远，检索侧根本找不出后者是前者的纠正。冲突键
+    必须是显式的属性名。
+
+    取不到（没有冒号、冒号前不是短词、冒号后为空）时返回 ``None``，调用方
+    回退到旧口径。
+    """
+    for separator in ("：", ":"):
+        head, found, tail = text.partition(separator)
+        if not found or not tail.strip():
+            continue
+        name = head.strip()
+        if name and len(name) <= ATTRIBUTE_NAME_MAX_LEN:
+            return name
+    return None
 
 
 def load_registry(profile_dir: Path, namespace: str) -> MemoryTypeRegistry:

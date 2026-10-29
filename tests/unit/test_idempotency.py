@@ -86,3 +86,39 @@ def test_expired_idempotency_entry_does_not_conflict() -> None:
 
     assert cache.get_conflict("client", "k", "POST", "/v2/memory/a", "hash-new") is False
     assert cache.get("client", "k", "POST", "/v2/memory/a", "hash-old") is None
+
+
+def test_same_idempotency_key_from_different_callers_does_not_conflict() -> None:
+    """两个不同调用方用同一把 key：不能被判成冲突拒写。
+
+    内网免鉴权后，域一度退化成「直连对端 IP」——k8s / ingress / sidecar 部署下
+    所有外部调用方的 IP 都是网关地址，域被压平成一个全局：一个客户端用过 key
+    ``k`` 之后，别的客户端再用 ``k``（body 不同）直接 409，一把 key 就能堵死
+    别人的写路径。域必须是调用方：请求体里的 namespace + user_id。
+    """
+    with TestClient(_app()) as client:
+        headers = {"Idempotency-Key": "shared-key"}
+        r_a = client.post(
+            "/v2/memory/a", json={"user_id": "tenant-A", "namespace": "acme"}, headers=headers
+        )
+        r_b = client.post(
+            "/v2/memory/a", json={"user_id": "tenant-B", "namespace": "acme"}, headers=headers
+        )
+        assert r_a.status_code == 200
+        assert r_b.status_code == 200, "不同调用方用同一把 key 不该被判冲突"
+
+
+def test_same_caller_reusing_key_with_different_body_still_conflicts() -> None:
+    """同一个调用方换 body 重用 key：仍然 409（幂等键的语义没有被放松）。"""
+    with TestClient(_app()) as client:
+        headers = {"Idempotency-Key": "same-caller-key"}
+        r1 = client.post(
+            "/v2/memory/a", json={"user_id": "tenant-A", "namespace": "acme"}, headers=headers
+        )
+        r2 = client.post(
+            "/v2/memory/a",
+            json={"user_id": "tenant-A", "namespace": "acme", "x": 2},
+            headers=headers,
+        )
+        assert r1.status_code == 200
+        assert r2.status_code == 409
