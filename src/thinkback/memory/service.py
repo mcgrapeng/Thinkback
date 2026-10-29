@@ -1922,6 +1922,12 @@ L2 更新 (缓存失效)
             l3_accepted += 1
 
         clipped_items = self._dedupe_and_clip(items, request.token_budget, namespace=l3_scope_id)
+        # 预算比最便宜的一条记忆还小 → 物理上装不下任何一条 → 召回返回空包。
+        # 这时必须说清楚是「预算不够」而不是「没有记忆」：调用方拿到空包却
+        # 看不到 degraded 标记，会以为用户真的没有相关记忆，于是不再调召回
+        # 或调高预算 —— 两种反应都会让记忆白记。
+        if items and not clipped_items:
+            degradation_reasons.append("token_budget_too_small")
         # P2#7：被召回即强化（艾宾浩斯信号，debounce 限流写放大）。
         # 只对**真正进入上下文**的记忆计数：被去重（同内容/同槽位）或被预算
         # 裁掉的条目并没有暴露给模型，计进去会形成「召回 → 计数涨 → 强度涨 →
@@ -4990,7 +4996,13 @@ L2 更新 (缓存失效)
             slot=self._memory_conflict_slot(memory_text),
         )
         index_log.info("memory l3 event indexing started")
-        if not backend_id or event.get("event") not in {"ADD", "UPDATE"}:
+        # DELETE 是引擎的合法判定，不是「不支持的事件」：mem0 让 LLM 对每条事实给出
+        # ADD/UPDATE/DELETE/NONE（mem0/configs/prompts.py:176），DELETE 事件带的是
+        # **被删记忆的既有 backend id**，且 mem0 已经在向量库把它删掉了。
+        # 它必须走到锁内把本地索引同步下线，否则「要么进索引、要么不存在」这条
+        # 口径被打破：引擎已删、本地仍 ACTIVE —— 管理台照常显示一条引擎里没有的
+        # 记忆，冲突仲裁还把它当活跃事实。
+        if not backend_id or event.get("event") not in {"ADD", "UPDATE", "DELETE"}:
             index_log.bind(reason="unsupported_event").info("memory l3 event indexing skipped")
             return
         # H-3: 锁内只做本地索引计算 + 收集 backend.update/delete 回调，
@@ -5199,6 +5211,17 @@ L2 更新 (缓存失效)
             memory_scope_id,
             backend_id,
         )
+        if event.get("event") == "DELETE":
+            # 引擎判定这条事实不再成立并已把它从向量库删掉：本地索引同步下线，
+            # 保留行与墓碑（可审计、可解释「这条为什么不见了」）。
+            if existing is None:
+                index_log.bind(reason="deleted_by_backend_no_index").info(
+                    "memory l3 event indexing skipped"
+                )
+                return pending_backend_writes
+            self.repository.mark_memory_deleted(existing.memory_id)
+            index_log.bind(index_action="deleted_by_backend").info("memory l3 event indexed")
+            return pending_backend_writes
         is_p0_supported = self._memory_supported_by_source(memory_text, l3_metadata)
         # P0 白名单 gate（MEMORY_P0_SLOTS 配置）：
         # - 留空（默认）= ``is_p0_supported`` 永远 True = 全部进本地 MemoryRecord
