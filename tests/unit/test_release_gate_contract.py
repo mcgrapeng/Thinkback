@@ -44,6 +44,25 @@ def test_ci_runs_the_deterministic_gate_set() -> None:
     assert "check_pytest_baseline.py" in steps
 
 
+def test_the_mutation_scope_self_heal_runs_before_the_audit_in_ci() -> None:
+    """变异范围自愈必须在 mutmut run **之前**跑，而且要在 CI 的阻断路径上。
+
+    mutmut 按 mutants/ 里副本的 mtime 判断「这份文件已有变异体」：范围变了但
+    留着旧副本时，新增文件一个变异体都不生成，门禁照样绿，实际什么都没审。
+    这一步只在本地/夜间跑的话，PR 门禁那道缺口就一直在。
+    """
+    workflow = _ci_workflow()
+    steps = workflow["jobs"]["mutation-and-eval"]["steps"]
+    commands = [str(step.get("run", "")) for step in steps]
+
+    heal_indexes = [i for i, cmd in enumerate(commands) if "refresh_mutation_stats.py" in cmd]
+    audit_indexes = [i for i, cmd in enumerate(commands) if "mutmut run" in cmd]
+
+    assert heal_indexes, "CI 里没有变异范围自愈步骤"
+    assert audit_indexes, "CI 里没有变异审计步骤"
+    assert max(heal_indexes) < min(audit_indexes), "自愈必须排在 mutmut run 之前"
+
+
 def test_every_python_suite_ci_runs_is_pinned_by_a_baseline() -> None:
     """CI 跑到的每个 Python 套件都要有基线钉住。
 

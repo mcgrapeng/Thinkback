@@ -130,6 +130,11 @@ jobs:
           key: uv-${{ runner.os }}-${{ hashFiles('uv.lock') }}
       - name: Install dependencies
         run: uv sync --frozen
+      - name: Mutation scope self-heal
+        # mutmut 按 mutants/ 里副本的 mtime 判断「这份文件已有变异体」——
+        # 范围变了但留着旧副本时，新增文件一个变异体都不生成，门禁照样绿。
+        # 这一步按范围指纹精确清掉遮蔽物，PR 门禁也要有它，不能只在本地/夜间跑。
+        run: uv run --group dev python tests/eval/refresh_mutation_stats.py
       - name: Mutation audit (no new survivors allowed)
         run: uv run --group dev mutmut run --max-children 8
       - name: Mutation survivor baseline

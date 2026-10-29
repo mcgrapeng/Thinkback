@@ -89,21 +89,52 @@ def scope_patterns(pyproject: Path | None = None) -> list[str]:
     return [str(pattern) for pattern in (config.get("only_mutate") or [])]
 
 
-def in_scope(source_path: str, patterns: list[str]) -> bool:
-    """与 mutmut ``_should_include_for_mutation`` 同口径的匹配。
+def scope_ignore_patterns(pyproject: Path | None = None) -> list[str]:
+    """当前声明的排除范围（``do_not_mutate``）。
 
-    mutmut 的口径：``only_mutate`` 为空则全都算；否则只有 ``.py`` 结尾的
-    文件、且路径命中某个 glob 才算。口径不一致会让清理脚本删错文件。
+    mutmut 的 ``should_mutate`` 是「在 only_mutate 里」**且**「不在
+    do_not_mutate 里」。只认前者的话，一个同时被两个列表命中的文件会被
+    清理脚本当成在范围内留着，而 mutmut 根本不变异它 —— 两边口径不一致，
+    清理脚本就会做出与 mutmut 相反的判断。
     """
 
-    if not patterns:
-        return True
+    path = pyproject or (REPO_ROOT / "pyproject.toml")
+    data = tomllib.loads(path.read_text(encoding="utf-8"))
+    config = data.get("tool", {}).get("mutmut", {})
+    return [str(pattern) for pattern in (config.get("do_not_mutate") or [])]
+
+
+def in_scope(
+    source_path: str, patterns: list[str], ignore_patterns: list[str] | None = None
+) -> bool:
+    """与 mutmut ``Config.should_mutate`` 同口径的判定。
+
+    mutmut 的口径（``mutmut/configuration.py``）：
+
+    - ``_should_include_for_mutation``：``only_mutate`` 为空则全都算；
+      否则路径命中某个 glob 才算（非 ``.py`` 文件在这一步算「包含」）。
+    - ``_should_ignore_for_mutation``：路径命中 ``do_not_mutate`` 的某个
+      glob 则忽略（非 ``.py`` 文件在这一步算「忽略」）。
+    - ``should_mutate`` = 包含 **且** 不忽略。
+
+    合起来：非 ``.py`` 文件永远不算；``.py`` 文件要在 ``only_mutate`` 里
+    （或该列表为空）且不在 ``do_not_mutate`` 里。
+
+    口径不一致会让清理脚本删错文件 —— 把 mutmut 还要变异的文件当残留删掉，
+    或者把 mutmut 不变异的文件留在审计范围里。
+    """
+
+    ignore_patterns = ignore_patterns or []
     if not source_path.endswith(".py"):
         return False
-    return any(fnmatch.fnmatch(source_path, pattern) for pattern in patterns)
+    if patterns and not any(fnmatch.fnmatch(source_path, pattern) for pattern in patterns):
+        return False
+    return not any(fnmatch.fnmatch(source_path, pattern) for pattern in ignore_patterns)
 
 
-def clear_stale_scope_artifacts(patterns: list[str]) -> list[str]:
+def clear_stale_scope_artifacts(
+    patterns: list[str], ignore_patterns: list[str] | None = None
+) -> list[str]:
     """删掉会**遮蔽**变异生成的残留，让新范围真正被变异。
 
     两种残留都会让门禁静默失效：
@@ -122,7 +153,7 @@ def clear_stale_scope_artifacts(patterns: list[str]) -> list[str]:
     removed: list[str] = []
     # 进范围但没有 .meta → 删掉遮蔽生成的那份普通副本
     for source_path in _iter_source_files():
-        if not in_scope(source_path, patterns):
+        if not in_scope(source_path, patterns, ignore_patterns):
             continue
         meta_path = MUTANTS_DIR / f"{source_path}.meta"
         if meta_path.exists():
@@ -135,7 +166,7 @@ def clear_stale_scope_artifacts(patterns: list[str]) -> list[str]:
     # 出范围但还有 .meta → 删掉过期的变异体记录
     for meta_path in sorted(MUTANTS_DIR.rglob("*.meta")):
         source_path = str(meta_path.relative_to(MUTANTS_DIR))[: -len(".meta")]
-        if in_scope(source_path, patterns):
+        if in_scope(source_path, patterns, ignore_patterns):
             continue
         meta_path.unlink()
         spans_path = meta_path.with_suffix(".spans")
@@ -190,7 +221,7 @@ def main() -> int:
         # mutmut 会当成「这份文件已有变异体」直接复用那个**空集合** ——
         # 新增文件一个变异体都不生成，门禁照样绿。精确清掉这些遮蔽物，
         # 让新范围真正被变异（mutmut/ 是可再生的构建产物）。
-        removed = clear_stale_scope_artifacts(scope_patterns())
+        removed = clear_stale_scope_artifacts(scope_patterns(), scope_ignore_patterns())
         if removed:
             print(f"mutation scope changed → cleared {len(removed)} stale artifact(s):")
             for item in removed:
