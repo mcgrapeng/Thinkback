@@ -32,6 +32,14 @@ import tomllib
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+
+# 这个脚本既可能被当脚本跑（sys.path[0] 是脚本所在目录，仓库根不在里面），
+# 也可能被 pytest 导入 —— 所以先把仓库根放进路径，再 import 同伴模块。
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from tests.eval import refresh_mutation_stats as refresh  # noqa: E402
+
 BASELINE_PATH = Path(__file__).with_name("mutation_survivors.json")
 MUTANTS_DIR = REPO_ROOT / "mutants"
 # mutmut results 的输出形如 "    <变异体名>: <状态>"
@@ -151,6 +159,19 @@ def main() -> int:
     accepted_no_tests = set(baseline["accepted_no_tests"])
     accepted_timeouts = set(baseline.get("accepted_timeouts", []))
     accepted_other = set(baseline.get("accepted_other", []))
+
+    # 门禁的前提：这些结论是**当前测试套件**算出来的。
+    # mutmut 对已有结论的变异体不重跑，所以删掉一条用例之后，它原来杀掉的
+    # 变异体现在可能没人杀了 —— 而门禁看不出区别（旧结论也是「killed」）。
+    if refresh.suite_changed(refresh.compute_suite_fingerprint()):
+        print(
+            "变异存活基线：测试树在上次审计之后变了 —— 已有结论作废"
+            "（某个变异体可能已经没人杀了，旧结论看不出来）。\n"
+            "重跑：uv run --group dev python tests/eval/refresh_mutation_stats.py "
+            "&& uv run --group dev mutmut run --max-children 8",
+            file=sys.stderr,
+        )
+        return 1
 
     # 门禁的前提：这次真的审到了东西。
     total, per_file = evaluated_population()

@@ -23,8 +23,14 @@ mutmut 把「哪个测试覆盖哪个函数」的映射缓存在 ``mutants/mutmu
 
 所以这里对「决定存在哪些变异体」的配置字段取指纹：指纹变了就**精确清掉**
 会遮蔽变异生成的残留物（见 ``clear_stale_scope_artifacts``），让新范围真的
-被变异。测试选择列表（``pytest_add_cli_args_test_selection``）不参与指纹 ——
-它不影响变异体集合，只影响映射缓存（映射缓存本来就会被丢弃）。
+被变异。
+
+**测试树变了要整棵重审**：mutmut 对**已经有结论**的变异体不重跑（源码没变
+就直接沿用上次结论），而它的配置指纹只哈希「测试选择列表」，不哈希文件
+内容。于是删掉一条用例后，如果那条用例本来是某个变异体的唯一杀手，
+那个变异体会从「被杀」悄悄变成「没人杀」，门禁照样绿 —— 结论是旧测试
+套件算出来的。这里对整个测试树取**内容**指纹：变了就清空 ``mutants/``，
+让本次 ``mutmut run`` 全量重审。
 
 用法（``make mutation-audit`` 的第一步）::
 
@@ -36,6 +42,7 @@ from __future__ import annotations
 import fnmatch
 import hashlib
 import json
+import shutil
 import subprocess
 import sys
 import tomllib
@@ -45,12 +52,63 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 MUTANTS_DIR = REPO_ROOT / "mutants"
 STATS_PATH = MUTANTS_DIR / "mutmut-stats.json"
 SCOPE_FINGERPRINT_PATH = MUTANTS_DIR / "mutmut-scope.sha256"
+SUITE_FINGERPRINT_PATH = MUTANTS_DIR / "mutmut-suite.sha256"
 # 只有这几个字段决定「存在哪些变异体」；它们变了才需要整棵重生成。
 SCOPE_FIELDS = ("source_paths", "paths_to_mutate", "only_mutate", "do_not_mutate")
 # mutmut 用退出码 33 表示「没有测试覆盖到」（见 mutmut/__main__.py）。
 NO_TESTS_EXIT_CODE = 33
 # 退出码 0 = 变异体没被杀死（测试在变异后仍然通过）。
 SURVIVED_EXIT_CODE = 0
+
+
+def selected_test_files(pyproject: Path | None = None) -> list[str]:
+    """mutmut 实际会跑的测试文件（``pytest_add_cli_args_test_selection``）。
+
+    只有这些文件参与变异判定 —— 没被选中的测试改了，与变异结论无关。
+    """
+
+    path = pyproject or (REPO_ROOT / "pyproject.toml")
+    data = tomllib.loads(path.read_text(encoding="utf-8"))
+    config = data.get("tool", {}).get("mutmut", {})
+    return [str(name) for name in (config.get("pytest_add_cli_args_test_selection") or [])]
+
+
+def compute_suite_fingerprint(tests_root: Path | None = None) -> str:
+    """测试树（``tests/`` 下所有 ``.py``）的**内容**指纹。
+
+    mutmut 自己的配置指纹（``Config.config_fingerprint``）只哈希「测试选择
+    列表」，不哈希文件内容：列表变了它能发现，**内容变了它发现不了**。
+    而它对已经有结论的变异体**不重跑**（源码没变就直接沿用上次结论）。
+
+    两者叠加的后果：删掉一条用例 —— 正是「同一模块只留一份测试文件」这种
+    去重会做的事 —— 如果那条用例本来是某个变异体的唯一杀手，
+    那个变异体会从「被杀」悄悄变成「没人杀」，而门禁照样绿：
+    结论是旧测试套件算出来的，不是现在这套算出来的。
+
+    所以这里对整个测试树取内容指纹：变了就说明已有结论作废，整棵
+    ``mutants/`` 重审（它是可再生的构建产物）。
+
+    取整个测试树而不是只有被选中的那几个文件：一条用例的杀伤力不只取决于
+    它自己，还取决于它 import 的辅助模块和 ``conftest.py`` 里的 fixture。
+    少算一样就留一个洞，而洞是静默的。``src/`` 那边不用管 —— 源码变了
+    mutmut 自己会按 mtime 重跑。
+    """
+
+    root = tests_root or (REPO_ROOT / "tests")
+    digest = hashlib.sha256()
+    for path in sorted(root.rglob("*.py")):
+        digest.update(str(path).encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(path.read_bytes())
+    return digest.hexdigest()
+
+
+def suite_changed(fingerprint: str) -> bool:
+    """测试树的内容指纹与上次记录的不一致（没有记录也算变了）。"""
+
+    if not SUITE_FINGERPRINT_PATH.is_file():
+        return True
+    return SUITE_FINGERPRINT_PATH.read_text(encoding="utf-8").strip() != fingerprint
 
 
 def compute_scope_fingerprint(pyproject: Path | None = None) -> str:
@@ -215,8 +273,20 @@ def collect_mutants_by_outcome() -> tuple[list[str], list[str]]:
 
 
 def main() -> int:
-    fingerprint = compute_scope_fingerprint()
-    if scope_changed(fingerprint):
+    scope_fingerprint = compute_scope_fingerprint()
+    suite_fingerprint = compute_suite_fingerprint()
+
+    if suite_changed(suite_fingerprint):
+        # 测试树变了 → 上次审计的结论全部作废（某个变异体可能已经没人杀了）
+        # → 整棵重审。mutants/ 是可再生的构建产物，删掉比逐个作废可靠。
+        shutil.rmtree(MUTANTS_DIR, ignore_errors=True)
+        MUTANTS_DIR.mkdir(parents=True, exist_ok=True)
+        SCOPE_FINGERPRINT_PATH.write_text(scope_fingerprint + "\n", encoding="utf-8")
+        SUITE_FINGERPRINT_PATH.write_text(suite_fingerprint + "\n", encoding="utf-8")
+        print("测试树变了 → 清空 mutants/，本次 mutmut run 全量重审")
+        return 0
+
+    if scope_changed(scope_fingerprint):
         # 范围变了：mutants/ 里可能有「范围外的旧副本」，其 mtime 比源文件新，
         # mutmut 会当成「这份文件已有变异体」直接复用那个**空集合** ——
         # 新增文件一个变异体都不生成，门禁照样绿。精确清掉这些遮蔽物，
@@ -229,12 +299,14 @@ def main() -> int:
         else:
             print("mutation scope changed → no stale artifacts to clear")
         MUTANTS_DIR.mkdir(parents=True, exist_ok=True)
-        SCOPE_FINGERPRINT_PATH.write_text(fingerprint + "\n", encoding="utf-8")
+        SCOPE_FINGERPRINT_PATH.write_text(scope_fingerprint + "\n", encoding="utf-8")
 
-    # 映射缓存过期是「无测试」误判的根源：先删掉，让 mutmut 重新收集。
+    # **不要删 mutmut-stats.json**：mutmut 自己的配置指纹（test_selection /
+    # test_execution 两组）就存在里面，删了它 mutmut 就看不到「测试选择列表
+    # 变了」，也就不会作废已有结论 —— 那些结论是旧测试套件算出来的。
+    # 映射过期的问题由上面的测试树指纹兜底（变了就整棵重审）。
     if STATS_PATH.exists():
-        STATS_PATH.unlink()
-        print("dropped stale mutants/mutmut-stats.json (mapping is re-collected)")
+        print("keeping mutants/mutmut-stats.json (mutmut 的配置指纹在里面)")
 
     no_test_names, survived_names = collect_mutants_by_outcome()
     if not no_test_names and not survived_names:
