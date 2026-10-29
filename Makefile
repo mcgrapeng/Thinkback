@@ -5,7 +5,7 @@ IMAGE ?= thinkback
 VERSION ?= 0.1.0
 # K8S_DIR：Kustomize 部署目录，环境 overlay 可覆盖为其他目录。
 K8S_DIR ?= k8s
-.PHONY: fmt format-check lint typecheck test test-fast coverage check test-ui test-e2e test-fuzz eval audit load-smoke mutation-audit hooks-install hooks-run dev dev-up dev-down image-build k8s-render k8s-apply k8s-delete proto-gen migration-up migration-downgrade-1 migration-status migration-history migration-revision
+.PHONY: fmt format-check lint typecheck test test-fast test-baseline coverage check test-ui test-e2e test-fuzz eval audit load-smoke mutation-audit hooks-install hooks-run dev dev-up dev-down image-build k8s-render k8s-apply k8s-delete proto-gen migration-up migration-downgrade-1 migration-status migration-history migration-revision
 
 proto-gen:
 	# 固定生成器版本：不固定时 grpcio-tools 升级会产出大量无关 diff。
@@ -35,6 +35,11 @@ typecheck:
 test:
 	uv run --group dev pytest -v
 
+# 用例防回血基线：删掉一条用例必须是个显式动作（连带更新基线文件）。
+# 变异基线盯的是「变异体有没有被杀掉」，看不见用例本身被删。
+test-baseline:
+	uv run --group dev python tests/eval/check_pytest_baseline.py
+
 # 本地快环：testmon 只跑受本次改动影响的用例（提交前仍以 make check 为准）
 test-fast:
 	uv run --group dev pytest --testmon -q
@@ -51,7 +56,7 @@ coverage:
 # 完成定义：格式 / lint / 类型 / 单元测试 / 变异审计 / 评测 全绿。
 # 单元测试进 check：否则单测红着 check 照样绿 —— 门禁漏门。
 # 全程离线确定：不触真实 PG / Milvus / LLM，不需要任何凭证。
-check: format-check lint typecheck test mutation-audit eval
+check: format-check lint typecheck test test-baseline mutation-audit eval
 
 # 前端组件测试（vitest，确定性无网络）
 test-ui:
