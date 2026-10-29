@@ -38,6 +38,42 @@ def test_ci_runs_the_deterministic_gate_set() -> None:
     assert "npm audit" in steps
     assert "check_mutation_survivors.py" in steps
     assert "check_baseline.py" in steps
+    # 用例防回血基线必须在**阻断路径**上跑，不能只挂在 make check 里 ——
+    # CI 的阻断 job 各跑各的命令（不是 make check），门禁挂在哪儿就决定了
+    # 它到底拦不拦得住。
+    assert "check_pytest_baseline.py" in steps
+
+
+def test_every_python_suite_ci_runs_is_pinned_by_a_baseline() -> None:
+    """CI 跑到的每个 Python 套件都要有基线钉住。
+
+    变异基线盯的是「变异体有没有被杀」，用例基线盯的是「用例还在不在、还跑不跑」。
+    少一个套件 = 那个套件的用例可以被静默删掉或跳过。
+    """
+    workflow = _ci_workflow()
+    jobs = workflow["jobs"]
+
+    pinned: set[str] = set()
+    for job_steps in jobs.values():
+        for step in job_steps.get("steps", []):
+            command = str(step.get("run", ""))
+            if "check_pytest_baseline.py" not in command:
+                continue
+            for suite in ("tests/unit", "tests/fuzz", "tests/e2e"):
+                if f"--suite {suite}" in command:
+                    pinned.add(suite)
+            if "--suite" not in command:
+                # 默认套件就是 tests/unit
+                pinned.add("tests/unit")
+
+    for suite in ("tests/unit", "tests/fuzz", "tests/e2e"):
+        assert suite in pinned, f"{suite} 没有被用例基线钉住"
+
+    # 基线文件必须在库里：脚本要读它，缺了就退化成「没有缺失项」而放行。
+    for suite in ("tests/unit", "tests/fuzz", "tests/e2e"):
+        suffix = "" if suite == "tests/unit" else f"_{Path(suite).name}"
+        baseline = Path(f"tests/eval/pytest_baseline{suffix}.json")
+        assert baseline.is_file(), f"缺基线文件：{baseline}"
 
 
 def test_kustomization_entry_exists_and_renders() -> None:

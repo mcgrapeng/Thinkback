@@ -59,7 +59,13 @@ jobs:
         run: uv sync --frozen
       - name: Unit tests
         # tests/unit 全是确定性用例：不触真实 PG / Milvus / LLM，不需要任何凭证。
-        run: uv run pytest tests/unit/ -q
+        run: uv run pytest tests/unit/ -q --junitxml=/tmp/pytest-junit.xml
+      - name: Test baseline (no deletions, no skipped pins)
+        # 删用例或把它 skip 掉都必须显式更新基线 —— 门禁因此不会静默失效。
+        # 复用上一步那次跑的 junit 报告，不重复跑一遍套件。
+        run: >-
+          uv run --group dev python tests/eval/check_pytest_baseline.py
+          --junit /tmp/pytest-junit.xml
 
   supply-chain-audit:
     name: pip-audit (CVE gate)
@@ -91,7 +97,11 @@ jobs:
       - name: Install dependencies
         run: uv sync --frozen
       - name: Contract fuzz
-        run: uv run --group dev pytest tests/fuzz -q
+        run: uv run --group dev pytest tests/fuzz -q --junitxml=/tmp/pytest-junit.xml
+      - name: Test baseline (no deletions, no skipped pins)
+        run: >-
+          uv run --group dev python tests/eval/check_pytest_baseline.py
+          --suite tests/fuzz --junit /tmp/pytest-junit.xml
 
   docker-build-verify:
     name: docker build (verify)
@@ -164,7 +174,11 @@ jobs:
       - name: Install playwright browsers
         run: uv run --group dev playwright install --with-deps chromium
       - name: End-to-end smoke
-        run: uv run --group dev pytest tests/e2e -v
+        run: uv run --group dev pytest tests/e2e -v --junitxml=/tmp/pytest-junit.xml
+      - name: Test baseline (no deletions, no skipped pins)
+        run: >-
+          uv run --group dev python tests/eval/check_pytest_baseline.py
+          --suite tests/e2e --junit /tmp/pytest-junit.xml
 
   nightly-full:
     name: nightly (full local gates + real-stack scripts)
