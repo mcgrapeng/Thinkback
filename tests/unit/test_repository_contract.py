@@ -991,3 +991,53 @@ def test_clear_summary_marks_dirty_and_bumps_row_version(repository) -> None:  #
     assert after is not None
     assert after.summary_state is SummaryState.DIRTY
     assert after.row_version > version_before
+
+
+def test_list_expired_memories_includes_the_exact_boundary(repository) -> None:  # type: ignore[no-untyped-def]
+    """恰好到期于 ``before`` 的记忆必须被列出：比较是 ``<=``。
+
+    保留期作业靠这个列表决定清理谁。同一口径散在三处 —— 仓储的
+    ``list_expired_memories``（内存 / SQL）与服务层的 ``is_purgeable``
+    —— 任一处把 ``<=`` 写成 ``<``，恰好卡在宽限边界上的记忆就永远不被清理，
+    而既有用例全都不落在边界上（只有 3 天与 8 天两个样本）。
+    """
+    boundary = datetime(2026, 1, 1, tzinfo=UTC)
+
+    def _add(backend_memory_id: str, expires_at: datetime | None) -> None:
+        repository.add_memory_index(
+            backend_memory_id=backend_memory_id,
+            user_id="user-1",
+            memory_scope_id="thinkback",
+            source_refs=[{"session_id": "session-1", "round_id": "r-1"}],
+            memory_text=f"记忆 {backend_memory_id}",
+            expires_at=expires_at,
+        )
+
+    _add("exact-boundary", boundary)
+    _add("after-boundary", boundary + timedelta(seconds=1))
+    _add("never-expires", None)
+
+    listed = repository.list_expired_memories(before=boundary, limit=100)
+    ids = {entry.backend_memory_id for entry in listed}
+
+    assert "exact-boundary" in ids, "恰好到期的记忆没被列出：边界比较不是闭区间"
+    assert "after-boundary" not in ids
+    assert "never-expires" not in ids, "永不过期的记忆不该出现在待清理列表里"
+
+
+def test_list_expired_memories_respects_the_limit(repository) -> None:  # type: ignore[no-untyped-def]
+    """limit 必须真的限制条数：保留期作业按批清理，批大小是硬约束。"""
+    before = datetime(2026, 1, 1, tzinfo=UTC)
+    for index in range(5):
+        repository.add_memory_index(
+            backend_memory_id=f"expired-{index}",
+            user_id="user-1",
+            memory_scope_id="thinkback",
+            source_refs=[{"session_id": "session-1", "round_id": "r-1"}],
+            memory_text=f"记忆 {index}",
+            expires_at=before - timedelta(days=1),
+        )
+
+    listed = repository.list_expired_memories(before=before, limit=2)
+
+    assert len(listed) == 2
