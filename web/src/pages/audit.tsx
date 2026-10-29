@@ -30,18 +30,21 @@ const ACTION_OPTIONS = [
   { value: "delete", label: "删除" },
   { value: "update", label: "更新" },
   { value: "rebuild", label: "重建" },
+  { value: "list", label: "读取" },
 ] as const;
 
 const ACTION_LABELS: Record<string, string> = {
   delete: "删除",
   update: "更新",
   rebuild: "重建",
+  list: "读取",
 };
 
-const ACTION_TONE: Record<string, "error" | "info" | "violet"> = {
+const ACTION_TONE: Record<string, "error" | "info" | "violet" | "neutral"> = {
   delete: "error",
   update: "info",
   rebuild: "violet",
+  list: "neutral",
 };
 
 const PAGE_SIZE = 50;

@@ -345,10 +345,17 @@ def create_app(*, run_startup_tasks: bool = True) -> FastAPI:
     _declare_readiness_overload_response(app)
     app.include_router(memory_router)
 
-    # 治理台 M1：只读聚合端点（Bearer 可选鉴权），见 docs/管理后台设计方案。
+    # 治理台 M1：只读聚合端点（免鉴权，D10），见 docs/管理后台设计方案。
     from thinkback.api.admin import router as admin_router
 
     app.include_router(admin_router)
+    # D10：管理面不校验调用方，信任边界是网络边界（k8s/networkpolicy.yaml）。
+    # 治理面能删任意用户的全部记忆、列出全库，所以每次启动都把这件事说在
+    # 日志里 —— 「以为还有鉴权」这个心智模型比漏洞本身更危险。
+    logger.warning(
+        "admin api 已挂载且不校验调用方（D10）：/admin/api/* —— "
+        "信任边界是网络边界，请确认集群的 NetworkPolicy 生效且 CNI 支持"
+    )
     cors_origins = [
         origin.strip() for origin in settings.admin_cors_allow_origins.split(",") if origin.strip()
     ]

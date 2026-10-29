@@ -61,6 +61,13 @@ spec:
     # 若集群不允许给 namespace 打标签，把下面的 matchLabels 换成
     #   kubernetes.io/metadata.name: <你的网关 namespace>
     # （本文件里只有这一处需要改，就是下面第 67 行）。
+    #
+    # 想要更紧的边界（只放行网关那一个工作负载，而不是整个 namespace）：
+    # 把 namespaceSelector 换成 podSelector，matchLabels 填网关 Deployment
+    # 的 pod 模板标签（如 thinkback.io/allowed-caller: "true"）。两者不能并存
+    # —— NetworkPolicy 的放行规则是**并集**，多写一条只会更宽。
+    # 代价：网关 pod 是滚动重建的，标签必须打在它的 pod 模板上，
+    # 改错一个键名就是「网关连不上」而不是「放行过宽」。
     - from:
         - namespaceSelector:
             matchLabels:
