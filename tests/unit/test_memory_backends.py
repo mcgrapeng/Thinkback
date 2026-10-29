@@ -29,7 +29,9 @@ def test_fake_backend_add_search_delete_all_are_scoped() -> None:
 
     deleted = backend.delete_all(user_id="user-1", memory_scope_id="thinkback")
 
-    assert deleted == 1
+    # 返回被删的 ID 列表（不是条数）：调用方要按这些 ID 清引擎侧历史
+    assert len(deleted) == 1
+    assert all(memory_id.startswith("fake-") for memory_id in deleted)
     assert backend.search("睡觉", user_id="user-1", memory_scope_id="thinkback", limit=5) == []
 
 
@@ -350,7 +352,7 @@ def test_mem0_library_backend_maps_add_search_update_delete_and_scoped_delete_al
     assert add_events == [{"id": "m1", "memory": "用户喜欢猫", "event": "ADD", "score": 1.0}]
     assert search_results == [{"id": "m1", "memory": "用户喜欢猫", "score": 0.9}]
     assert threshold_results == [{"id": "m1", "memory": "用户喜欢猫", "score": 0.9}]
-    assert deleted == 2
+    assert deleted == ["m1", "m2"]
     assert client.delete_all_called is False
     assert client.calls == [
         (
@@ -619,7 +621,7 @@ def test_mem0_library_backend_supports_legacy_entity_scope_kwargs() -> None:
     assert backend.search("猫", user_id="user-1", memory_scope_id="thinkback", limit=3) == [
         {"id": "m1", "memory": "用户喜欢猫", "score": 0.9}
     ]
-    assert backend.delete_all(user_id="user-1", memory_scope_id="thinkback") == 1
+    assert backend.delete_all(user_id="user-1", memory_scope_id="thinkback") == ["m1"]
     assert client.calls == [
         (
             "search",
@@ -675,7 +677,7 @@ def test_mem0_library_backend_supports_top_k_mem0_versions() -> None:
     assert backend.search("猫", user_id="user-1", memory_scope_id="thinkback", limit=3) == [
         {"id": "m1", "memory": "用户喜欢猫", "score": 0.9}
     ]
-    assert backend.delete_all(user_id="user-1", memory_scope_id="thinkback") == 1
+    assert backend.delete_all(user_id="user-1", memory_scope_id="thinkback") == ["m1"]
     assert client.calls == [
         (
             "search",
@@ -1226,6 +1228,74 @@ def test_mem0_library_backend_purge_history_removes_history_and_messages(
     assert message_ids == ["msg2", "msg3"]
 
 
+def test_mem0_library_backend_purge_history_fails_visible_on_schema_drift(
+    tmp_path: Path,
+) -> None:
+    """引擎历史表结构漂移时必须报错，不能静默跳过后仍报「已擦除」。
+
+    mem0 升级把 history 表改名 → 旧写法是「表不在就跳过」，擦除任务照样
+    标 completed，而旧事实原文还躺在引擎历史里 —— 「物理擦除」这一档
+    对外承诺就是假的。契约要求 fail-visible（插件化设计 §7）。
+    """
+    import sqlite3
+
+    from thinkback.memory.backends import Mem0LibraryMemoryBackend
+
+    db_path = tmp_path / "history.db"
+    connection = sqlite3.connect(db_path)
+    # 表被改名了（mem0 升级漂移的模拟）
+    connection.execute("CREATE TABLE memory_history (memory_id TEXT, old_memory TEXT)")
+    connection.execute("INSERT INTO memory_history VALUES ('m1', '旧事实 SECRET')")
+    connection.commit()
+    connection.close()
+
+    backend = Mem0LibraryMemoryBackend(config={"history_db_path": str(db_path)})
+
+    with pytest.raises(RuntimeError, match="history table is missing"):
+        backend.purge_history(
+            user_id="u1",
+            memory_ids=["m1"],
+            namespace="thinkback",
+            message_texts=[],
+            purge_all_messages=False,
+        )
+
+    # 关键：原文必须还在（没有"顺手删掉"），且调用方拿不到「已清理」的计数
+    connection = sqlite3.connect(db_path)
+    try:
+        rows = connection.execute("SELECT old_memory FROM memory_history").fetchall()
+    finally:
+        connection.close()
+    assert rows == [("旧事实 SECRET",)]
+
+
+def test_mem0_library_backend_purge_history_fails_visible_on_column_drift(
+    tmp_path: Path,
+) -> None:
+    """表还在但列名变了（memory_id → id）同样 fail-visible。"""
+    import sqlite3
+
+    from thinkback.memory.backends import Mem0LibraryMemoryBackend
+
+    db_path = tmp_path / "history.db"
+    connection = sqlite3.connect(db_path)
+    connection.execute("CREATE TABLE history (id TEXT, old_memory TEXT)")
+    connection.execute("INSERT INTO history VALUES ('m1', '旧事实 SECRET')")
+    connection.commit()
+    connection.close()
+
+    backend = Mem0LibraryMemoryBackend(config={"history_db_path": str(db_path)})
+
+    with pytest.raises(RuntimeError, match="schema is incompatible"):
+        backend.purge_history(
+            user_id="u1",
+            memory_ids=["m1"],
+            namespace="thinkback",
+            message_texts=[],
+            purge_all_messages=False,
+        )
+
+
 def test_mem0_library_backend_purge_history_all_scope_clears_namespace_messages(
     tmp_path: Path,
 ) -> None:
@@ -1294,3 +1364,90 @@ def test_mem0_library_backend_purge_history_without_history_db_is_noop() -> None
         "messages": 0,
         "supported": False,
     }
+
+
+def test_delete_all_deletes_expired_records_too() -> None:
+    """过期记录也必须删得掉：mem0 的 get_all 默认隐藏过期行。
+
+    看不见就列不出来、列不出来就删不掉，擦除却报「已完成」—— 记忆活得
+    越久越擦不掉，与保留策略的方向正好相反。删除路径要显式要 show_expired。
+    """
+    from thinkback.memory.backends import Mem0LibraryMemoryBackend
+
+    class FakeExpiringMemoryClient:
+        def __init__(self) -> None:
+            self.rows = {
+                "active": {"id": "active", "memory": "still valid"},
+                "expired": {"id": "expired", "memory": "expired fact"},
+            }
+            self.deleted: list[str] = []
+            self.show_expired_calls: list[bool] = []
+
+        def get_all(self, *, filters, top_k, show_expired=False):  # type: ignore[no-untyped-def]
+            self.show_expired_calls.append(show_expired)
+            rows = list(self.rows.values())
+            if not show_expired:
+                rows = [row for row in rows if row["id"] != "expired"]
+            return {"results": rows}
+
+        def delete(self, memory_id):  # type: ignore[no-untyped-def]
+            self.deleted.append(memory_id)
+            self.rows.pop(memory_id, None)
+            return {"message": "Memory deleted successfully!"}
+
+    client = FakeExpiringMemoryClient()
+    backend = Mem0LibraryMemoryBackend(
+        config={"history_db_path": ".mem0/history.db"}, memory_client=client
+    )
+
+    deleted = backend.delete_all(user_id="user-1", memory_scope_id="thinkback")
+
+    assert sorted(deleted) == ["active", "expired"]
+    assert client.show_expired_calls == [True]
+
+
+def test_concurrent_adds_for_one_user_are_serialised() -> None:
+    """同一用户的并发写必须串行：mem0 不是线程安全的。
+
+    mem0 的 entity_store 是实例级懒加载属性，实体链接是 linked_memory_ids 上的
+    读-改-写 —— 两次并发写会互相覆盖、丢掉一条记忆 id，而且不报错。
+    """
+    import time
+    from threading import Lock, Thread
+
+    from thinkback.memory.backends import Mem0LibraryMemoryBackend
+
+    class FakeConcurrentMemoryClient:
+        def __init__(self) -> None:
+            self.guard = Lock()
+            self.active = 0
+            self.max_active = 0
+
+        def add(self, messages, *, user_id, agent_id, metadata, infer, prompt):  # type: ignore[no-untyped-def]
+            with self.guard:
+                self.active += 1
+                self.max_active = max(self.max_active, self.active)
+            time.sleep(0.05)
+            with self.guard:
+                self.active -= 1
+            return {"results": [{"id": "m1", "memory": "一条事实"}]}
+
+    client = FakeConcurrentMemoryClient()
+    backend = Mem0LibraryMemoryBackend(
+        config={"history_db_path": ".mem0/history.db"}, memory_client=client
+    )
+
+    def _write() -> None:
+        backend.add(
+            [{"role": "user", "content": "一条事实"}],
+            user_id="user-1",
+            memory_scope_id="thinkback",
+        )
+
+    threads = [Thread(target=_write) for _ in range(4)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert client.max_active == 1

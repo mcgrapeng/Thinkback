@@ -457,8 +457,23 @@ class MemoryBackend(Protocol):
         """
         ...
 
-    def delete_all(self, *, user_id: str, memory_scope_id: str) -> int:
-        """删除指定 user+scope 范围内所有后端记忆，返回被删除条数。"""
+    def get(self, memory_id: str) -> dict[str, Any] | None:
+        """按 ID 查一条后端记忆；不存在返回 ``None``。
+
+        擦除复核用：``get_all`` 一次只列一页，用户的后端记录超过一页时，
+        「目标还在不在」没法从列表里判断（列表满了不等于目标还在）。
+        逐个点查才能证明「已删除」。
+        """
+        ...
+
+    def delete_all(self, *, user_id: str, memory_scope_id: str) -> list[str]:
+        """删除指定 user+scope 范围内所有后端记忆，返回被删除的记忆 ID。
+
+        返回 ID 而不是条数：调用方要按这些 ID 清理引擎侧历史（mem0 的
+        delete 会把原文写进 history 表）。本地索引里没有对应行的「暗数据」
+        也在这个列表里 —— 只按本地索引清历史会漏掉它们，原文就永久留在
+        引擎侧，而擦除却报「已完成」。
+        """
         ...
 
     def purge_history(
