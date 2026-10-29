@@ -1394,6 +1394,84 @@ def test_mem0_library_backend_purge_history_without_history_db_is_noop() -> None
     }
 
 
+def test_purge_history_retries_when_sqlite_file_is_locked(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """mem0 自己开着一条连接写 history.db，我们的 DELETE 可能撞上瞬时锁。
+
+    回滚日志模式下「先读后写、期间有别的连接写过」会立刻报
+    ``database is locked``，busy_timeout 对这种场景不起作用。锁是瞬时的
+    （写事务只持锁几毫秒），重试即可 —— 擦除不该因为它失败：向量已经删掉了，
+    这时失败等于把用户卡在「删了一半」的状态。
+    """
+    import sqlite3
+
+    from thinkback.memory.backends import Mem0LibraryMemoryBackend, mem0_library
+
+    db_path = tmp_path / "history.db"
+    connection = sqlite3.connect(db_path)
+    connection.execute(
+        "CREATE TABLE history (id TEXT PRIMARY KEY, memory_id TEXT, old_memory TEXT,"
+        " new_memory TEXT, event TEXT)"
+    )
+    connection.execute(
+        "INSERT INTO history (id, memory_id, old_memory, new_memory, event)"
+        " VALUES ('h1', 'm1', '旧事实', '新事实', 'UPDATE')"
+    )
+    connection.commit()
+    connection.close()
+
+    class _LockingConnection:
+        """第一次 execute 抛「database is locked」，之后放行。"""
+
+        def __init__(self, real: sqlite3.Connection, state: dict[str, bool]) -> None:
+            self._real = real
+            self._state = state
+
+        def execute(self, *args: Any, **kwargs: Any):  # type: ignore[no-untyped-def]
+            if not self._state["failed"]:
+                self._state["failed"] = True
+                raise sqlite3.OperationalError("database is locked")
+            return self._real.execute(*args, **kwargs)
+
+        def __enter__(self) -> "_LockingConnection":
+            self._real.__enter__()
+            return self
+
+        def __exit__(self, *exc: Any) -> bool:
+            return bool(self._real.__exit__(*exc))
+
+        def close(self) -> None:
+            self._real.close()
+
+    class _SqliteShim:
+        Error = sqlite3.Error
+        OperationalError = sqlite3.OperationalError
+
+        def __init__(self) -> None:
+            self.state = {"failed": False}
+
+        def connect(self, *args: Any, **kwargs: Any) -> _LockingConnection:
+            return _LockingConnection(sqlite3.connect(*args, **kwargs), self.state)
+
+    shim = _SqliteShim()
+    monkeypatch.setattr(mem0_library, "sqlite3", shim)
+
+    backend = Mem0LibraryMemoryBackend(config={"history_db_path": str(db_path)})
+    counts = backend.purge_history(
+        user_id="u1",
+        memory_ids=["m1"],
+        namespace="thinkback",
+        message_texts=[],
+        purge_all_messages=False,
+    )
+
+    assert counts["history"] == 1
+    assert shim.state["failed"] is True
+    remaining = sqlite3.connect(db_path).execute("SELECT memory_id FROM history").fetchall()
+    assert remaining == []
+
+
 def test_delete_all_deletes_expired_records_too() -> None:
     """过期记录也必须删得掉：mem0 的 get_all 默认隐藏过期行。
 
