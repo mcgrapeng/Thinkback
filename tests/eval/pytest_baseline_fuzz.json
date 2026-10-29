@@ -1,0 +1,32 @@
+{
+  "note": "pytest 套件的防回血基线：删用例或跳过用例要连带更新本文件（显式动作）",
+  "count": 26,
+  "tests": [
+    "tests/fuzz/test_openapi_contract.py::test_openapi_conformance[GET /]",
+    "tests/fuzz/test_openapi_contract.py::test_openapi_conformance[GET /admin/api/audit]",
+    "tests/fuzz/test_openapi_contract.py::test_openapi_conformance[GET /admin/api/config]",
+    "tests/fuzz/test_openapi_contract.py::test_openapi_conformance[GET /admin/api/health/detail]",
+    "tests/fuzz/test_openapi_contract.py::test_openapi_conformance[GET /admin/api/memories/{memory_id}/source]",
+    "tests/fuzz/test_openapi_contract.py::test_openapi_conformance[GET /admin/api/memories]",
+    "tests/fuzz/test_openapi_contract.py::test_openapi_conformance[GET /admin/api/overview]",
+    "tests/fuzz/test_openapi_contract.py::test_openapi_conformance[GET /admin/api/tasks]",
+    "tests/fuzz/test_openapi_contract.py::test_openapi_conformance[GET /health/live]",
+    "tests/fuzz/test_openapi_contract.py::test_openapi_conformance[GET /health/metrics]",
+    "tests/fuzz/test_openapi_contract.py::test_openapi_conformance[GET /health/ready]",
+    "tests/fuzz/test_openapi_contract.py::test_openapi_conformance[GET /health]",
+    "tests/fuzz/test_openapi_contract.py::test_openapi_conformance[GET /v2/memory/items/{memory_id}]",
+    "tests/fuzz/test_openapi_contract.py::test_openapi_conformance[GET /v2/memory/items]",
+    "tests/fuzz/test_openapi_contract.py::test_openapi_conformance[GET /v2/memory/l3/background-status]",
+    "tests/fuzz/test_openapi_contract.py::test_openapi_conformance[GET /v2/memory/tasks/{task_id}]",
+    "tests/fuzz/test_openapi_contract.py::test_openapi_conformance[POST /admin/api/delete]",
+    "tests/fuzz/test_openapi_contract.py::test_openapi_conformance[POST /admin/api/maintenance/reclaim-orphan-tasks]",
+    "tests/fuzz/test_openapi_contract.py::test_openapi_conformance[POST /admin/api/rebuild]",
+    "tests/fuzz/test_openapi_contract.py::test_openapi_conformance[POST /admin/api/update]",
+    "tests/fuzz/test_openapi_contract.py::test_openapi_conformance[POST /v2/memory/delete]",
+    "tests/fuzz/test_openapi_contract.py::test_openapi_conformance[POST /v2/memory/erase]",
+    "tests/fuzz/test_openapi_contract.py::test_openapi_conformance[POST /v2/memory/events]",
+    "tests/fuzz/test_openapi_contract.py::test_openapi_conformance[POST /v2/memory/recall]",
+    "tests/fuzz/test_openapi_contract.py::test_openapi_conformance[POST /v2/memory/suppress]",
+    "tests/fuzz/test_openapi_contract.py::test_openapi_conformance[POST /v2/memory/update]"
+  ]
+}

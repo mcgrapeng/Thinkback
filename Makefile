@@ -33,12 +33,14 @@ typecheck:
 	uv run --group dev mypy src
 
 test:
-	uv run --group dev pytest -v
+	uv run --group dev pytest -v --junitxml=junit.xml
 
 # 用例防回血基线：删掉一条用例必须是个显式动作（连带更新基线文件）。
 # 变异基线盯的是「变异体有没有被杀掉」，看不见用例本身被删。
-test-baseline:
-	uv run --group dev python tests/eval/check_pytest_baseline.py
+# 复用 test 那次跑的 junit 报告：门禁校验的是**同一场**跑的用例。再跑一遍
+# 等于拿另一场的结果对基线 —— flaky 会被放大成两次不同的结论。
+test-baseline: test
+	uv run --group dev python tests/eval/check_pytest_baseline.py --junit junit.xml
 
 # 本地快环：testmon 只跑受本次改动影响的用例（提交前仍以 make check 为准）
 test-fast:

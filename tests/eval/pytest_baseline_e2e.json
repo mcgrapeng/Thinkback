@@ -1,0 +1,12 @@
+{
+  "note": "pytest 套件的防回血基线：删用例或跳过用例要连带更新本文件（显式动作）",
+  "count": 6,
+  "tests": [
+    "tests/e2e/test_a11y_smoke.py::test_a11y_no_serious_violations",
+    "tests/e2e/test_admin_smoke.py::test_govern_journey_renders",
+    "tests/e2e/test_admin_smoke.py::test_memories_journey_lists_mock_rows",
+    "tests/e2e/test_admin_smoke.py::test_navigation_walk_memories_and_integration",
+    "tests/e2e/test_admin_smoke.py::test_overview_renders",
+    "tests/e2e/test_admin_smoke.py::test_tasks_journey_renders_status"
+  ]
+}

@@ -36,6 +36,9 @@ dev = [
     "aiosqlite>=0.22.1",
     "mutmut>=3.8.0",
     "hypothesis>=6.168.5",
+    # 解析 pytest 的 junit 报告用（用例防回血基线）。stdlib 的 ElementTree
+    # 不做实体展开防护，用 defusedxml 免掉 XXE / billion laughs。
+    "defusedxml>=0.7.1",
     "pytest-testmon>=2.2.0",
     "pip-audit>=2.10.1",
     # e2e 驱动：声明为 dev 依赖，`make test-e2e` 才在干净环境可跑。

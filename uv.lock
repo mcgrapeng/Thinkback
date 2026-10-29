@@ -2077,6 +2077,7 @@ dependencies = [
 [package.dev-dependencies]
 dev = [
     { name = "aiosqlite" },
+    { name = "defusedxml" },
     { name = "grpcio-tools" },
     { name = "hypothesis" },
     { name = "mutmut" },
@@ -2116,6 +2117,7 @@ requires-dist = [
 [package.metadata.requires-dev]
 dev = [
     { name = "aiosqlite", specifier = ">=0.22.1" },
+    { name = "defusedxml", specifier = ">=0.7.1" },
     { name = "grpcio-tools", specifier = ">=1.60,<2.0" },
     { name = "hypothesis", specifier = ">=6.168.5" },
     { name = "mutmut", specifier = ">=3.8.0" },
