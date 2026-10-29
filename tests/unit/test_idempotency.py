@@ -2,12 +2,18 @@
 
 from __future__ import annotations
 
+import json
 import time
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from thinkback.api.idempotency import CACHE_TTL, CachedResponse, IdempotencyCache
+from thinkback.api.idempotency import (
+    CACHE_TTL,
+    CachedResponse,
+    IdempotencyCache,
+    _caller_identity,
+)
 
 
 def _app() -> FastAPI:
@@ -122,3 +128,47 @@ def test_same_caller_reusing_key_with_different_body_still_conflicts() -> None:
         )
         assert r1.status_code == 200
         assert r2.status_code == 409
+
+
+def test_caller_identity_normalizes_an_omitted_namespace_to_the_default() -> None:
+    """省略 namespace 与显式传默认值是**同一个请求**：域必须一样。
+
+    请求模型会把缺省的 namespace 填成默认值，所以两种写法等价。域若因此
+    分成两个，同一把 Idempotency-Key 既不重放也不报冲突，写入会执行两次。
+    """
+    omitted = _caller_identity(json.dumps({"user_id": "tenant-A"}).encode())
+    explicit = _caller_identity(
+        json.dumps({"user_id": "tenant-A", "namespace": "thinkback"}).encode()
+    )
+
+    assert omitted == explicit == "thinkback:tenant-A"
+
+
+def test_omitted_namespace_shares_the_idempotency_scope_with_the_explicit_default() -> None:
+    """同一把 key + 省略/显式 namespace：必须判成冲突，不能静默执行第二次。"""
+    with TestClient(_app()) as client:
+        headers = {"Idempotency-Key": "default-namespace-key"}
+        r1 = client.post("/v2/memory/a", json={"user_id": "tenant-A"}, headers=headers)
+        r2 = client.post(
+            "/v2/memory/a",
+            json={"user_id": "tenant-A", "namespace": "thinkback"},
+            headers=headers,
+        )
+        assert r1.status_code == 200
+        assert r2.status_code == 409, "同一请求的两种写法落进两个域，写入会执行两次"
+
+
+def test_a_caller_with_and_without_explicit_namespace_shares_one_rate_limit_bucket() -> None:
+    """同一个调用方不得因为写法不同而拿到两份限流额度。
+
+    幂等层与限流层用的是同一个 ``_caller_identity``：域口径不一致时，
+    一个调用方能绕开限流，也绕开幂等。
+    """
+    from thinkback.api.ratelimit import _caller_identity as rate_limit_identity
+
+    omitted = rate_limit_identity(json.dumps({"user_id": "tenant-A"}).encode())
+    explicit = rate_limit_identity(
+        json.dumps({"user_id": "tenant-A", "namespace": "thinkback"}).encode()
+    )
+
+    assert omitted == explicit

@@ -77,6 +77,10 @@ class L2BackgroundRefresher:
         self._release_capacity = release_capacity
         self._max_tracked_scopes = max(1, max_tracked_scopes)
         self._state_lock = Lock()
+        # 正在跑的 _finish 回调数。_finish 会在锁内摘掉 future 与 pending scope，
+        # 出锁后才补 trailing 刷新 —— 这中间 drain 会看到「没有 future、没有
+        # pending」而误判已静默。记着在跑的回调数，drain 才知道还没结束。
+        self._finishing = 0
         # 去抖：每个 (user, namespace, scope) 自上次提交以来的 append 计数（LRU 淘汰）
         self._append_counters: OrderedDict[ScopeKey, int] = OrderedDict()
         # 已完成过至少一次 llm 刷新的作用域（进程内视角；重启后首 append 会再触发一次，幂等无害）
@@ -195,7 +199,10 @@ class L2BackgroundRefresher:
             with self._state_lock:
                 futures = list(self._futures)
                 pending = bool(self._pending_scopes)
-            if not futures and not pending:
+                # 正在跑的 _finish 回调也意味着「还没静默」：trailing 刷新是
+                # 在那个回调里提交的，摘掉 future 与 pending 之后它才提交。
+                finishing = self._finishing > 0
+            if not futures and not pending and not finishing:
                 return
             remaining: float | None = None
             if deadline is not None:
@@ -217,20 +224,29 @@ class L2BackgroundRefresher:
 
     def _finish(self, future: Future[None], scope: ScopeKey) -> None:
         with self._state_lock:
-            self._futures.discard(future)
-            self._pending_scopes.discard(scope)
-            # 在飞期间累计的轮次达到阈值 → 补一次 trailing 刷新，
-            # 否则这些轮次会被旧快照吞掉，直到再攒够 N 轮才更新。
-            trailing_due = self._append_counters.get(scope, 0) >= self.refresh_interval_rounds
-        if self._release_capacity is not None:
-            # 归还队列槽位：L2 与 L3 共用同一个预算。
-            self._release_capacity()
-        if future.done() and not future.cancelled() and future.exception() is not None:
-            # _run_refresh 自身已捕获并落日志；这里只做记账清理。
-            pass
-        if trailing_due:
-            user_id, namespace, session_scope_id = scope
-            self.maybe_submit(user_id, session_scope_id, namespace=namespace)
+            self._finishing += 1
+        try:
+            with self._state_lock:
+                self._futures.discard(future)
+                self._pending_scopes.discard(scope)
+                # 在飞期间累计的轮次达到阈值 → 补一次 trailing 刷新，
+                # 否则这些轮次会被旧快照吞掉，直到再攒够 N 轮才更新。
+                trailing_due = self._append_counters.get(scope, 0) >= self.refresh_interval_rounds
+            if self._release_capacity is not None:
+                # 归还队列槽位：L2 与 L3 共用同一个预算。
+                self._release_capacity()
+            if future.done() and not future.cancelled() and future.exception() is not None:
+                # _run_refresh 自身已捕获并落日志；这里只做记账清理。
+                pass
+            if trailing_due:
+                user_id, namespace, session_scope_id = scope
+                self.maybe_submit(user_id, session_scope_id, namespace=namespace)
+        finally:
+            # trailing 刷新是在本回调里提交的：回调没结束，drain 就还不能
+            # 判定已静默，否则会在 trailing 提交之前返回（生产关停时那段
+            # 刷新撞上已关闭的 executor，直接丢掉）。
+            with self._state_lock:
+                self._finishing -= 1
 
     def _run_refresh(
         self, user_id: str, session_scope_id: str, namespace: str = DEFAULT_NAMESPACE

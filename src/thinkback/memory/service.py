@@ -5447,6 +5447,7 @@ L2 更新 (缓存失效)
     ) -> tuple[list[str], list[Any]]:
         new_key = self._conflict_key(memory_text, memory_type, memory_scope_id)
         if new_key is None:
+            self._report_unresolvable_conflict_key(memory_type, memory_scope_id)
             return [], []
         superseded_ids: list[str] = []
         pending_backend_writes: list[Any] = []
@@ -5475,6 +5476,32 @@ L2 更新 (缓存失效)
     @staticmethod
     def _is_backend_managed_memory_id(memory_id: str) -> bool:
         return is_backend_managed_memory_id(memory_id)
+
+    def _report_unresolvable_conflict_key(self, memory_type: str | None, namespace: str) -> None:
+        """类型声明了冲突策略，但这条事实算不出冲突键 → 那条声明是空配置。
+
+        引擎（mem0 2.2.1）的写入路径只产 ADD、不裁决冲突，所以类型声明的
+        ``conflict`` 是**唯一**的覆盖机制。算不出冲突键 = 覆盖机制不存在：
+        旧值不会被覆盖，新旧两条并存。
+
+        静默跑起来，运维看到的只是「记忆越攒越多、改口了旧事实还在」，不会知道
+        「你这个类型的冲突策略是空配置」。所以这里让它可见 —— 不改语义，只报。
+        """
+        type_name = str(memory_type or "") or MemoryType.PROFILE.value
+        try:
+            spec = self._type_registry(namespace).get(type_name)
+        except (KeyError, ValueError):
+            return
+        policy = str(getattr(spec, "conflict", "none") or "none")
+        # 只有 overwrite 依赖冲突键：append / none 本来就不靠键生效，
+        # 键算不出来时它们的策略照样成立，不该报。
+        if policy != "overwrite":
+            return
+        logger.bind(
+            memory_type=type_name,
+            conflict_policy=policy,
+            namespace=namespace,
+        ).warning("memory conflict key unresolved: the declared conflict policy cannot take effect")
 
     @staticmethod
     def _is_local_index_memory_id(memory_id: str) -> bool:
