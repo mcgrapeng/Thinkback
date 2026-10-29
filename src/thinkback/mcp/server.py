@@ -67,14 +67,14 @@ def create_mcp_server(service: MemoryService, namespace: str = DEFAULT_NAMESPACE
         user_id: Annotated[str, Field(description="用户 ID；记忆读写都以该用户维度隔离。")],
         session_id: Annotated[str, Field(description="会话 ID；L1/L2 上下文与摘要按会话维护。")],
         payload: Annotated[str, Field(description="事件正文：用户说了什么，或工具返回了什么。")],
+        event_id: Annotated[
+            str,
+            Field(description="幂等锚点，必须全局唯一。同一事件重试请传同一个值。"),
+        ],
         role: Annotated[
             str,
             Field(description="事件角色：user / assistant / tool / system。"),
         ] = "user",
-        event_id: Annotated[
-            str | None,
-            Field(description="幂等锚点，必须全局唯一。同一事件重试请传同一个值。"),
-        ] = None,
         memory_type: Annotated[
             str | None,
             Field(description="记忆类型名；必须是本 namespace 已注册的类型，未注册直接报错。"),
@@ -92,13 +92,19 @@ def create_mcp_server(service: MemoryService, namespace: str = DEFAULT_NAMESPACE
 
         返回的是**后台任务**句柄：写成功不等于全链路成功，用 get_operation
         查最终状态。
+
+        ``event_id`` 是**必填**的幂等锚点（ADR-0005 / ADR-0008）：
+        它由调用方生成、全局唯一，重试同一个事件要传同一个值。
+        之前这里是可选的、缺省就现场造一个 UUID —— 那样每次重试都会写成
+        一条新记忆，而这个工具却对外声明 ``idempotentHint=True``：
+        声明与行为对不上，助手侧按「可安全重试」用就会重复写入。
         """
         request = AppendEventRequest(
             request_id=f"mcp-{uuid.uuid4()}",
             user_id=user_id,
             session_id=session_id,
             event=SourceEvent(
-                event_id=event_id or f"mcp-{uuid.uuid4()}",
+                event_id=event_id,
                 source=source,
                 role=MessageRole(role),
                 payload=payload,
