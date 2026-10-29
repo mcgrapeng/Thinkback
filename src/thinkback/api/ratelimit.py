@@ -1,7 +1,13 @@
 """限流中间件 — Token Bucket 算法。
 
-内网部署（方案二）：业务面免鉴权，因此不再按 API key 分桶，而是按客户端 IP
-分桶，防止失控重试与脚本打爆记忆服务。超限返回 429 TB-1007 + Retry-After 头。
+内网部署（方案二）：业务面免鉴权，因此不再按 API key 分桶，而是按**调用方**
+分桶（请求体里的 ``namespace`` + ``user_id``，取不到才退回对端 IP），
+防止失控重试与脚本打爆记忆服务。超限返回 429 TB-1007 + Retry-After 头。
+
+为什么不按 IP 分桶：服务化接入时所有调用方都从同一个出口 IP 出来
+（k8s / ingress / sidecar），一个 IP 一个桶等于全服务共享一份额度 ——
+一个多租户调用方（每个租户一次召回 + 一次写入）会被**别的租户**挤到 429。
+分桶单位应该是「谁在用」，不是「从哪台机器出来的」。
 """
 
 from __future__ import annotations
@@ -16,7 +22,9 @@ from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoin
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp
 
-# 内网默认限流：单客户端 600 请求/分钟、突发 50。替代原先按 API key plan 的配额。
+from thinkback.api.idempotency import _caller_identity
+
+# 内网默认限流：单调用方 600 请求/分钟、突发 50。替代原先按 API key plan 的配额。
 _RATE_LIMIT_PER_MINUTE = 600
 _RATE_LIMIT_BURST = 50
 
@@ -86,6 +94,31 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             bucket.tokens = min(bucket.tokens, float(burst))
         return bucket
 
+    @staticmethod
+    async def _resolve_client_id(request: Request) -> str:
+        """限流分桶的调用方标识。
+
+        业务面免鉴权时，最接近「调用方」的标识是这次请求**为谁而写**：
+        请求体里的 ``namespace`` + ``user_id`` —— 与幂等层用的是同一口径
+        （``api/idempotency.py`` 的 ``_caller_identity``），两个中间件对
+        「谁」的理解不能各说各话。
+
+        取不到（没有这个字段的端点、GET 请求、非 JSON 请求体）才退回对端 IP。
+
+        读请求体是安全的：Starlette 的 ``BaseHTTPMiddleware`` 用
+        ``_CachedRequest`` 把 body 缓下来并向下游重放，下游中间件拿到的
+        仍然是完整请求体。
+        """
+
+        try:
+            body = await request.body()
+        except Exception:  # noqa: BLE001 - 读不到 body 就按对端 IP 分桶
+            body = b""
+        identity = _caller_identity(body)
+        if identity:
+            return identity
+        return request.client.host if request.client and request.client.host else "unknown"
+
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
         path = request.url.path
         # 只限流业务记忆路径；admin/health/docs 走各自通道。
@@ -94,7 +127,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         if path in self.exclude_paths:
             return await call_next(request)
 
-        client_id = request.client.host if request.client and request.client.host else "unknown"
+        client_id = await self._resolve_client_id(request)
         bucket = self._get_bucket(client_id, self.rate_limit_per_minute, self.burst)
         ok, wait = bucket.consume(1)
 
