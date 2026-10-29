@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from typing import Any
 
 from thinkback.memory.schemas import (
@@ -106,6 +107,21 @@ _MEMORY_TYPE_FROM_PB = {
     pb.MEMORY_TYPE_CONSTRAINT: MemoryType.CONSTRAINT,
 }
 
+
+def _enum_value[T](mapping: Mapping[Any, T], value: int, field: str) -> T:
+    """proto3 的 enum 允许未知值（客户端版本比服务端新就会遇到）。
+
+    直接查字典会抛 ``KeyError``，而它既不是 ValueError 也不是 RuntimeError，
+    一路落到「未知异常 → INTERNAL」：客户端看到 INTERNAL 会当成服务端故障去重试，
+    实际是它自己发错了枚举值。转成 ValueError 才是客户端错误该有的状态码。
+    """
+
+    try:
+        return mapping[value]
+    except KeyError as exc:
+        raise ValueError(f"unknown {field} enum value: {value}") from exc
+
+
 # ── enum maps (domain → proto) ──────────────────────────────────────────────
 
 _MEMORY_STATUS_TO_PB = {
@@ -183,7 +199,7 @@ def to_append_event_request(req: pb.AppendEventRequest) -> AppendEventRequest:
         event=SourceEvent(
             event_id=event.event_id,
             source=event.source,
-            role=_ROLE[event.role],
+            role=_enum_value(_ROLE, event.role, "role"),
             payload=event.payload,
             occurred_at=datetime.fromisoformat(event.occurred_at),
             subject_ref=event.subject_ref if event.HasField("subject_ref") else None,
@@ -215,7 +231,7 @@ def to_delete_request(
     return DeleteMemoryRequest(
         request_id=req.request_id,
         user_id=req.user_id,
-        scope=_DELETE_SCOPE[req.scope],
+        scope=_enum_value(_DELETE_SCOPE, req.scope, "delete scope"),
         operation_id=req.operation_id,
         memory_id=req.memory_id if req.HasField("memory_id") else None,
         session_id=req.session_id if req.HasField("session_id") else None,
