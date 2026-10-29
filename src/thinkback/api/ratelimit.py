@@ -13,7 +13,6 @@
 from __future__ import annotations
 
 import time
-from collections import defaultdict
 
 from fastapi import Request, Response
 from loguru import logger
@@ -22,11 +21,16 @@ from starlette.responses import JSONResponse
 from starlette.types import ASGIApp
 
 from thinkback.api.idempotency import _caller_identity
-from thinkback.infra.token_bucket import TokenBucket
+from thinkback.infra.token_bucket import BucketRegistry
 
 # 内网默认限流：单调用方 600 请求/分钟、突发 50。替代原先按 API key plan 的配额。
 _RATE_LIMIT_PER_MINUTE = 600
 _RATE_LIMIT_BURST = 50
+# 按对端 IP 的天花板 = 每调用方限额的多少倍。分桶键（namespace + user_id）
+# 是调用方给的，轮换 key 就换一把新桶 —— 天花板按 IP 分桶，轮换换不掉它。
+# 20 倍：够一个网关后面几十个租户共用，又能把「换个 user_id 就重来」的
+# 洪水按住。
+_PEER_CEILING_FACTOR = 20
 
 
 class RateLimitMiddleware(BaseHTTPMiddleware):
@@ -54,26 +58,13 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         }
         self.rate_limit_per_minute = rate_limit_per_minute
         self.burst = burst
-        self.buckets: dict[str, TokenBucket] = defaultdict(
-            lambda: TokenBucket(tokens=0, last_refill=0, rate_per_second=0, burst=0)
+        # 每调用方一把桶：租户之间互不挤兑。
+        self.buckets = BucketRegistry(rate_limit_per_minute, burst)
+        # 再压一层按对端 IP 的天花板：轮换分桶键绕不开它。
+        self.peer_buckets = BucketRegistry(
+            rate_limit_per_minute * _PEER_CEILING_FACTOR,
+            burst * _PEER_CEILING_FACTOR,
         )
-
-    def _get_bucket(self, key_id: str, rate_per_minute: int, burst: int) -> TokenBucket:
-        bucket = self.buckets[key_id]
-        if bucket.burst == 0:
-            # 新桶：按 burst 额度初始化
-            bucket.burst = burst
-            bucket.rate_per_second = rate_per_minute / 60.0
-            bucket.tokens = float(burst)
-            bucket.last_refill = time.time()
-        elif bucket.burst != burst:
-            # 限额变了：只改速率与上限，**不重置余额**。
-            # 原实现在这里把 tokens 重置成 burst —— 每桶被「重置」一次，
-            # 改一次配置就等于发一次免费额度。
-            bucket.burst = burst
-            bucket.rate_per_second = rate_per_minute / 60.0
-            bucket.tokens = min(bucket.tokens, float(burst))
-        return bucket
 
     @staticmethod
     async def _resolve_client_id(request: Request) -> str:
@@ -122,8 +113,11 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             # health / docs / openapi 走各自通道。
             return await call_next(request)
 
-        bucket = self._get_bucket(client_id, self.rate_limit_per_minute, self.burst)
-        ok, wait = bucket.consume(1)
+        # 先扣每调用方的桶：超了就是超了，不该再去动共享的天花板。
+        ok, wait = self.buckets.consume(client_id)
+        if ok:
+            # 再扣按对端 IP 的天花板：轮换分桶键（换 user_id）绕不开这一层。
+            ok, wait = self.peer_buckets.consume(self._peer_ip(request))
 
         if not ok:
             retry_after = max(1, int(wait) + 1)
@@ -146,7 +140,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             )
 
         response: Response = await call_next(request)
-        remaining = int(bucket.tokens)
+        remaining = int(self.buckets.remaining(client_id))
         response.headers["X-RateLimit-Limit"] = str(self.rate_limit_per_minute)
         response.headers["X-RateLimit-Remaining"] = str(max(0, remaining))
         response.headers["X-RateLimit-Reset"] = str(int(time.time()) + 60)

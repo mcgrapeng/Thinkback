@@ -55,10 +55,13 @@ No authentication; reachable from the internal network only.
 `/admin/api/*` is rate limited (same bucket key as the business plane: the
 calling peer, since the admin plane has no caller identity of its own).
 
-Listing memories without `user_id` reads **every** user's memories, so it
-writes an audit row (`action=list`, no memory content). If that audit row
-cannot be written the request fails with 503 — the trail is the only control
-left on that read, so an untracked one is refused.
+Every memory read on this surface writes an audit row — listing memories
+(`action=list`) and reading one memory's source journal turns
+(`action=source`). The admin plane has no caller identity, so whoever asks
+for a `user_id` is not that user: a per-user listing is a cross-user read
+too. Audit rows carry ids and counts only, never memory content. If the
+audit row cannot be written the request fails with 503 — the trail is the
+only control left on those reads, so an untracked one is refused.
 
 API key management and live mem0 prompt editing were removed with the v1 public integration surface; extraction behaviour is configured by code (`THINKBACK_CUSTOM_INSTRUCTIONS`) and by the type profile in `profiles/`.
 

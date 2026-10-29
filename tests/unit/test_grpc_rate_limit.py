@@ -28,11 +28,12 @@ from thinkback.rpc.servicer import MemoryServicer
 class _FakeContext:
     """够用的 ``grpc.ServicerContext`` 替身：peer + abort。"""
 
-    def __init__(self) -> None:
+    def __init__(self, peer: str = "ipv4:127.0.0.1:5555") -> None:
         self.aborted: tuple[grpc.StatusCode, str] | None = None
+        self._peer = peer
 
     def peer(self) -> str:
-        return "ipv4:127.0.0.1:5555"
+        return self._peer
 
     def abort(self, code: grpc.StatusCode, details: str) -> None:
         self.aborted = (code, details)
@@ -131,3 +132,78 @@ def test_a_rate_limit_refusal_is_not_turned_into_an_internal_error() -> None:
 
     assert context.aborted is not None
     assert context.aborted[0] == grpc.StatusCode.RESOURCE_EXHAUSTED
+
+
+def test_every_rpc_method_goes_through_the_rate_limiter() -> None:
+    """每个对外的 RPC 方法都必须先过限流。
+
+    漏掉一个就是一条绕过限流的路，而且**静默**：别的方法有闸门，这个没有，
+    看上去一切正常。上一轮就漏过一个（AppendEvent）—— 手工往每个方法里塞
+    一行，靠的是「记得别漏」，所以这里把它钉成断言。
+    """
+    import ast
+    import inspect
+    import textwrap
+
+    source = textwrap.dedent(inspect.getsource(MemoryServicer))
+    tree = ast.parse(source)
+    klass = next(node for node in tree.body if isinstance(node, ast.ClassDef))
+
+    missing: list[str] = []
+    for node in klass.body:
+        if not isinstance(node, ast.FunctionDef) or node.name.startswith("_"):
+            continue
+        checks = [
+            child
+            for child in ast.walk(node)
+            if isinstance(child, ast.Call)
+            and isinstance(child.func, ast.Attribute)
+            and child.func.attr == "check"
+        ]
+        if len(checks) != 1:
+            missing.append(f"{node.name}({len(checks)})")
+
+    assert not missing, f"没有过限流（或过了多次）的 RPC 方法: {missing}"
+
+
+def test_different_peer_ports_share_one_bucket() -> None:
+    """``context.peer()`` 带的是客户端临时端口 —— 每条连接都不同。
+
+    带端口分桶等于每条连接一把新桶，限额永远咬不到：限流形同虚设。
+    """
+    limiter = GrpcRateLimiter(rate_limit_per_minute=1, burst=1)
+
+    limiter.check(pb.GetTaskRequest(task_id="t1"), _FakeContext("ipv4:10.0.0.1:5555"))
+    with pytest.raises(grpc.RpcError):
+        limiter.check(pb.GetTaskRequest(task_id="t1"), _FakeContext("ipv4:10.0.0.1:6666"))
+
+
+def test_rotating_the_caller_key_cannot_escape_the_peer_ceiling() -> None:
+    """轮换 user_id 换的是「每调用方」那把桶 —— 按对端地址的天花板换不掉。
+
+    分桶键是调用方给的，不压一层按 IP 的总闸，限额就只是个摆设：换个
+    user_id 就是一把满额的新桶。
+    """
+    limiter = GrpcRateLimiter(rate_limit_per_minute=1, burst=1)
+    context = _FakeContext(peer="ipv4:10.0.0.1:5555")
+
+    # 天花板是每调用方限额的 20 倍 → 这里能过 20 次
+    for index in range(20):
+        limiter.check(pb.RecallRequest(user_id=f"u{index}", namespace="ns"), context)
+
+    with pytest.raises(grpc.RpcError):
+        limiter.check(pb.RecallRequest(user_id="u999", namespace="ns"), context)
+
+
+def test_the_bucket_map_is_bounded() -> None:
+    """分桶键是调用方可控的 —— 不封顶就是一张能无限长大的表。
+
+    拿随机 user_id 打几次就能把它撑爆。
+    """
+    limiter = GrpcRateLimiter(rate_limit_per_minute=600, burst=60, max_buckets=10)
+    context = _FakeContext()
+
+    for index in range(100):
+        limiter.check(pb.RecallRequest(user_id=f"u{index}", namespace="ns"), context)
+
+    assert limiter.buckets.bucket_count() <= 10
