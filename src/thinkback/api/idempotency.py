@@ -22,6 +22,8 @@ from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoin
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp
 
+from thinkback.domain.keys import DEFAULT_NAMESPACE
+
 CACHE_TTL = 24 * 3600  # 24h
 MAX_CACHE_SIZE = 10000
 
@@ -35,6 +37,11 @@ def _caller_identity(body: bytes) -> str:
 
     取不到就返回空串：调用方退回到对端 IP 分域。解析失败不是错误 ——
     body 不是 JSON 的写请求本来就不走幂等缓存的语义。
+
+    namespace 缺省时归一到**请求模型的实际默认值**（``DEFAULT_NAMESPACE``），
+    不能留空串：请求模型会把缺省的 namespace 填成默认值，所以「省略」与
+    「显式传默认值」是**同一个请求**。这里留空的话，两者落进两个分域 ——
+    同一把 Idempotency-Key 既不重放也不报冲突，写入会真的执行两次。
     """
     if not body:
         return ""
@@ -49,7 +56,7 @@ def _caller_identity(body: bytes) -> str:
         return ""
     namespace = payload.get("namespace")
     if not isinstance(namespace, str) or not namespace.strip():
-        namespace = ""
+        namespace = DEFAULT_NAMESPACE
     return f"{namespace}:{user_id}"
 
 
