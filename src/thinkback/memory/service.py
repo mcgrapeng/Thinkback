@@ -2813,9 +2813,13 @@ L2 更新 (缓存失效)
             purge_state = "unsupported"
         elif request.scope is DeleteScope.ALL:
             purge_state = "complete"
+        elif int(purged.get("messages", 0) or 0) > 0:
+            # 被擦除轮次的原始消息按原文正文清掉了 —— 不是"只清了一部分"。
+            # 按 scope 硬编码会把这两种情况写成同一个值：真清干净了和
+            # 一条都没清（轮次集合取空）看起来一样，运维只能靠猜。
+            purge_state = "complete"
         else:
-            # 单条/会话擦除按 memory_id 清了事实历史，但 namespace 里的原始
-            # 消息按设计保留（没有 round 级身份，无法只删自己那部分）。
+            # 一条原始消息都没清掉：无法证明引擎侧的对话原文已经消失。
             purge_state = "partial"
 
         self.repository.save_admin_audit(

@@ -35,6 +35,34 @@ def test_fake_backend_add_search_delete_all_are_scoped() -> None:
     assert backend.search("睡觉", user_id="user-1", memory_scope_id="thinkback", limit=5) == []
 
 
+def test_fake_backend_update_on_missing_id_raises_like_production() -> None:
+    """fake 不能比生产后端宽松。
+
+    生产后端对不存在的 memory_id 重试几次后抛 RuntimeError；fake 原来静默
+    no-op —— 一条针对「更新不存在的记忆」的用例在 fake 上通过，到生产才炸，
+    而且看起来像 mem0 的 bug 而不是 fake 在骗人。
+    """
+    backend = FakeMemoryBackend()
+
+    with pytest.raises(RuntimeError):
+        backend.update("missing-id", "新内容")
+
+
+def test_fake_backend_delete_many_returns_attempted_count() -> None:
+    """delete_many 返回尝试删除的条数（幂等删除，条数不等于删除数）。"""
+    backend = FakeMemoryBackend()
+    backend.add(
+        [{"role": "user", "content": "用户不喜欢被催睡觉"}],
+        user_id="user-1",
+        memory_scope_id="thinkback",
+    )
+
+    attempted = backend.delete_many(["fake-missing", "", "fake-present"])
+
+    # 三个 ID 里两个非空，其中一个不存在 —— 尝试 2 个，删掉 1 个。
+    assert attempted == 2
+
+
 def test_mem0_library_config_builder_targets_milvus_and_openai() -> None:
     from thinkback.memory.backends import build_mem0_library_config
 

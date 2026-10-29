@@ -9220,6 +9220,84 @@ def test_erase_records_audit_without_content() -> None:
     assert "SECRET-TOKEN" not in str(audit.detail)
 
 
+class _PurgingBackend(FakeMemoryBackend):
+    """记录 purge_history 的参数，并按设定回报清掉的行数。"""
+
+    def __init__(self, *, history_rows: int, message_rows: int) -> None:
+        super().__init__()
+        self.history_rows = history_rows
+        self.message_rows = message_rows
+        self.purge_calls: list[dict[str, Any]] = []
+
+    def purge_history(
+        self,
+        *,
+        user_id: str,
+        memory_ids: list[str],
+        namespace: str,
+        message_texts: list[str],
+        purge_all_messages: bool,
+    ) -> dict[str, int]:
+        _ = (user_id, memory_ids, namespace)
+        self.purge_calls.append(
+            {"message_texts": list(message_texts), "purge_all_messages": purge_all_messages}
+        )
+        return {
+            "history": self.history_rows,
+            "messages": self.message_rows,
+            "supported": True,
+        }
+
+
+def test_erase_audit_reports_complete_when_the_raw_messages_were_purged() -> None:
+    """清掉了原始消息就不能写"只清了一部分"。
+
+    审计原来按 scope 硬编码：单条/会话擦除永远写 partial。于是"真清干净了"
+    和"一条都没清"在审计里长得一模一样，运维只能靠猜。
+    """
+    backend = _PurgingBackend(history_rows=1, message_rows=2)
+    repository = InMemoryMemoryRepository()
+    service = MemoryService(repository=repository, backend=backend, l3_write_mode="sync")
+    service.append(make_append(round_id="r-audit-complete", content="今天会议讨论了排产计划"))
+    memory = repository.active_memories("user-1", "thinkback")[0]
+
+    service.erase(
+        DeleteMemoryRequest(
+            request_id="req-audit-complete",
+            user_id="user-1",
+            scope=DeleteScope.MEMORY,
+            operation_id="op-audit-complete",
+            memory_id=memory.memory_id,
+        )
+    )
+
+    audit = repository.list_admin_audit()[-1]
+    assert audit.detail["mem0_history_purged"] == "complete"
+    assert audit.detail["mem0_message_rows_deleted"] == 2
+
+
+def test_erase_audit_reports_partial_when_no_raw_message_was_purged() -> None:
+    """一条原始消息都没清掉时如实写 partial —— 与"清干净了"区分得开。"""
+    backend = _PurgingBackend(history_rows=1, message_rows=0)
+    repository = InMemoryMemoryRepository()
+    service = MemoryService(repository=repository, backend=backend, l3_write_mode="sync")
+    service.append(make_append(round_id="r-audit-partial", content="今天会议讨论了排产计划"))
+    memory = repository.active_memories("user-1", "thinkback")[0]
+
+    service.erase(
+        DeleteMemoryRequest(
+            request_id="req-audit-partial",
+            user_id="user-1",
+            scope=DeleteScope.MEMORY,
+            operation_id="op-audit-partial",
+            memory_id=memory.memory_id,
+        )
+    )
+
+    audit = repository.list_admin_audit()[-1]
+    assert audit.detail["mem0_history_purged"] == "partial"
+
+
 class _NoFactBackend(FakeMemoryBackend):
     """不产生任何 L3 事实的后端：模拟抽取关闭或抽取失败。"""
 
