@@ -203,3 +203,155 @@ def test_the_scope_matches_mutmut_exactly(monkeypatch: pytest.MonkeyPatch) -> No
     ]
     for path in table:
         assert refresh.in_scope(path, patterns, ignores) == cfg.should_mutate(Path(path)), path
+
+
+# ---------------------------------------------------------------------------
+# 测试树指纹：结论作废的判据
+# ---------------------------------------------------------------------------
+
+
+def _tests_tree(tmp_path: Path) -> Path:
+    root = tmp_path / "tests"
+    (root / "unit").mkdir(parents=True)
+    (root / "unit" / "test_a.py").write_text("def test_a():\n    pass\n", encoding="utf-8")
+    (root / "conftest.py").write_text("# fixture\n", encoding="utf-8")
+    return root
+
+
+def test_the_suite_fingerprint_is_stable_when_nothing_changes(tmp_path: Path) -> None:
+    root = _tests_tree(tmp_path)
+    assert refresh.compute_suite_fingerprint(root) == refresh.compute_suite_fingerprint(root)
+
+
+def test_editing_a_test_file_changes_the_suite_fingerprint(tmp_path: Path) -> None:
+    """改一条用例的内容 → 指纹必须变。
+
+    mutmut 的配置指纹只哈希「测试选择列表」，不哈希内容；它对已有结论的
+    变异体又不重跑。所以用例内容一改，旧结论就可能不再成立。
+    """
+    root = _tests_tree(tmp_path)
+    before = refresh.compute_suite_fingerprint(root)
+
+    (root / "unit" / "test_a.py").write_text("def test_a():\n    assert True\n", encoding="utf-8")
+
+    assert refresh.compute_suite_fingerprint(root) != before
+
+
+def test_deleting_a_test_file_changes_the_suite_fingerprint(tmp_path: Path) -> None:
+    """删掉一条用例 → 指纹必须变。
+
+    这正是「同一模块只留一份测试文件」那种去重会做的事：被删的那条用例
+    原来杀掉的变异体，从此没人杀了 —— 而旧结论仍写着「killed」。
+    """
+    root = _tests_tree(tmp_path)
+    before = refresh.compute_suite_fingerprint(root)
+
+    (root / "unit" / "test_a.py").unlink()
+
+    assert refresh.compute_suite_fingerprint(root) != before
+
+
+def test_changing_a_helper_module_changes_the_suite_fingerprint(tmp_path: Path) -> None:
+    """辅助模块也要算进去。
+
+    一条用例的杀伤力不只取决于它自己：它 import 的辅助模块改了、
+    ``conftest.py`` 里的 fixture 改了，同样能让它不再杀掉某个变异体。
+    """
+    root = _tests_tree(tmp_path)
+    before = refresh.compute_suite_fingerprint(root)
+
+    (root / "conftest.py").write_text("# fixture 改了\n", encoding="utf-8")
+
+    assert refresh.compute_suite_fingerprint(root) != before
+
+
+def _redirect_paths(monkeypatch: pytest.MonkeyPatch, mutants: Path) -> None:
+    monkeypatch.setattr(refresh, "MUTANTS_DIR", mutants)
+    monkeypatch.setattr(refresh, "STATS_PATH", mutants / "mutmut-stats.json")
+    monkeypatch.setattr(refresh, "SCOPE_FINGERPRINT_PATH", mutants / "mutmut-scope.sha256")
+    monkeypatch.setattr(refresh, "SUITE_FINGERPRINT_PATH", mutants / "mutmut-suite.sha256")
+
+
+def test_the_refresh_wipes_the_mutants_tree_when_the_test_tree_changed(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """测试树变了 → 已有结论全部作废 → 整棵重审。
+
+    mutmut/ 是可再生的构建产物，删掉比逐个作废结论可靠。留下的旧结论
+    会让「删掉一条用例」变成静默的盲区。
+    """
+    mutants = tmp_path / "mutants"
+    (mutants / "src").mkdir(parents=True)
+    (mutants / "src" / "a.py.meta").write_text("{}", encoding="utf-8")
+    (mutants / "mutmut-stats.json").write_text("{}", encoding="utf-8")
+    _redirect_paths(monkeypatch, mutants)
+
+    assert refresh.main() == 0
+
+    assert not (mutants / "src" / "a.py.meta").exists(), "旧结论没被清掉"
+    assert not (mutants / "mutmut-stats.json").exists()
+
+
+def test_the_refresh_keeps_the_tree_when_the_test_tree_did_not_change(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """测试树没变 → 不清空（mutmut 的缓存还能用）。
+
+    用一个**在范围内**的源文件：范围外的残留会被另一条分支（清理遮蔽
+    变异生成的残留物）正当删掉，跟这里要验的不是一回事。
+    """
+    in_scope = "src/thinkback/domain/keys.py"
+    mutants = tmp_path / "mutants"
+    (mutants / "src" / "thinkback" / "domain").mkdir(parents=True)
+    (mutants / f"{in_scope}.meta").write_text("{}", encoding="utf-8")
+    _redirect_paths(monkeypatch, mutants)
+    refresh.SCOPE_FINGERPRINT_PATH.write_text(
+        refresh.compute_scope_fingerprint() + "\n", encoding="utf-8"
+    )
+    refresh.SUITE_FINGERPRINT_PATH.write_text(
+        refresh.compute_suite_fingerprint() + "\n", encoding="utf-8"
+    )
+
+    assert refresh.main() == 0
+
+    assert (mutants / f"{in_scope}.meta").exists()
+
+
+def test_the_refresh_keeps_the_stats_file_so_mutmut_can_see_its_own_fingerprint(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """**不要删** ``mutmut-stats.json``。
+
+    mutmut 自己的配置指纹（test_selection / test_execution）就存在里面。
+    删了它，mutmut 就看不到「测试选择列表变了」，也就不会作废已有结论 ——
+    那些结论是旧测试套件算出来的。
+    """
+    mutants = tmp_path / "mutants"
+    mutants.mkdir()
+    (mutants / "mutmut-stats.json").write_text("{}", encoding="utf-8")
+    _redirect_paths(monkeypatch, mutants)
+    refresh.SUITE_FINGERPRINT_PATH.write_text(
+        refresh.compute_suite_fingerprint() + "\n", encoding="utf-8"
+    )
+
+    assert refresh.main() == 0
+
+    assert (mutants / "mutmut-stats.json").exists()
+
+
+def test_the_gate_refuses_a_verdict_from_an_older_test_tree(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """门禁必须 fail-closed：结论不是当前测试树算出来的 → 不放行。
+
+    静默的盲区：某个变异体原来被一条用例杀掉，那条用例被删了。
+    旧结论写着「killed」，门禁看不出区别 —— 只有内容指纹能。
+    """
+    from tests.eval import check_mutation_survivors as gate
+
+    mutants = tmp_path / "mutants"
+    mutants.mkdir()
+    monkeypatch.setattr(refresh, "SUITE_FINGERPRINT_PATH", mutants / "mutmut-suite.sha256")
+    (mutants / "mutmut-suite.sha256").write_text("过期指纹\n", encoding="utf-8")
+
+    assert gate.main() == 1
