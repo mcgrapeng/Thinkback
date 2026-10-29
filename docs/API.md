@@ -1,6 +1,6 @@
 # API Reference
 
-Thinkback exposes three API surfaces: **Memory core** (for application code), **Health** (probes and metrics), and **Admin** (for the governance console). gRPC surface mirrors HTTP in `proto/memory.proto`.
+Thinkback exposes three API surfaces: **Memory core** (for application code), **Health** (probes and metrics), and **Admin** (for the governance console). gRPC surface mirrors HTTP in `proto/memory.proto`; the MCP surface is the same service projected onto MCP tools — see [MCP.md](MCP.md).
 
 ## Authentication
 
