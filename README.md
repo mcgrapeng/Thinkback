@@ -512,6 +512,7 @@ boundaries.
 
 26 endpoints across three groups, plus a `/` root probe. Swagger UI at `/docs`, ReDoc at `/redoc`.
 The gRPC service in [`proto/memory.proto`](proto/memory.proto) mirrors the same operations.
+The MCP server (`thinkback-mcp`) projects them onto MCP tools for assistants that speak MCP — see **[docs/MCP.md](docs/MCP.md)**.
 
 **Memory core — `/memory/*`** (no auth; internal network)
 

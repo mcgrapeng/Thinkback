@@ -320,3 +320,8 @@ playwright/.cache/
 # （README 链到 docs/API.md 等，新文档不需要 git add -f）。
 docs/memory/report/
 .claude-flow
+
+# 截图脚本产物：README 只引用 *-list / *-detail / 常规变体，
+# *-full 与 07-integration-* 是 web/take-screenshots*.mjs 的可再生副产物，不进版本库。
+assets/screenshots/*-full.png
+assets/screenshots/07-integration-*.png

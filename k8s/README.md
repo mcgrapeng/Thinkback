@@ -126,6 +126,63 @@ kubectl apply -f k8s/secret.example.yaml
 
 这些基线值不是线上容量承诺。真实流量、Pod 资源和外部模型限流明确后，需要重新校准。
 
+## 接入新企业（加一个 namespace，不用重建镜像）
+
+记忆类型 profile 决定「这个 namespace 记什么、怎么冲突、留多久」。它是**运行时**加载的
+（`load_registry` 每次读盘，无缓存），所以新企业接入是加一份配置，不是改代码、也不是重建镜像。
+
+镜像里自带 `profiles/semiconductor.json` 与 `profiles/prompts/semiconductor/*.md`。
+新企业把自己的 profile 以 ConfigMap 挂进去即可（`subPath` 挂单个文件 + 目录挂指令文件）：
+
+```yaml
+# k8s/overlays/acme/patch-deployment.yaml（overlay 由平台维护，不进主干）
+      volumeMounts:
+        - name: tmp
+          mountPath: /tmp/thinkback
+        # profile 本体：<profile_dir>/<namespace>.json
+        - name: acme-profile
+          mountPath: /app/profiles/acme.json
+          subPath: acme.json
+        # per-type 抽取指令：<profile_dir>/prompts/<namespace>/*.vN.md
+        - name: acme-prompts
+          mountPath: /app/profiles/prompts/acme
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        - name: acme-profile
+          configMap:
+            name: thinkback-profiles-acme
+        - name: acme-prompts
+          configMap:
+            name: thinkback-profiles-acme
+```
+
+```yaml
+# ConfigMap thinkback-profiles-acme
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: thinkback-profiles-acme
+data:
+  acme.json: |
+    { "namespace": "acme", "types": { ... } }
+  profile.v1.md: |
+    <该类型的抽取指令正文>
+```
+
+ConfigMap 的 key 只能是扁平名字，所以指令文件靠**目录挂载**落到
+`/app/profiles/prompts/acme/`；profile 本体靠 `subPath` 落到 `/app/profiles/acme.json`。
+`subPath` 挂载在 ConfigMap 更新后不会自动刷新 —— 换 profile 要重建 Pod。
+
+要点：
+
+- 生产环境下 namespace 缺 profile 会**启动期/调用期显式报错**（不静默回落内置默认类型），
+  这正是「配置看起来生效了、实际跑的是另一套规则」的防线。
+- `MEMORY_TYPE_PROFILE_DIR` 可以把整个 profile 目录指到别处（例如企业自己的挂载点），
+  指走后镜像内置的 `profiles/` 不再生效。
+- 换 namespace 只需改调用方的 `namespace` 字段；MCP 场景下 namespace 由服务端固定，
+  见 [docs/MCP.md](../docs/MCP.md)。
+
 ## 部署
 
 ```bash
