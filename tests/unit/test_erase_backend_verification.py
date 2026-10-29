@@ -231,6 +231,41 @@ def test_point_lookup_failure_counts_as_still_present() -> None:
     assert service._present_backend_ids(["m-1", "", "m-2"]) == ["m-1", "m-2"]
 
 
+def test_residual_check_point_queries_targets_for_all_scope_when_the_page_limit_is_hit() -> None:
+    """ALL 范围 + 一页取满时，也要逐个点查目标 ID。
+
+    ALL 只复核「这次真删掉的那批 ID」：作用域里新写的记录不是这次擦除的
+    目标。但一页取满时列表是**截断**的 —— 目标可能落在后面的页里。
+
+    光看列表会判定「已删干净」（记录其实还在），擦除就谎报了完成：
+    用户以为数据没了，原文还在引擎侧。所以这里必须点查。
+    """
+    backend = FakeMemoryBackend()
+    _, service, _ = _seeded_service(backend)
+
+    # 把目标挪到填充行之后：它落在第一页之外，光看列表看不见它。
+    backend.memories["erase-verify-memory"] = backend.memories.pop("erase-verify-memory")
+    for index in range(MEMORY_LIST_PAGE_LIMIT):
+        backend.memories[f"filler-{index}"] = {
+            "id": f"filler-{index}",
+            "memory": f"filler {index}",
+            "event": "ADD",
+            "user_id": "user-1",
+            "agent_id": "thinkback",
+            "metadata": {},
+            "score": 1.0,
+        }
+
+    residual = service._residual_backend_ids(
+        user_id="user-1",
+        memory_scope_id="thinkback",
+        target_ids=["erase-verify-memory"],
+        scope_all=True,
+    )
+
+    assert residual == ["erase-verify-memory"], "ALL 范围下目标被漏判成「已删干净」"
+
+
 def test_erased_message_texts_returns_the_exact_original_text() -> None:
     """引擎侧历史必须用**原文**精确删：抹掉空白就匹配不上，原文会留在引擎侧。"""
     repository = InMemoryMemoryRepository()

@@ -6,8 +6,13 @@
 - ``alembic upgrade head`` 失败 → 必须往上抛，让 lifespan 中断启动。
   吞掉异常等于让服务带着没对齐的结构接流量，写出一半的脏数据。
 
-带 advisory lock 的那层需要真 PG，单测覆盖不到；它的「必须走同一把锁」的
-接线由 ``tests/unit/test_ops_boundaries.py`` 静态钉住。
+advisory lock 那层的**接线**由 ``tests/unit/test_ops_boundaries.py`` 静态钉住；
+它的**行为**（锁在迁移之前拿、迁移失败也要解锁、引擎一定要释放）在这里用
+假引擎钉住 —— 不需要真 PG：advisory lock 的语义就是「拿不到就等」，用假
+引擎把调用顺序记下来就能钉死顺序与清理。
+
+这层以前是 0 覆盖的：它存在的唯一理由是「多 Pod 同时启动跑 DDL 会撞
+already exists」，而这条最需要保障的路径恰恰没人测 —— 写错了也照样绿。
 """
 
 from __future__ import annotations
@@ -112,3 +117,140 @@ async def test_run_migrations_serialized_async_goes_through_the_advisory_lock(
     await migration.run_migrations_serialized_async()
 
     assert calls == ["locked"]
+
+
+# ---------------------------------------------------------------------------
+# advisory lock 的行为契约（假引擎，不需要真 PG）
+# ---------------------------------------------------------------------------
+
+
+class _FakeConn:
+    """只记录被执行的 SQL —— advisory lock 的语义全在调用顺序里。"""
+
+    def __init__(self, calls: list[tuple[str, dict[str, Any]]]) -> None:
+        self._calls = calls
+
+    async def execute(self, statement: Any, params: dict[str, Any] | None = None) -> None:
+        self._calls.append((str(statement), dict(params or {})))
+
+
+class _FakeConnect:
+    def __init__(self, conn: _FakeConn) -> None:
+        self._conn = conn
+
+    async def __aenter__(self) -> _FakeConn:
+        return self._conn
+
+    async def __aexit__(self, *_exc_info: object) -> bool:
+        return False
+
+
+class _FakeEngine:
+    def __init__(self, calls: list[tuple[str, dict[str, Any]]]) -> None:
+        self._calls = calls
+        self.disposed = False
+
+    def connect(self) -> _FakeConnect:
+        return _FakeConnect(_FakeConn(self._calls))
+
+    async def dispose(self) -> None:
+        self.disposed = True
+
+
+def _install_fake_engine(
+    monkeypatch: pytest.MonkeyPatch, engine: _FakeEngine
+) -> list[tuple[str, dict[str, Any]]]:
+    """把 ``create_async_engine`` 换成假引擎，返回记录 SQL 的列表。"""
+    import sqlalchemy.ext.asyncio as sa_asyncio
+
+    calls: list[tuple[str, dict[str, Any]]] = []
+    engine._calls = calls
+    monkeypatch.setattr(sa_asyncio, "create_async_engine", lambda *_a, **_k: engine)
+    return calls
+
+
+def test_advisory_lock_is_held_while_the_migrations_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """锁必须在迁移**之前**拿、迁移**之后**才放。
+
+    顺序反了等于没加锁：迁移跑在锁外，两个 Pod 照样并发 DDL。
+    """
+    engine = _FakeEngine([])
+    calls = _install_fake_engine(monkeypatch, engine)
+    events: list[str] = []
+
+    def _fake_run_migrations() -> None:
+        events.append("migrate")
+        # 迁移执行的那一刻，锁必须已经拿在手里。
+        events.append(f"locked={len(calls)}")
+
+    monkeypatch.setattr(migration, "run_migrations", _fake_run_migrations)
+
+    migration.run_migrations_with_advisory_lock()
+
+    assert events == ["migrate", "locked=1"], "迁移执行时锁还没拿到"
+    assert "pg_advisory_lock" in calls[0][0]
+    assert "pg_advisory_unlock" in calls[-1][0]
+    assert len(calls) == 2
+
+
+def test_advisory_lock_is_released_when_the_migrations_fail(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """迁移失败也必须解锁：锁不放 → 下一个 Pod 永远拿不到 → 启动全卡死。"""
+    engine = _FakeEngine([])
+    calls = _install_fake_engine(monkeypatch, engine)
+
+    def _boom() -> None:
+        raise RuntimeError('relation "ins_memory" already exists')
+
+    monkeypatch.setattr(migration, "run_migrations", _boom)
+
+    with pytest.raises(RuntimeError, match="already exists"):
+        migration.run_migrations_with_advisory_lock()
+
+    assert any("pg_advisory_unlock" in sql for sql, _ in calls), "迁移失败后没有解锁"
+    assert engine.disposed is True, "迁移失败后连接引擎没有释放"
+
+
+def test_lock_engine_is_disposed_after_a_successful_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """锁连接跑在独立引擎上：不释放就等于每次启动泄漏一个连接池。"""
+    engine = _FakeEngine([])
+    _install_fake_engine(monkeypatch, engine)
+    monkeypatch.setattr(migration, "run_migrations", lambda: None)
+
+    migration.run_migrations_with_advisory_lock()
+
+    assert engine.disposed is True
+
+
+def test_advisory_lock_uses_one_fixed_key_for_lock_and_unlock(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """加锁与解锁必须是同一把 key —— 键不一致等于没解，锁会一直挂着。"""
+    engine = _FakeEngine([])
+    calls = _install_fake_engine(monkeypatch, engine)
+    monkeypatch.setattr(migration, "run_migrations", lambda: None)
+
+    migration.run_migrations_with_advisory_lock()
+
+    lock_params = calls[0][1]
+    unlock_params = calls[1][1]
+    assert lock_params["lock_id"] == unlock_params["lock_id"]
+    assert lock_params["lock_id"] == migration._MIGRATION_LOCK_ID
+
+
+def test_advisory_lock_covers_every_migration_entrypoint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """三条迁移入口都必须经过锁：直跑的那条（Job/脚本）最容易漏。"""
+    engine = _FakeEngine([])
+    calls = _install_fake_engine(monkeypatch, engine)
+    monkeypatch.setattr(migration, "run_migrations", lambda: None)
+
+    migration.run_migrations_with_advisory_lock()
+
+    assert sum("pg_advisory_lock" in sql for sql, _ in calls) == 1

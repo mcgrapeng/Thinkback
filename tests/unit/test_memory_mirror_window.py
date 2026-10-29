@@ -13,6 +13,8 @@ from __future__ import annotations
 
 from typing import Any
 
+import pytest
+
 from thinkback.infra.milvus_collection import MilvusMirror
 from thinkback.memory.backends import Mem0LibraryMemoryBackend
 
@@ -21,10 +23,15 @@ class _FakeMilvus:
     """够用的 pymilvus 替身。"""
 
     def __init__(
-        self, *, rows: list[dict[str, Any]] | None = None, fail_delete: bool = False
+        self,
+        *,
+        rows: list[dict[str, Any]] | None = None,
+        fail_delete: bool = False,
+        fail_get: bool = False,
     ) -> None:
         self.rows = rows or []
         self.fail_delete = fail_delete
+        self.fail_get = fail_get
         self.deleted: list[list[str]] = []
         self.upserts: list[dict[str, Any]] = []
 
@@ -32,6 +39,8 @@ class _FakeMilvus:
         return list(self.rows)
 
     def get(self, **kwargs: Any) -> list[dict[str, Any]]:
+        if self.fail_get:
+            raise RuntimeError("milvus get failed")
         return list(self.rows)
 
     def upsert(self, **kwargs: Any) -> None:
@@ -183,3 +192,44 @@ def test_add_mirrors_new_rows() -> None:
 
     assert mirror.upserts, "新行必须搬到镜像集合"
     assert mirror.upserts[0]["collection_name"] == "old_collection"
+
+
+def test_mirror_write_failure_does_not_break_the_primary_write() -> None:
+    """镜像写失败不得把主写入搞挂。
+
+    镜像只是迁移窗口里的次副本：它失败时旧集合少几条新事实，回滚会丢，
+    但主集合已经写成功、整体可用。把异常往上抛等于「因为备份坏了所以主库
+    也别写」—— 一次镜像抖动会让所有用户的写入全部失败。
+    """
+    backend, client = _backend(_FakeMilvus(fail_get=True))
+
+    events = backend.add(
+        [{"role": "user", "content": "我负责 28nm 工艺整合"}],
+        user_id="user-1",
+        memory_scope_id="thinkback",
+    )
+
+    assert client.added, "主写入没有发生"
+    assert events, "镜像失败把主写入的结果也吞了"
+
+
+def test_mirror_write_gives_up_when_the_new_row_is_not_visible_yet(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """搬不到行时放弃重试，不能把写入卡住。
+
+    新写的行还在 growing segment 里时读不到是正常现象，重试序列有上限；
+    搬不到就告警放弃 —— 主集合里的数据是好的。
+    """
+    monkeypatch.setattr(Mem0LibraryMemoryBackend, "_NOT_FOUND_RETRY_DELAYS", ())
+
+    backend, client = _backend(_FakeMilvus(rows=[]))
+
+    events = backend.add(
+        [{"role": "user", "content": "我负责 28nm 工艺整合"}],
+        user_id="user-1",
+        memory_scope_id="thinkback",
+    )
+
+    assert client.added, "主写入没有发生"
+    assert events, "镜像搬不到行把主写入的结果也吞了"

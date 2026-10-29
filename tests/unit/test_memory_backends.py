@@ -1557,3 +1557,103 @@ def test_concurrent_adds_for_one_user_are_serialised() -> None:
         thread.join()
 
     assert client.max_active == 1
+
+
+# ---------------------------------------------------------------------------
+# mem0 返回形状的归一化与过期参数的降级（此前 0 覆盖）
+# ---------------------------------------------------------------------------
+#
+# 适配层存在的意义就是「引擎换了返回形状也不炸」。归一化漏掉一个分支，
+# 后果不是报错而是**静默丢数据**：add 拿不到 id → 本地索引记不下这条记忆；
+# get_all 看不见行 → 擦除复核以为已经删干净（用户要删的事实其实还在库里）。
+
+
+def test_mem0_results_normalizes_every_engine_return_shape() -> None:
+    """四种形状都要归一化成同一份「记忆列表」。"""
+    from thinkback.memory.backends import Mem0LibraryMemoryBackend
+
+    normalize = Mem0LibraryMemoryBackend._results
+
+    # 列表包在 "results" 下（mem0 的 add / get_all）
+    assert normalize({"results": [{"id": "m1"}]}) == [{"id": "m1"}]
+    # 列表包在 "memories" 下
+    assert normalize({"memories": [{"id": "m2"}]}) == [{"id": "m2"}]
+    # 直接返回列表（mem0 2.2.1 的 search 就是这样）
+    assert normalize([{"id": "m3"}]) == [{"id": "m3"}]
+    # 单条记录：引擎偶尔直接给一条，不能当成「没有结果」丢掉
+    assert normalize({"id": "m4", "memory": "用户喜欢猫"}) == [{"id": "m4", "memory": "用户喜欢猫"}]
+    # 认不出来的形状 → 空列表，不抛异常
+    assert normalize(None) == []
+    assert normalize({"results": "not-a-list"}) == []
+    # 列表里的非 dict 项被丢掉，不让下游炸
+    assert normalize([{"id": "m5"}, "junk"]) == [{"id": "m5"}]
+
+
+def test_mem0_get_all_asks_the_engine_for_expired_rows_when_supported() -> None:
+    """引擎支持 show_expired 时必须问它要过期行。
+
+    过期行看不见 → 列不出来、删不掉，擦除却报「已完成」：记忆活得越久
+    越擦不掉，与保留策略的方向正好相反。
+    """
+    from thinkback.memory.backends import Mem0LibraryMemoryBackend
+
+    class _ExpiredAwareClient:
+        def __init__(self) -> None:
+            self.calls: list[dict[str, Any]] = []
+
+        def get_all(self, *, filters, limit, show_expired):  # type: ignore[no-untyped-def]
+            self.calls.append({"limit": limit, "show_expired": show_expired})
+            return {"results": [{"id": "m1"}]}
+
+    client = _ExpiredAwareClient()
+    backend = Mem0LibraryMemoryBackend(config={}, memory_client=client)
+
+    rows = backend.get_all(user_id="user-1", memory_scope_id="thinkback")
+
+    assert rows == [{"id": "m1"}]
+    assert client.calls[0]["show_expired"] is True
+
+
+def test_mem0_get_all_omits_the_expired_flag_when_the_engine_does_not_support_it() -> None:
+    """老引擎没有 show_expired 参数 → 不传（传了会 TypeError）。"""
+    from thinkback.memory.backends import Mem0LibraryMemoryBackend
+
+    class _LegacyClient:
+        def __init__(self) -> None:
+            self.calls: list[dict[str, Any]] = []
+
+        def get_all(self, **kwargs):  # type: ignore[no-untyped-def]
+            self.calls.append(kwargs)
+            return {"results": [{"id": "m1"}]}
+
+    client = _LegacyClient()
+    backend = Mem0LibraryMemoryBackend(config={}, memory_client=client)
+
+    rows = backend.get_all(user_id="user-1", memory_scope_id="thinkback")
+
+    assert rows == [{"id": "m1"}]
+    assert "show_expired" not in client.calls[0]
+
+
+def test_mem0_get_all_survives_an_engine_method_it_cannot_introspect() -> None:
+    """签名读不出来（代理方法、内建方法）→ 降级成不传，而不是崩。"""
+    from thinkback.memory.backends import Mem0LibraryMemoryBackend
+
+    class _OpaqueClient:
+        def __init__(self) -> None:
+            self.calls: list[dict[str, Any]] = []
+
+        def get_all(self, **kwargs):  # type: ignore[no-untyped-def]
+            self.calls.append(kwargs)
+            return {"results": [{"id": "m1"}]}
+
+    # __signature__ 不是 Signature 对象 → inspect.signature 抛 TypeError
+    _OpaqueClient.get_all.__signature__ = "not-a-signature"  # type: ignore[attr-defined]
+
+    client = _OpaqueClient()
+    backend = Mem0LibraryMemoryBackend(config={}, memory_client=client)
+
+    rows = backend.get_all(user_id="user-1", memory_scope_id="thinkback")
+
+    assert rows == [{"id": "m1"}]
+    assert "show_expired" not in client.calls[0]

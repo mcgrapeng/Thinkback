@@ -21,7 +21,7 @@ from thinkback.domain.enums import OperationType, TaskStatus
 from thinkback.domain.errors import TaskStaleWriteError
 from thinkback.memory.backends import FakeMemoryBackend
 from thinkback.memory.repositories import InMemoryMemoryRepository
-from thinkback.memory.schemas import DeleteMemoryRequest, DeleteScope
+from thinkback.memory.schemas import DeleteMemoryRequest, DeleteScope, UpdateMemoryRequest
 from thinkback.memory.service import MemoryService
 
 
@@ -399,3 +399,111 @@ def test_complete_async_l3_write_survives_repository_shutdown(
     # 契约：不抛异常（终态丢失被记录成日志；任务保持 RUNNING，由 get_task
     # 自愈 / 启动回收收敛为 FAILED）
     service._complete_async_l3_write("task-straggler", [], "user-1", "thinkback", [], {})
+
+
+# ── 重复请求的短路（claim 撞车 / 任务已终态）─────────────────────────
+#
+# 每个写接口都有「同一个 operation_id 的第二次请求」这条路：它必须短路成
+# 「已经在做 / 已经做完 / 已经死了」，而不是把别人的任务当自己的改。
+# 这些分支此前一次都没走过 —— 写错了也不会让任何既有用例变红。
+
+
+class _RacingClaimRepository(InMemoryMemoryRepository):
+    """把「查任务」变成竞态窗口：这一次查不到，claim 时却撞上了。"""
+
+    hide_next_get = False
+
+    def get_task(self, task_id: str) -> TaskEntry | None:
+        if self.hide_next_get:
+            self.hide_next_get = False
+            return None
+        return super().get_task(task_id)
+
+
+def _seed_memory(repository: InMemoryMemoryRepository) -> Any:
+    return repository.add_memory_index(
+        backend_memory_id="backend-idempotency",
+        user_id="user-1",
+        memory_scope_id="thinkback",
+        source_refs=[{"session_id": "session-1", "round_id": "round-idempotency"}],
+        memory_text="User has a cat named Mochi",
+    )
+
+
+def test_a_duplicate_delete_that_races_the_task_claim_short_circuits_to_already_done() -> None:
+    """重复删除撞上「任务已被别的 worker 领走」时必须短路成 already_done。
+
+    两次调用之间有一个窗口：先 get_task 查不到，紧接着别的 worker 把任务
+    写进去了；本进程 claim_task 于是抢不到（claimed=False）。这条分支以前
+    没人走 —— 继续往下走（把别人的任务当自己的改）也不会让任何用例变红。
+
+    影响条数必须与第一次一致：返回 0 会让调用方以为「什么都没删」。
+    """
+    repository = _RacingClaimRepository()
+    memory = _seed_memory(repository)
+    service = MemoryService(repository=repository, backend=FakeMemoryBackend())
+    request = _delete_request("op-race-delete", memory.memory_id)
+
+    first = service.delete(request)
+    assert first.status == "completed"
+
+    # 制造竞态窗口：这一次「查不到」任务，但 claim 时它已经在了。
+    repository.hide_next_get = True
+    second = service.delete(request)
+
+    assert second.status == "already_done"
+    assert second.affected_memories == first.affected_memories
+
+
+def test_a_duplicate_update_on_a_dead_lettered_task_short_circuits_to_failed() -> None:
+    """任务已 dead_letter → 短路成 failed，不让客户端无限重试。
+
+    dead_letter 是「重试够多次仍然失败」的终态。再走一遍更新只会再失败
+    一次；返回 failed 让调用方知道该人工介入。
+    """
+    repository = _RacingClaimRepository()
+    memory = _seed_memory(repository)
+    service = MemoryService(repository=repository, backend=FakeMemoryBackend())
+    request = UpdateMemoryRequest(
+        request_id="req-dead",
+        user_id="user-1",
+        operation_id="op-dead",
+        memory_id=memory.memory_id,
+        content="User has a cat named Mochi",
+    )
+
+    service.update_memory(request)
+    task = repository.get_task("memory-update:op-dead")
+    assert task is not None
+    task.status = TaskStatus.DEAD_LETTER
+    repository.save_task(task)
+
+    repository.hide_next_get = True
+    response = service.update_memory(request)
+
+    assert response.status == "failed"
+
+
+def test_a_duplicate_update_on_a_running_task_short_circuits_to_running() -> None:
+    """任务还在跑 → 短路成 running，调用方轮询即可，不要重复执行。"""
+    repository = _RacingClaimRepository()
+    memory = _seed_memory(repository)
+    service = MemoryService(repository=repository, backend=FakeMemoryBackend())
+    request = UpdateMemoryRequest(
+        request_id="req-running",
+        user_id="user-1",
+        operation_id="op-running",
+        memory_id=memory.memory_id,
+        content="User has a cat named Mochi",
+    )
+
+    service.update_memory(request)
+    task = repository.get_task("memory-update:op-running")
+    assert task is not None
+    task.status = TaskStatus.RUNNING
+    repository.save_task(task)
+
+    repository.hide_next_get = True
+    response = service.update_memory(request)
+
+    assert response.status == "running"

@@ -119,3 +119,39 @@ def test_drain_returns_when_nothing_is_pending() -> None:
     refresher.drain(timeout=5)
 
     assert time.monotonic() - began < 1.0, "无在飞刷新时 drain 不该等待"
+
+
+def test_a_failed_submit_releases_the_scope_so_drain_can_still_quiesce() -> None:
+    """提交失败必须把 scope 从 _pending_scopes 里摘掉，并把队列槽位还回去。
+
+    漏了摘 scope 有两处硬伤：
+
+    - drain 永远等不到静默（pending 为真 → 循环不退出）→ **关停卡死**；
+    - 该作用域此后再也刷不出摘要（在飞去重把它一直挡在外面）。
+
+    漏了还槽位则更隐蔽：队列预算被这次失败的提交吃掉，后续 append 全部
+    被容量闸门挡在门外 —— 队列看起来「满了」，其实什么都没在跑。
+    """
+
+    class _RejectingExecutor:
+        def submit(self, *_args: object, **_kwargs: object) -> object:
+            raise RuntimeError("executor is shut down")
+
+    released: list[int] = []
+    refresher = L2BackgroundRefresher(
+        repository=InMemoryMemoryRepository(),
+        composer=lambda rounds, previous: ("【主题】x", {"主题": "x"}),
+        executor=_RejectingExecutor(),  # type: ignore[arg-type]
+        refresh_interval_rounds=2,
+        reserve_capacity=lambda _wait: None,
+        release_capacity=lambda: released.append(1),
+    )
+
+    refresher.maybe_submit("user-1", "session-1")
+
+    assert refresher._pending_scopes == set(), "scope 卡在 pending：drain 会永远等下去"
+    assert released, "队列槽位没归还：后续 append 会被容量闸门挡住"
+
+    began = time.monotonic()
+    refresher.drain(timeout=5)
+    assert time.monotonic() - began < 1.0, "提交失败后 drain 没能归位"
