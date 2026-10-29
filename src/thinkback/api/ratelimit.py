@@ -117,17 +117,30 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         identity = _caller_identity(body)
         if identity:
             return identity
+        return RateLimitMiddleware._peer_ip(request)
+
+    @staticmethod
+    def _peer_ip(request: Request) -> str:
+        """对端 IP：没有可信调用方标识时的兜底分桶键。"""
+
         return request.client.host if request.client and request.client.host else "unknown"
 
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
         path = request.url.path
-        # 只限流业务记忆路径；admin/health/docs 走各自通道。
-        if not path.startswith("/v2/memory/"):
-            return await call_next(request)
-        if path in self.exclude_paths:
+        if path.startswith("/admin/api/"):
+            # 管理面按**对端 IP**分桶：它没有 namespace/user_id 语义，
+            # 按请求体分桶会跟业务面共用同一把桶 —— 管理面的调用会吃掉那个
+            # 用户的业务额度，反过来也一样。「admin:」前缀是为了跟业务面
+            # 退回 IP 时的桶键也不撞。
+            client_id = f"admin:{self._peer_ip(request)}"
+        elif path.startswith("/v2/memory/"):
+            if path in self.exclude_paths:
+                return await call_next(request)
+            client_id = await self._resolve_client_id(request)
+        else:
+            # health / docs / openapi 走各自通道。
             return await call_next(request)
 
-        client_id = await self._resolve_client_id(request)
         bucket = self._get_bucket(client_id, self.rate_limit_per_minute, self.burst)
         ok, wait = bucket.consume(1)
 

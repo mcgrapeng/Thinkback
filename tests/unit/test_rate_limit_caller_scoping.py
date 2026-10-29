@@ -28,6 +28,10 @@ def _app(rate_limit_per_minute: int, burst: int) -> FastAPI:
     async def append(payload: dict[str, str]) -> dict[str, str | bool]:
         return {"ok": True, "user_id": payload.get("user_id", "")}
 
+    @app.get("/admin/api/memories")
+    async def admin_memories() -> dict[str, bool]:
+        return {"ok": True}
+
     return app
 
 
@@ -81,3 +85,35 @@ def test_body_is_still_available_downstream_after_rate_limit_reads_it() -> None:
         response = client.post("/v2/memory/append", json=_body("t1", "u42"))
         assert response.status_code == 200
         assert response.json()["user_id"] == "u42"
+
+
+def test_the_admin_plane_is_rate_limited() -> None:
+    """管理面能删任意用户的全部记忆、还能列出全库 —— 免鉴权也得有速率上限。
+
+    免鉴权（D10）把「谁能调」交给了网络边界；速率上限管的是「一次能调多少」。
+    两者管的不是一回事，不能因为没有鉴权就把速率也一并放开。
+    """
+    with TestClient(_app(rate_limit_per_minute=1, burst=2)) as client:
+        assert client.get("/admin/api/memories").status_code == 200
+        assert client.get("/admin/api/memories").status_code == 200
+        rejected = client.get("/admin/api/memories")
+        assert rejected.status_code == 429
+        assert rejected.json()["error"]["code"] == "TB-1007"
+
+
+def test_admin_traffic_does_not_consume_the_peer_ip_fallback_bucket() -> None:
+    """管理面有自己的桶，不能跟业务面「取不到身份时按对端 IP」的桶共用一把。
+
+    共用的后果：治理台在批量操作时会把某个用户的业务写入挤到 429 ——
+    治理动作与业务流量互相伤害。
+    """
+    with TestClient(_app(rate_limit_per_minute=1, burst=2)) as client:
+        # 业务面取不到调用方标识 → 退回对端 IP，把那把桶用光
+        for _ in range(2):
+            assert client.post("/v2/memory/append", json={"note": "无身份"}).status_code == 200
+        assert client.post("/v2/memory/append", json={"note": "无身份"}).status_code == 429
+
+        # 管理面分桶独立，不受业务面影响
+        assert client.get("/admin/api/memories").status_code == 200
+        assert client.get("/admin/api/memories").status_code == 200
+        assert client.get("/admin/api/memories").status_code == 429

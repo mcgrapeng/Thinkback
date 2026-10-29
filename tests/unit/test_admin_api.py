@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 from typing import Any
 
@@ -532,3 +533,40 @@ def test_admin_config_masks_sensitive_values() -> None:
     # 管理面免鉴权后，这个端点对内网可达者全开放 —— 密钥必须真的脱敏。
     assert fields.get("memory_llm_key") == "***"
     assert "app_name" in fields and fields["app_name"]
+
+
+def test_the_unfiltered_memory_listing_is_audited() -> None:
+    """不传 user_id = 一次读走所有用户的记忆 —— 免鉴权的前提下必须留痕。
+
+    治理台的默认视图就是「全量」。免掉鉴权之后，这是一次调用就能把整个
+    记忆库拉走 —— 留痕记的是「什么时候、对端是谁、拿走了多少条」，
+    不写正文（与治理操作同一口径）。
+    """
+    client, service = build_client()
+    seed(service)
+
+    response = client.get("/admin/api/memories")
+
+    assert response.status_code == 200
+    audit = client.get("/admin/api/audit", params={"action": "list"}).json()
+    assert len(audit) == 1
+    assert audit[0]["operator"] == "admin"
+    assert audit[0]["detail"]["total"] == 2
+    assert audit[0]["detail"]["returned"] == 2
+    assert audit[0]["detail"]["peer"] == "testclient"
+    # 留痕不写正文
+    assert "User likes coffee" not in json.dumps(audit[0])
+
+
+def test_a_listing_scoped_to_one_user_is_not_audited() -> None:
+    """带 user_id 的查询是常规视图，不必每次留痕。
+
+    留痕的价值在「谁扫了全库」，不是「谁看了一条」。
+    """
+    client, service = build_client()
+    seed(service)
+
+    response = client.get("/admin/api/memories", params={"user_id": "user-1"})
+
+    assert response.status_code == 200
+    assert client.get("/admin/api/audit", params={"action": "list"}).json() == []

@@ -18,7 +18,7 @@ from collections.abc import Callable
 from typing import Any
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from loguru import logger
 
 from thinkback.api.dependencies import get_memory_service
@@ -73,7 +73,7 @@ def _parse_audit_action(raw: str | None) -> str | None:
     让操作员误以为"动作没产生数据"。"""
     if not raw:
         return None
-    known = {"delete", "update", "rebuild"}
+    known = {"delete", "update", "rebuild", "list"}
     if raw not in known:
         raise HTTPException(
             status_code=400,
@@ -183,6 +183,7 @@ def _parse_memory_statuses(raw: str | None) -> list[str] | None:
 
 @router.get("/memories", operation_id="admin_list_memories")
 async def admin_list_memories(
+    request: Request,
     service: MemoryService = Depends(get_memory_service),
     user_id: str | None = Query(default=None, description="用户 ID（不传=全量）"),
     memory_scope_id: str | None = Query(default=None),
@@ -194,9 +195,14 @@ async def admin_list_memories(
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
 ) -> dict[str, Any]:
-    """记忆检索：本地索引多用户视图（服务端分页 + 总数）。"""
+    """记忆检索：本地索引多用户视图（服务端分页 + 总数）。
 
-    return await asyncio.to_thread(
+    不传 ``user_id`` = 一次读走**所有用户**的记忆（治理台的默认视图）。
+    免鉴权的前提下这是数据面最大的一次暴露，所以留痕：什么时候、对端是谁、
+    拉走了多少条。留痕不写正文 —— 与治理操作同一口径。
+    """
+
+    result = await asyncio.to_thread(
         service.admin_list_memories,
         user_id=user_id,
         memory_scope_id=memory_scope_id,
@@ -204,6 +210,19 @@ async def admin_list_memories(
         limit=limit,
         offset=offset,
     )
+    if user_id is None:
+        _audit(
+            service,
+            "list",
+            memory_scope_id or "memories",
+            {
+                "scope": memory_scope_id or "",
+                "returned": len(result.get("items", [])),
+                "total": result.get("total", 0),
+                "peer": request.client.host if request.client else "unknown",
+            },
+        )
+    return result
 
 
 @router.get("/memories/{memory_id}/source", operation_id="admin_memory_source")
