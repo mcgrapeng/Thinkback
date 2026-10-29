@@ -14,7 +14,7 @@ from contextlib import contextmanager, suppress
 from copy import deepcopy
 from inspect import signature
 from pathlib import Path
-from threading import BoundedSemaphore, RLock
+from threading import BoundedSemaphore, Lock, RLock
 from typing import Any
 
 from loguru import logger
@@ -36,6 +36,10 @@ from thinkback.infra.milvus_collection import (
     mirror_rows,
 )
 
+#: 单条 DELETE 的占位符上限。SQLite 对一条语句的变量数有上限（老版本 999），
+#: ALL 范围要一次清几千个 memory_id，必须分块。
+_SQLITE_MAX_VARIABLES = 500
+
 THINKBACK_OPENAI_EMBEDDER_CLASS = (
     "thinkback.memory.embeddings.OpenAICompatibleEmbeddingNoDimensions"
 )
@@ -43,6 +47,10 @@ THINKBACK_OPENAI_EMBEDDER_CLASS = (
 # 只读操作：不需要 LLM 抽取，只要 embedding + 向量检索。
 # 它们用独立的并发预算，避免被慢速写路径（LLM 抽取）饿死。
 _READ_OPERATIONS = frozenset({"search", "get_all", "get"})
+
+#: 写锁分片数。mem0 写入按 (user, scope) 串行化（mem0 不是线程安全的），
+#: 分片数固定 = 锁表不随用户数增长；分片冲突只会多一次串行，不会出错。
+_WRITE_LOCK_STRIPES = 64
 
 #: 兼容旧引用名：默认指令现在住在 domain/prompts.py。
 THINKBACK_CUSTOM_INSTRUCTIONS = DEFAULT_EXTRACTION_INSTRUCTIONS
@@ -205,6 +213,13 @@ class Mem0LibraryMemoryBackend:
         # 关键路径上，不能被后台写入队列拖死，所以读有自己的一份额度。
         self._call_capacity = BoundedSemaphore(max_concurrent_calls)
         self._read_capacity = BoundedSemaphore(max_concurrent_calls)
+        # 写操作的串行化锁（按 user+scope 分片）。
+        # mem0 的 Memory 实例不是线程安全的：entity_store 是实例级懒加载属性，
+        # 实体链接是 linked_memory_ids 上的读-改-写 —— 同一用户的两次并发写
+        # 会互相覆盖，丢掉一条记忆 id，而且不报错（mem0 自己也有一张同类的
+        # 异步写入 bug：mem0ai/mem0#4892）。分片而不是一把大锁：不同用户
+        # 之间不互相阻塞。固定片数 = 锁表不会随用户数增长。
+        self._write_locks = tuple(Lock() for _ in range(_WRITE_LOCK_STRIPES))
         # 集合一致性级别只需提升一次（进程级；提到 Strong 后才记完成）。
         self._consistency_ensured = False
 
@@ -277,16 +292,22 @@ class Mem0LibraryMemoryBackend:
         )
         # 抽取指令：调用方给的是「全局默认 + 类型指令」拼好的版本（ADR-0014）。
         # 没给就退回全局默认 —— 配置级默认是空的，不能让写入裸奔。
-        result = self._call(
-            "add",
-            messages,
-            user_id=user_id,
-            agent_id=memory_scope_id,
-            metadata=scoped_metadata,
-            infer=infer,
-            prompt=prompt or DEFAULT_EXTRACTION_INSTRUCTIONS,
-            **expiration_kwargs,
-        )
+        #
+        # 写操作按 (user, scope) 串行：mem0 的 Memory 不是线程安全的
+        # （entity_store 是实例级懒加载属性，实体链接是 linked_memory_ids 上的
+        # 读-改-写），同一用户的两次并发写会互相覆盖、丢掉一条记忆 id。
+        # 按用户分片而不是一把大锁：不同用户之间不互相阻塞。
+        with self._write_lock_for(f"{user_id}\x00{memory_scope_id}"):
+            result = self._call(
+                "add",
+                messages,
+                user_id=user_id,
+                agent_id=memory_scope_id,
+                metadata=scoped_metadata,
+                infer=infer,
+                prompt=prompt or DEFAULT_EXTRACTION_INSTRUCTIONS,
+                **expiration_kwargs,
+            )
         events = self._results(result)
         # 迁移窗口内双写：新集合是主集合，旧集合挂在镜像位上跟着写，
         # 回滚只要改集合名，不用补数据。
@@ -412,7 +433,11 @@ class Mem0LibraryMemoryBackend:
 
         for attempt, delay in enumerate((*self._NOT_FOUND_RETRY_DELAYS, None)):
             try:
-                self._call("update", memory_id, data)
+                # update 也走 mem0 的实体链接（同样是读-改-写），要串行。
+                # 拿不到 user_id，用固定分片：update/delete 是低频路径，
+                # 共享一把锁的代价可以接受。
+                with self._write_lock_for(""):
+                    self._call("update", memory_id, data)
                 logger.bind(memory_id=memory_id, data_length=len(data), retried=attempt > 0).info(
                     "memory backend update completed"
                 )
@@ -468,7 +493,9 @@ class Mem0LibraryMemoryBackend:
 
         for delay in (*self._NOT_FOUND_RETRY_DELAYS, None):
             try:
-                self._call("delete", memory_id)
+                # delete 也会改 mem0 的实体链接（读-改-写），与 update 一样串行。
+                with self._write_lock_for(""):
+                    self._call("delete", memory_id)
             except RuntimeError as exc:
                 if isinstance(exc.__cause__, IndexError):
                     logger.bind(memory_id=memory_id, reason="missing_memory_id").info(
@@ -525,11 +552,16 @@ class Mem0LibraryMemoryBackend:
         数据的两个副本，擦除复核与 ALL 范围删除都要按并集算，否则镜像里
         残留的记录既查不出来也删不掉。镜像列不出来时异常照旧往上抛 ——
         擦除复核会把它当成「未能证明已删」而失败重试。
+
+        列出时带上**已过期**的记录：mem0 的 ``get_all`` 默认隐藏过期行，
+        而删除与擦除复核必须看得见它们 —— 看不见就列不出来、删不掉，
+        擦除却报「已完成」。记忆活得越久越擦不掉，与保留策略的方向正好相反。
         """
         result = self._call(
             "get_all",
             **self._scope_kwargs("get_all", user_id=user_id, memory_scope_id=memory_scope_id),
             **self._limit_kwargs("get_all", min(limit, MEMORY_LIST_PAGE_LIMIT)),
+            **self._show_expired_kwargs("get_all"),
         )
         items = self._results(result)
         if self.mirror is None:
@@ -543,8 +575,24 @@ class Mem0LibraryMemoryBackend:
                 items.append({"id": memory_id, "metadata": {}})
         return items
 
-    def delete_all(self, *, user_id: str, memory_scope_id: str) -> int:
-        """删除指定用户和记忆范围内的所有后端记忆。
+    def get(self, memory_id: str) -> dict[str, Any] | None:
+        """按 ID 取一条后端记忆；不存在返回 ``None``。
+
+        擦除复核靠它逐个点查：``get_all`` 一次只列一页，用户记录超过一页时
+        「目标还在不在」从列表里判断不出来（列表满了 ≠ 目标还在）。
+        """
+        result = self._call("get", memory_id)
+        if isinstance(result, dict):
+            return result or None
+        return None
+
+    def delete_all(self, *, user_id: str, memory_scope_id: str) -> list[str]:
+        """删除指定用户和记忆范围内的所有后端记忆，返回被删除的记忆 ID。
+
+        返回 ID 是必须的：mem0 的 delete 会把事实原文写进 history 表，
+        调用方要按这些 ID 把引擎侧原文清掉。只清本地索引里有的那批会漏掉
+        「抽取后索引失败」的暗数据 —— 原文留在引擎侧，擦除却报已完成。
+
 
         流程图::
 
@@ -590,28 +638,30 @@ class Mem0LibraryMemoryBackend:
         """
         page_limit = MEMORY_LIST_PAGE_LIMIT
         max_pages = 100  # 单调用最多清 100 万条，防止异常数据量下的无限循环
-        deleted = 0
+        deleted_ids: list[str] = []
         candidate_count = 0
         for _ in range(max_pages):
             result = self._call(
                 "get_all",
                 **self._scope_kwargs("get_all", user_id=user_id, memory_scope_id=memory_scope_id),
                 **self._limit_kwargs("get_all", page_limit),
+                **self._show_expired_kwargs("get_all"),
             )
             memory_ids = [str(memory.get("id", "")) for memory in self._results(result)]
             if not memory_ids:
                 break
             candidate_count += len(memory_ids)
-            deleted += self.delete_many(memory_ids)
+            self.delete_many(memory_ids)
+            deleted_ids.extend(memory_id for memory_id in memory_ids if memory_id)
             if len(memory_ids) < page_limit:
                 break
         logger.bind(
             user_id=user_id,
             memory_scope_id=memory_scope_id,
             candidate_count=candidate_count,
-            deleted_count=deleted,
+            deleted_count=len(deleted_ids),
         ).info("memory backend delete_all completed")
-        return deleted
+        return deleted_ids
 
     def _ensure_collection_consistency(self) -> None:
         """把 Milvus 集合的一致性级别提到 Strong（提到后才算完成）。
@@ -691,13 +741,36 @@ class Mem0LibraryMemoryBackend:
                 ).fetchall()
             }
             with connection:
-                if memory_ids and "history" in tables:
-                    placeholders = ",".join("?" for _ in memory_ids)
-                    cursor = connection.execute(
-                        f"DELETE FROM history WHERE memory_id IN ({placeholders})",
-                        memory_ids,
-                    )
-                    counts["history"] = max(cursor.rowcount, 0)
+                if memory_ids:
+                    if "history" not in tables:
+                        # 表结构漂移（mem0 改名/换表）→ 物理擦除无法被证明。
+                        # 契约要求「表结构不匹配时 fail-visible 并让操作失败，
+                        # 不允许静默跳过」（插件化设计 §7）：静默跳过后调用方仍会
+                        # 把擦除标成 completed，而原文还躺在引擎历史里 ——
+                        # 「物理擦除」这一档对外承诺就是假的。
+                        raise RuntimeError(
+                            "mem0 history table is missing; the engine schema changed, "
+                            "so physical erase cannot be proven. Refusing to report "
+                            "it as purged."
+                        )
+                    # 分块删：SQLite 的占位符有上限，ALL 范围一次要清几千个
+                    # memory_id，一条 IN 拼不下（too many SQL variables）。
+                    deleted_rows = 0
+                    for start in range(0, len(memory_ids), _SQLITE_MAX_VARIABLES):
+                        chunk = memory_ids[start : start + _SQLITE_MAX_VARIABLES]
+                        placeholders = ",".join("?" for _ in chunk)
+                        try:
+                            cursor = connection.execute(
+                                f"DELETE FROM history WHERE memory_id IN ({placeholders})",
+                                chunk,
+                            )
+                        except sqlite3.Error as exc:
+                            # 列名漂移（表还在、列没了）：同样 fail-visible。
+                            raise RuntimeError(
+                                f"mem0 history schema is incompatible: {exc}"
+                            ) from exc
+                        deleted_rows += max(cursor.rowcount, 0)
+                    counts["history"] = deleted_rows
                 if "messages" in tables:
                     scope_key = self._mem0_session_scope(user_id, namespace)
                     if purge_all_messages:
@@ -709,13 +782,17 @@ class Mem0LibraryMemoryBackend:
                     elif message_texts:
                         # 按正文删：Mem0 的消息表没有 session 维度，按 scope 删
                         # 会连别的会话一起删。只有被擦除轮次自己的原文该走。
-                        placeholders = ",".join("?" for _ in message_texts)
-                        cursor = connection.execute(
-                            "DELETE FROM messages WHERE session_scope = ? "
-                            f"AND content IN ({placeholders})",
-                            (scope_key, *message_texts),
-                        )
-                        counts["messages"] += max(cursor.rowcount, 0)
+                        deleted_messages = 0
+                        for start in range(0, len(message_texts), _SQLITE_MAX_VARIABLES):
+                            chunk = message_texts[start : start + _SQLITE_MAX_VARIABLES]
+                            placeholders = ",".join("?" for _ in chunk)
+                            cursor = connection.execute(
+                                "DELETE FROM messages WHERE session_scope = ? "
+                                f"AND content IN ({placeholders})",
+                                (scope_key, *chunk),
+                            )
+                            deleted_messages += max(cursor.rowcount, 0)
+                        counts["messages"] += deleted_messages
         finally:
             connection.close()
         logger.bind(
@@ -1217,6 +1294,10 @@ class Mem0LibraryMemoryBackend:
             return {"top_k": limit}
         return {"limit": limit}
 
+    def _write_lock_for(self, key: str) -> Lock:
+        """取写锁：同一 key 的写操作串行，不同 key 尽量并行。"""
+        return self._write_locks[hash(key) % _WRITE_LOCK_STRIPES]
+
     def _scope_kwargs(
         self, operation: str, *, user_id: str, memory_scope_id: str
     ) -> dict[str, Any]:
@@ -1229,6 +1310,20 @@ class Mem0LibraryMemoryBackend:
         if supports_top_level_scope:
             return {"user_id": user_id, "agent_id": memory_scope_id, "filters": None}
         return {"filters": {"user_id": user_id, "agent_id": memory_scope_id}}
+
+    def _show_expired_kwargs(self, operation: str) -> dict[str, Any]:
+        """列出时带上已过期记录（引擎支持该参数时）。
+
+        mem0 的 ``get_all`` 默认隐藏过期行。删除与擦除复核必须看得见它们：
+        看不见就列不出来、删不掉，擦除却报「已完成」—— 记忆活得越久越擦不掉，
+        与保留策略的方向正好相反。引擎版本不支持该参数时不传。
+        """
+        method = getattr(self.memory_client, operation)
+        try:
+            parameters = signature(method).parameters
+        except (TypeError, ValueError):
+            return {}
+        return {"show_expired": True} if "show_expired" in parameters else {}
 
     @staticmethod
     def _results(result: object) -> list[dict[str, Any]]:

@@ -122,8 +122,13 @@ class FakeMemoryBackend:
             if memory["user_id"] == user_id and memory["agent_id"] == memory_scope_id
         ][:limit]
 
-    def delete_all(self, *, user_id: str, memory_scope_id: str) -> int:
-        """删除指定 user+scope 范围内所有 fake 记忆，返回删除条数。"""
+    def get(self, memory_id: str) -> dict[str, Any] | None:
+        """按 ID 取一条 fake 记忆；不存在返回 None。"""
+        memory = self.memories.get(memory_id)
+        return dict(memory) if memory is not None else None
+
+    def delete_all(self, *, user_id: str, memory_scope_id: str) -> list[str]:
+        """删除指定 user+scope 范围内所有 fake 记忆，返回被删除的记忆 ID。"""
 
         matching = [
             memory_id
@@ -132,7 +137,7 @@ class FakeMemoryBackend:
         ]
         for memory_id in matching:
             self.memories.pop(memory_id, None)
-        return len(matching)
+        return list(matching)
 
     def purge_history(
         self,
