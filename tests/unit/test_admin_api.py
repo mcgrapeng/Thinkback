@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import UTC, datetime
 from typing import Any
 
@@ -570,3 +571,72 @@ def test_a_listing_scoped_to_one_user_is_not_audited() -> None:
 
     assert response.status_code == 200
     assert client.get("/admin/api/audit", params={"action": "list"}).json() == []
+
+
+def test_the_openapi_pattern_matches_the_runtime_action_set() -> None:
+    """schema 的 pattern 与运行时校验必须同源。
+
+    漂了的后果很具体：按 OpenAPI 生成的客户端会把 ``?action=list`` 当成
+    非法参数拒掉，而服务端其实认这个动作 —— 契约说一套、代码做一套。
+    """
+    from thinkback.api.admin import _AUDIT_ACTION_PATTERN
+
+    client, _service = build_client()
+    schema = client.get("/openapi.json").json()
+    params = schema["paths"]["/admin/api/audit"]["get"]["parameters"]
+    action_param = next(p for p in params if p["name"] == "action")
+
+    assert action_param["schema"]["pattern"] == _AUDIT_ACTION_PATTERN
+    for action in ("delete", "update", "rebuild", "list"):
+        assert re.fullmatch(action_param["schema"]["pattern"], action), action
+
+
+def test_an_unknown_audit_action_is_rejected() -> None:
+    """运行时校验与 schema 同源：集合外的动作一样 400。"""
+    client, _service = build_client()
+
+    response = client.get("/admin/api/audit", params={"action": "purge"})
+
+    assert response.status_code == 400
+
+
+def test_an_untracked_cross_user_listing_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
+    """留不下痕就不给读。
+
+    跨用户读取没有别的兜底（没有幂等、没有事务），审计是它唯一的控制点；
+    审计表坏了还照样把全库端出去，等于控制失效。
+    """
+    client, service = build_client()
+    seed(service)
+
+    def _boom(entry: Any) -> None:
+        raise RuntimeError("audit table is down")
+
+    monkeypatch.setattr(service.repository, "save_admin_audit", _boom)
+
+    response = client.get("/admin/api/memories")
+
+    assert response.status_code == 503
+
+
+def test_an_audit_write_failure_is_counted(monkeypatch: pytest.MonkeyPatch) -> None:
+    """审计失效不能只躺在日志里 —— 要能被 Prometheus 告警。"""
+    from thinkback.api import metrics
+
+    def _count() -> int:
+        text = metrics.render_prometheus()
+        matched = re.search(r"thinkback_admin_audit_write_failures_total (\d+)", text)
+        assert matched is not None, text
+        return int(matched.group(1))
+
+    before = _count()
+    client, service = build_client()
+    seed(service)
+
+    def _boom(entry: Any) -> None:
+        raise RuntimeError("audit table is down")
+
+    monkeypatch.setattr(service.repository, "save_admin_audit", _boom)
+    assert client.get("/admin/api/memories").status_code == 503
+
+    assert _count() == before + 1

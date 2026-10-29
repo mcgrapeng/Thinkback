@@ -40,6 +40,9 @@ class MetricsRegistry:
         # 原先把窗口计数当 counter 暴露：每 5 分钟归零一次，Prometheus 的
         # rate()/increase() 会把它当成进程重启 → 错误率与 SLO 全错。
         self._totals: dict[WindowKind, int] = dict.fromkeys(self._buckets, 0)
+        # 审计写失败单独计数：它不是「请求结果」，是「这次请求的留痕没写成」。
+        # 混进窗口计数会把治理台的吞吐卡片弄脏，所以另起一个计数器。
+        self._admin_audit_write_failures = 0
         self._lock = Lock()
 
     def _prune_locked(self, kind: WindowKind, now: float) -> None:
@@ -54,6 +57,11 @@ class MetricsRegistry:
             self._prune_locked(kind, now)
             self._buckets[kind].append(now)
             self._totals[kind] += 1
+
+    def record_admin_audit_write_failure(self) -> None:
+        """记一次审计写失败（可被告警：审计失效不能只躺在日志里）。"""
+        with self._lock:
+            self._admin_audit_write_failures += 1
 
     def totals(self) -> dict[WindowKind, int]:
         """进程启动以来的累计计数（只增不减，counter 语义）。"""
@@ -103,6 +111,11 @@ class MetricsRegistry:
         lines.append("# TYPE thinkback_request_window_5m gauge")
         for name, value in snap.items():
             lines.append(f'thinkback_request_window_5m{{kind="{name}"}} {int(value["count"])}')
+        lines.append("# HELP thinkback_admin_audit_write_failures_total Admin audit rows lost.")
+        lines.append("# TYPE thinkback_admin_audit_write_failures_total counter")
+        lines.append(
+            f"thinkback_admin_audit_write_failures_total {self._admin_audit_write_failures}"
+        )
         return "\n".join(lines) + "\n"
 
     def _snapshot_text(self, *, now: float | None = None) -> str:
@@ -120,6 +133,16 @@ def record_event(kind: WindowKind) -> None:
     """路由层调用：成功 / 失败事件入桶。"""
 
     _REGISTRY.record(kind)
+
+
+def record_admin_audit_write_failure() -> None:
+    """记一次审计写失败。
+
+    审计写失败只落在日志里的话，审计失效是**静默**的 —— 没人知道某段时间
+    的治理动作没有留痕。这个计数器进 ``/metrics``，可以被告警。
+    """
+
+    _REGISTRY.record_admin_audit_write_failure()
 
 
 def snapshot() -> dict[str, dict[str, float]]:

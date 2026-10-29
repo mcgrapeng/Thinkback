@@ -36,6 +36,7 @@ from thinkback.rpc.converters import (
     to_recall_request,
     to_update_request,
 )
+from thinkback.rpc.ratelimit import GrpcRateLimiter
 
 
 def _handle_error(exc: Exception, context: grpc.ServicerContext) -> None:
@@ -91,8 +92,14 @@ class MemoryServicer(memory_pb2_grpc.MemoryServiceServicer):
     一目了然（成功路径走 try 末尾、错误路径直接终结于 context.abort）。
     """
 
-    def __init__(self, service: MemoryService) -> None:
+    def __init__(
+        self,
+        service: MemoryService,
+        limiter: GrpcRateLimiter | None = None,
+    ) -> None:
         self._svc = service
+        # 限额与 HTTP 面同一份配置 —— 换个协议不该绕开限流。
+        self._limiter = limiter or GrpcRateLimiter.from_settings()
 
     def AppendEvent(
         self, request: pb.AppendEventRequest, context: grpc.ServicerContext
@@ -112,6 +119,7 @@ class MemoryServicer(memory_pb2_grpc.MemoryServiceServicer):
             raise RuntimeError("unreachable: _handle_error must abort")  # pragma: no cover
 
     def Recall(self, request: pb.RecallRequest, context: grpc.ServicerContext) -> pb.RecallResponse:
+        self._limiter.check(request, context)
         try:
             resp = self._svc.recall(to_recall_request(request))
             items = []
@@ -139,6 +147,7 @@ class MemoryServicer(memory_pb2_grpc.MemoryServiceServicer):
             raise RuntimeError("unreachable: _handle_error must abort")  # pragma: no cover
 
     def Delete(self, request: pb.DeleteRequest, context: grpc.ServicerContext) -> pb.DeleteResponse:
+        self._limiter.check(request, context)
         try:
             resp = self._svc.delete(to_delete_request(request))
             kw: dict[str, Any] = {
@@ -158,6 +167,7 @@ class MemoryServicer(memory_pb2_grpc.MemoryServiceServicer):
         self, request: pb.SuppressRequest, context: grpc.ServicerContext
     ) -> pb.SuppressResponse:
         """逻辑下架：不可召回，保留原文与墓碑。"""
+        self._limiter.check(request, context)
         try:
             resp = self._svc.suppress_memory(to_delete_request(request))
             kw: dict[str, Any] = {
@@ -175,6 +185,7 @@ class MemoryServicer(memory_pb2_grpc.MemoryServiceServicer):
 
     def Erase(self, request: pb.EraseRequest, context: grpc.ServicerContext) -> pb.EraseResponse:
         """物理擦除：原文不可恢复。"""
+        self._limiter.check(request, context)
         try:
             resp = self._svc.erase(to_delete_request(request))
             kw: dict[str, Any] = {
@@ -193,6 +204,7 @@ class MemoryServicer(memory_pb2_grpc.MemoryServiceServicer):
     def ListMemories(
         self, request: pb.ListMemoriesRequest, context: grpc.ServicerContext
     ) -> pb.ListMemoriesResponse:
+        self._limiter.check(request, context)
         try:
             resp = self._svc.list_memory_items(
                 user_id=request.user_id,
@@ -208,6 +220,7 @@ class MemoryServicer(memory_pb2_grpc.MemoryServiceServicer):
     def GetMemory(
         self, request: pb.GetMemoryRequest, context: grpc.ServicerContext
     ) -> pb.GetMemoryResponse:
+        self._limiter.check(request, context)
         try:
             resp = self._svc.get_memory_item(
                 user_id=request.user_id,
@@ -227,6 +240,7 @@ class MemoryServicer(memory_pb2_grpc.MemoryServiceServicer):
     def UpdateMemory(
         self, request: pb.UpdateMemoryRequest, context: grpc.ServicerContext
     ) -> pb.UpdateMemoryResponse:
+        self._limiter.check(request, context)
         try:
             resp = self._svc.update_memory(to_update_request(request))
             kw: dict[str, Any] = {
@@ -245,6 +259,7 @@ class MemoryServicer(memory_pb2_grpc.MemoryServiceServicer):
     def Rebuild(
         self, request: pb.RebuildRequest, context: grpc.ServicerContext
     ) -> pb.RebuildResponse:
+        self._limiter.check(request, context)
         try:
             resp = self._svc.rebuild(to_rebuild_request(request))
             return rebuild_response_to_pb(resp)
@@ -254,6 +269,7 @@ class MemoryServicer(memory_pb2_grpc.MemoryServiceServicer):
             raise RuntimeError("unreachable: _handle_error must abort")  # pragma: no cover
 
     def GetTask(self, request: pb.GetTaskRequest, context: grpc.ServicerContext) -> pb.TaskResponse:
+        self._limiter.check(request, context)
         try:
             resp = self._svc.get_task(request.task_id)
         except Exception as exc:
@@ -270,6 +286,7 @@ class MemoryServicer(memory_pb2_grpc.MemoryServiceServicer):
         request: pb.L3BackgroundStatusRequest,  # noqa: ARG002
         context: grpc.ServicerContext,
     ) -> pb.L3BackgroundStatusResponse:
+        self._limiter.check(request, context)
         try:
             s = self._svc.l3_background_status()
             return pb.L3BackgroundStatusResponse(

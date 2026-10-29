@@ -52,6 +52,14 @@ No authentication; reachable from the internal network only.
 | `GET` | `/admin/api/config` | Runtime config |
 | `POST` | `/admin/api/maintenance/reclaim-orphan-tasks` | Reclaim orphaned background tasks |
 
+`/admin/api/*` is rate limited (same bucket key as the business plane: the
+calling peer, since the admin plane has no caller identity of its own).
+
+Listing memories without `user_id` reads **every** user's memories, so it
+writes an audit row (`action=list`, no memory content). If that audit row
+cannot be written the request fails with 503 — the trail is the only control
+left on that read, so an untracked one is refused.
+
 API key management and live mem0 prompt editing were removed with the v1 public integration surface; extraction behaviour is configured by code (`THINKBACK_CUSTOM_INSTRUCTIONS`) and by the type profile in `profiles/`.
 
 ## Error codes
@@ -85,3 +93,7 @@ API key management and live mem0 prompt editing were removed with the v1 public 
 ## gRPC
 
 Full proto3 surface in `proto/memory.proto`. Service name: `MemoryService`.
+
+Rate limited with the same limits and the same bucket key as the HTTP
+business plane (`namespace` + `user_id`; the peer address when a request
+carries no user id). Switching protocol must not buy a bigger quota.
