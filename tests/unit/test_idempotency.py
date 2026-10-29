@@ -5,9 +5,12 @@ from __future__ import annotations
 import json
 import time
 
+import pytest
 from fastapi import FastAPI
+from fastapi.responses import JSONResponse
 from fastapi.testclient import TestClient
 
+from thinkback.api import idempotency as idempotency_module
 from thinkback.api.idempotency import (
     CACHE_TTL,
     CachedResponse,
@@ -172,3 +175,142 @@ def test_a_caller_with_and_without_explicit_namespace_shares_one_rate_limit_buck
     )
 
     assert omitted == explicit
+
+
+# ---------------------------------------------------------------------------
+# 取不到调用方标识时的退化路径（此前 0 覆盖）
+# ---------------------------------------------------------------------------
+
+
+def test_a_body_that_is_not_json_falls_back_to_the_peer_domain() -> None:
+    """body 不是 JSON → 取不到调用方标识 → 退回对端 IP 分域。
+
+    解析失败不是错误（这种写请求本来就不走幂等语义），但**不能**因此
+    把不同调用方压进同一个域 —— 那正是跨调用方数据泄漏的成因。
+    """
+    assert _caller_identity(b"not json at all") == ""
+
+
+def test_a_non_object_json_body_falls_back_to_the_peer_domain() -> None:
+    """JSON 但不是对象（数组/数字/字符串）→ 同样退回对端 IP 分域。"""
+    assert _caller_identity(b"[1, 2, 3]") == ""
+    assert _caller_identity(b'"just a string"') == ""
+
+
+def test_an_empty_body_falls_back_to_the_peer_domain() -> None:
+    assert _caller_identity(b"") == ""
+
+
+def test_a_body_without_a_usable_user_id_falls_back_to_the_peer_domain() -> None:
+    """缺 user_id / user_id 不是字符串 / user_id 只有空白 → 都取不到标识。"""
+    assert _caller_identity(json.dumps({"namespace": "thinkback"}).encode()) == ""
+    assert _caller_identity(json.dumps({"user_id": 42}).encode()) == ""
+    assert _caller_identity(json.dumps({"user_id": "   "}).encode()) == ""
+
+
+def test_a_non_string_namespace_falls_back_to_the_default_namespace() -> None:
+    """namespace 不是字符串 → 归一到默认域，而不是留空串。
+
+    留空串会让「省略 namespace」与「显式传默认值」落进两个分域：同一把
+    Idempotency-Key 既不重放也不报冲突，写入会真的执行两次。
+    """
+    identity = _caller_identity(json.dumps({"user_id": "tenant-A", "namespace": 7}).encode())
+
+    assert identity == "thinkback:tenant-A"
+
+
+# ---------------------------------------------------------------------------
+# 缓存容量淘汰与失败响应（此前 0 覆盖）
+# ---------------------------------------------------------------------------
+
+
+def _cached_response(body: bytes = b"{}") -> CachedResponse:
+    return CachedResponse(
+        body=body,
+        status_code=200,
+        content_type="application/json",
+        headers={},
+        timestamp=time.time(),
+    )
+
+
+def test_evicting_the_oldest_entry_also_clears_its_conflict_index(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """LRU 淘汰必须连带把冲突索引里的那条清掉。
+
+    ``_store`` 有上限（MAX_CACHE_SIZE），``_index`` 没有 —— 索引不跟着清理
+    的话，它会随着淘汰无限增长，而键对应的响应早就没了。这条路径以前
+    从没被走过：缓存一直比上限小，淘汰分支根本进不去。
+    """
+    monkeypatch.setattr(idempotency_module, "MAX_CACHE_SIZE", 2)
+    cache = IdempotencyCache()
+
+    cache.put("scope", "k1", "POST", "/v2/memory/a", "hash-1", _cached_response())
+    cache.put("scope", "k2", "POST", "/v2/memory/a", "hash-2", _cached_response())
+    cache.put("scope", "k3", "POST", "/v2/memory/a", "hash-3", _cached_response())
+
+    # 最早那条被淘汰了
+    assert cache.get("scope", "k1", "POST", "/v2/memory/a", "hash-1") is None
+    # 它的冲突索引也必须一起消失，否则 _index 无限增长
+    assert ("scope", "k1", "POST", "/v2/memory/a") not in cache._index
+    assert not cache.get_conflict("scope", "k1", "POST", "/v2/memory/a", "hash-1")
+
+
+def test_clear_expired_prunes_entries_past_the_ttl() -> None:
+    """过期条目必须能被清掉：TTL 到了之后同一把 key 可以重新用。"""
+    cache = IdempotencyCache()
+    stale = CachedResponse(
+        body=b"{}",
+        status_code=200,
+        content_type="application/json",
+        headers={},
+        timestamp=time.time() - CACHE_TTL - 1,
+    )
+    cache.put("scope", "k1", "POST", "/v2/memory/a", "hash-1", stale)
+
+    assert cache.clear_expired() == 1, "过期条目没被清掉"
+    assert cache.get("scope", "k1", "POST", "/v2/memory/a", "hash-1") is None
+
+
+def test_the_middleware_uses_the_shared_cache_instance() -> None:
+    """中间件必须用那个共享的缓存实例。
+
+    另起一个实例 = 每个 worker 各写各的幂等记录，重放与冲突检测在多副本
+    下全部失效 —— 而这正是幂等存在的理由。
+    """
+    from thinkback.api.idempotency import IdempotencyMiddleware, get_idempotency_cache
+
+    middleware = IdempotencyMiddleware(FastAPI())
+
+    assert middleware.cache is get_idempotency_cache()
+
+
+def test_a_failed_response_is_not_cached_and_can_be_retried() -> None:
+    """失败响应不得进缓存：重试必须真的再执行一次。
+
+    把 5xx 缓存起来 = 一次抖动把这次写入永久判成失败，客户端重试多少次
+    拿到的都是同一个错误，这次写入再也成功不了。
+    """
+    from thinkback.api.idempotency import IdempotencyMiddleware
+
+    app = FastAPI()
+    app.add_middleware(IdempotencyMiddleware)
+    calls = {"count": 0}
+
+    @app.post("/v2/memory/flaky")
+    async def flaky() -> JSONResponse:
+        calls["count"] += 1
+        if calls["count"] == 1:
+            return JSONResponse(status_code=503, content={"error": "boom"})
+        return JSONResponse(status_code=200, content={"ok": True})
+
+    client = TestClient(app)
+    headers = {"idempotency-key": "key-flaky"}
+
+    first = client.post("/v2/memory/flaky", headers=headers)
+    second = client.post("/v2/memory/flaky", headers=headers)
+
+    assert first.status_code == 503
+    assert second.status_code == 200, "失败响应被缓存了：重试拿到的是旧的失败"
+    assert calls["count"] == 2, "第二次请求没有真的执行"

@@ -199,3 +199,94 @@ def test_backend_update_event_keeps_local_text_in_sync() -> None:
     assert row is not None, "UPDATE 后仍应是活跃记忆"
     assert "狗" in row.memory_text, f"本地文本应更新为新值，实际是 {row.memory_text!r}"
     assert "猫" not in row.memory_text, f"本地文本应替换旧值，实际是 {row.memory_text!r}"
+
+
+# ---------------------------------------------------------------------------
+# 事件过滤与「二次遮罩」（此前 0 覆盖）
+# ---------------------------------------------------------------------------
+
+
+class _RecordingBackend(FakeMemoryBackend):
+    """记录 delete 调用，用来断言后端副本真的被删了。"""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.deleted: list[str] = []
+
+    def delete(self, memory_id: str) -> None:
+        self.deleted.append(memory_id)
+        super().delete(memory_id)
+
+
+def test_an_l3_event_whose_source_round_was_deleted_is_not_indexed() -> None:
+    """来源轮次已被删 → 这条 L3 事实不进本地索引，后端那份也要删掉。
+
+    删掉一轮对话后，mem0 里抽出来的结论还在；把它索引进本地 = 用户删了
+    原文，/items 里还留着结论。所以这里不但不索引，还要把后端副本删掉。
+
+    这是「二次遮罩」：写入与索引之间可能刚好落进一次删除，第一次遮罩
+    拦不住，得在真正建索引行之前再查一次。
+    """
+    repository = InMemoryMemoryRepository()
+    backend = _RecordingBackend()
+    service = MemoryService(repository=repository, backend=backend)
+
+    deleted = repository.add_memory_index(
+        backend_memory_id="deleted-1",
+        user_id=USER,
+        memory_scope_id=SCOPE,
+        source_refs=[{"session_id": "session-1", "round_id": "round-deleted"}],
+        memory_text="已删除的事实",
+    )
+    repository.mark_memory_deleted(deleted.memory_id)
+
+    service._index_l3_event(
+        {"id": "backend-l3-1", "memory": "用户喜欢猫", "event": "ADD"},
+        user_id=USER,
+        memory_scope_id=SCOPE,
+        source_refs=[{"session_id": "session-1", "round_id": "round-deleted"}],
+        l3_metadata={"source_text": "我喜欢猫"},
+    )
+
+    assert repository.get_active_memory_by_backend_id(USER, SCOPE, "backend-l3-1") is None, (
+        "来源轮次已删，这条 L3 事实不该进本地索引"
+    )
+    assert backend.deleted == ["backend-l3-1"], "后端那份没被删掉：结论还留在引擎侧"
+
+
+def test_an_unsupported_l3_event_is_skipped() -> None:
+    """NONE 事件（引擎判定「无变化」）不得进本地索引。
+
+    mem0 让 LLM 对每条事实给出 ADD/UPDATE/DELETE/NONE 判定。NONE 不该
+    产生任何索引行 —— 否则一次「无变化」会在 /items 里凭空多出一条记录。
+    """
+    repository = InMemoryMemoryRepository()
+    backend = _RecordingBackend()
+    service = MemoryService(repository=repository, backend=backend)
+
+    service._index_l3_event(
+        {"id": "backend-none", "memory": "用户喜欢猫", "event": "NONE"},
+        user_id=USER,
+        memory_scope_id=SCOPE,
+        source_refs=[{"session_id": "session-1", "round_id": "round-none"}],
+        l3_metadata={"source_text": "我喜欢猫"},
+    )
+
+    assert repository.get_active_memory_by_backend_id(USER, SCOPE, "backend-none") is None
+
+
+def test_an_l3_event_without_a_backend_id_is_skipped() -> None:
+    """没有 backend id 的事件建不出索引行，只能跳过。"""
+    repository = InMemoryMemoryRepository()
+    backend = _RecordingBackend()
+    service = MemoryService(repository=repository, backend=backend)
+
+    service._index_l3_event(
+        {"id": "", "memory": "用户喜欢猫", "event": "ADD"},
+        user_id=USER,
+        memory_scope_id=SCOPE,
+        source_refs=[{"session_id": "session-1", "round_id": "round-no-id"}],
+        l3_metadata={"source_text": "我喜欢猫"},
+    )
+
+    assert repository.list_memories(USER, SCOPE) == []

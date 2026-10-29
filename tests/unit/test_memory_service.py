@@ -9887,3 +9887,93 @@ def test_erase_purges_engine_history_with_backend_ids_and_scope() -> None:
     audit = repository.list_admin_audit()[-1]
     assert audit.detail["mem0_history_rows_deleted"] == 1
     assert audit.detail["mem0_message_rows_deleted"] == 2
+
+
+# ── append 与恢复路径的失败隔离（此前 0 覆盖） ──────────────────────────
+#
+# 这两条是「一处故障不至于毁掉整批」的契约：预取失败挡的是重复抽取，
+# 不是这一轮对话；一轮重放失败挡的是它自己，不是别的轮次。
+
+
+def test_a_failed_backend_prefetch_does_not_block_the_retry() -> None:
+    """重试时的对账预取失败不得挡住这次写入。
+
+    预取只在「重试上一条失败的任务」时发生（service.py:723），目的是复用
+    「上次已经写进后端、只是本地索引失败」的那些记录，避免重复抽取。
+
+    它失败时必须当没发生过：代价是这一次多抽一遍（一次 LLM 费用）；挡住
+    写入的代价是这轮对话彻底丢掉，而且用户看不到任何提示。
+    """
+
+    class _FlakyBackend(FakeMemoryBackend):
+        def __init__(self) -> None:
+            super().__init__()
+            self.add_calls = 0
+
+        def add(self, messages, **kwargs):  # type: ignore[no-untyped-def]
+            self.add_calls += 1
+            if self.add_calls == 1:
+                raise RuntimeError("mem0 add failed")
+            return super().add(messages, **kwargs)
+
+        def get_all(self, *, user_id, memory_scope_id, limit=200):  # type: ignore[no-untyped-def]
+            raise RuntimeError("backend unreachable")
+
+    repository = InMemoryMemoryRepository()
+    backend = _FlakyBackend()
+    service = MemoryService(repository=repository, backend=backend)
+    request = make_append(round_id="r-prefetch-fail", content="我负责 3nm 良率提升")
+
+    # 第一次写不进去：任务落 FAILED，append 把异常抛给调用方
+    with pytest.raises(RuntimeError, match="mem0 add failed"):
+        service.append(request)
+
+    second = service.append(request)
+
+    assert second.status == "completed", "预取失败把这次重试挡掉了"
+
+
+def test_one_failed_round_does_not_stop_the_others_from_recovering() -> None:
+    """一轮重放失败不得拖住其它轮次。
+
+    恢复是在进程启动时跑的：一条坏轮次让整个恢复循环中断，剩下每一轮
+    的事实都会一直悬着（本地索引缺一条，长期记忆少一条），直到下次
+    重启再试一次 —— 而下次同样会在那条坏轮次上停住。
+    """
+    repository = InMemoryMemoryRepository()
+    backend = FakeMemoryBackend()
+    service = MemoryService(repository=repository, backend=backend, l3_write_mode="async")
+
+    for round_id in ("r-bad", "r-good"):
+        entry = repository.save_round(make_append(round_id=round_id, content="我负责 3nm 良率提升"))
+        repository.update_l1(entry)
+        repository.save_task(
+            TaskEntry(
+                task_id=f"memory-extract:{round_id}",
+                request_id=f"req-{round_id}",
+                op_type=OperationType.WRITE_ROUND,
+                scope={
+                    "user_id": "user-1",
+                    "session_id": "session-1",
+                    "session_scope_id": "session-1",
+                    "long_term_scope_id": "thinkback",
+                    "round_id": round_id,
+                },
+                status=TaskStatus.RUNNING,
+            )
+        )
+
+    original = service._run_l3_write
+
+    def _flaky(**kwargs: object):  # type: ignore[no-untyped-def]
+        refs = kwargs.get("source_refs") or []
+        if refs and refs[0].get("round_id") == "r-bad":  # type: ignore[union-attr]
+            raise RuntimeError("replay failed")
+        return original(**kwargs)  # type: ignore[arg-type]
+
+    service._run_l3_write = _flaky  # type: ignore[method-assign]
+
+    recovered = service.recover_pending_writes()
+
+    assert recovered == 1, "坏轮次拖住了其它轮次的恢复"
+    assert len(repository.active_memories("user-1", "thinkback")) == 1

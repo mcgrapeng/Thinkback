@@ -215,6 +215,41 @@ def test_the_pet_kind_must_match_the_source() -> None:
     assert not memory_supported_by_source("User has a cat named Tom", _meta("我养了只狗叫Tom"))
 
 
+# ---------------------------------------------------------------------------
+# 鸟与兔：这两类的防捏造匹配表此前一次都没被跑过
+# ---------------------------------------------------------------------------
+#
+# 每种宠物的依据词是各自一张表（鸟认 bird/parrot/鸟/鹦鹉，兔认
+# rabbit/bunny/兔/兔子），H-1 修复又给中文加了持有关系词的前缀要求。
+# 表错了不是「这一条判错」，而是**一整类记忆**全部漏判或全部误判。
+
+
+def test_a_bird_pet_needs_a_bird_marker_in_the_source() -> None:
+    """鸟：源里必须有 bird/parrot/鸟/鹦鹉 之一。"""
+    assert memory_supported_by_source("User has a bird named Kiwi", _meta("我家养了只鹦鹉叫Kiwi"))
+    assert memory_supported_by_source("User has a bird named Kiwi", _meta("我养了只鸟叫Kiwi"))
+    assert not memory_supported_by_source("User has a bird named Kiwi", _meta("我在卖鸟粮"))
+
+
+def test_a_rabbit_pet_needs_a_rabbit_marker_in_the_source() -> None:
+    """兔：源里必须有 rabbit/bunny/兔/兔子 之一。
+
+    「兔粮」「兔肉」里的「兔」是普通名词，不是持有关系 —— H-1 修复给
+    中文加了持有关系词前缀要求，就是为了让这类词过不去。
+    """
+    assert memory_supported_by_source(
+        "User has a rabbit named Snowball", _meta("我家养了只兔子叫Snowball")
+    )
+    assert not memory_supported_by_source("User has a rabbit named Snowball", _meta("我在卖兔粮"))
+
+
+def test_a_pet_of_one_kind_does_not_pass_as_another_kind() -> None:
+    """种类对不上不算依据 —— 源里是兔子，记忆说是鸟，不行。"""
+    assert not memory_supported_by_source(
+        "User has a bird named Kiwi", _meta("我家养了只兔子叫Kiwi")
+    )
+
+
 def test_a_nickname_needs_both_the_name_and_a_nickname_marker() -> None:
     assert memory_supported_by_source("User prefers to be called 小明", _meta("叫我小明就行"))
     assert not memory_supported_by_source(
