@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import time
 from collections import OrderedDict
 from dataclasses import dataclass
@@ -27,6 +28,29 @@ MAX_CACHE_SIZE = 10000
 # 读路径不进幂等缓存。recall 返回的是记忆正文：缓存它意味着内容被擦除后，
 # 同一把 Idempotency-Key 仍能在 24h 内回放含旧内容的响应。
 READ_ONLY_PATHS = frozenset({"/v2/memory/recall"})
+
+
+def _caller_identity(body: bytes) -> str:
+    """从请求体里取调用方标识（namespace + user_id）。
+
+    取不到就返回空串：调用方退回到对端 IP 分域。解析失败不是错误 ——
+    body 不是 JSON 的写请求本来就不走幂等缓存的语义。
+    """
+    if not body:
+        return ""
+    try:
+        payload = json.loads(body)
+    except (ValueError, TypeError):
+        return ""
+    if not isinstance(payload, dict):
+        return ""
+    user_id = payload.get("user_id")
+    if not isinstance(user_id, str) or not user_id.strip():
+        return ""
+    namespace = payload.get("namespace")
+    if not isinstance(namespace, str) or not namespace.strip():
+        namespace = ""
+    return f"{namespace}:{user_id}"
 
 
 @dataclass
@@ -156,12 +180,12 @@ class IdempotencyMiddleware(BaseHTTPMiddleware):
         if not idem_key:
             return await call_next(request)
 
-        # 缓存按租户分域：不同租户用同一个 Idempotency-Key 是两件事。
-        scope = self._resolve_scope(request)
-
-        # 读 body(用于 hash)
+        # 读 body(用于 hash + 分域)
         body = await request.body()
         body_hash = hashlib.sha256(body).hexdigest()[:16]
+
+        # 缓存按调用方分域：不同调用方用同一个 Idempotency-Key 是两件事。
+        scope = self._resolve_scope(request, body)
 
         # 检查冲突：同 key 不同 body（按 method+path 区分端点）
         if self.cache.get_conflict(scope, idem_key, request.method, request.url.path, body_hash):
@@ -233,11 +257,18 @@ class IdempotencyMiddleware(BaseHTTPMiddleware):
         return response
 
     @staticmethod
-    def _resolve_scope(request: Request) -> str:
-        """幂等缓存的租户域 —— 从 Authorization 头解析 API key 拿 tenant。
+    def _resolve_scope(request: Request, body: bytes = b"") -> str:
+        """幂等缓存的调用方域。
 
-        解析不到（无 key / key 不存在）时用空串域：认证本身由 require_auth 负责，
-        这里只需要保证「不同租户不共享缓存条目」。
+        域必须是**调用方**而不是传输层：内网免鉴权后如果拿「直连对端 IP」当域，
+        k8s / ingress / sidecar 部署下所有外部调用方的 IP 都一样（网关地址），
+        域被压平成一个全局 —— 一个客户端用过 key ``k`` 之后，别的客户端再用
+        ``k``（body 不同）直接被判成冲突 409，一把 key 就能堵死别人的写路径。
+
+        没有鉴权时最接近「调用方」的标识是这次写入**为谁而写**：请求体里的
+        ``namespace`` + ``user_id``。取不到（没有这个字段的端点）才退回对端 IP。
         """
-        # 内网免鉴权：以客户端地址作为幂等隔离域（不再有租户/API key 概念）。
+        identity = _caller_identity(body)
+        if identity:
+            return identity
         return request.client.host if request.client and request.client.host else ""
