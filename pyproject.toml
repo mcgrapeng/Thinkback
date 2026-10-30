@@ -140,6 +140,8 @@ omit = [
 # 登记成存活正是上面说的「稀释门禁信噪比」。support.py 的昵称与沟通偏好
 # 依据词已经先补成用例（tests/unit/test_source_support_gap_contract.py），
 # 其余四个模块的补齐是独立一轮的工作。
+# （第七轮更新：support.py 的**判定逻辑**已拆到 source_order.py 并放回范围，
+# entities.py 也放回范围，理由见下方；support.py 剩下的依据词表仍不进范围。）
 
 # domain/slots/extractors.py **故意不进来**：它的体量几乎全是「措辞表」
 # （约 120 条正则 + 约 40 个 marker），而这些正则彼此重叠（一句
@@ -163,15 +165,26 @@ omit = [
 # 措辞表（错误文案、响应头名）那一部分变异体是「文案变了」，与行为无关，
 # 逐条登记只会稀释门禁信噪比，按下面的「刻意不钉死」处理。
 #
-# domain/content_quality.py、domain/slots/support.py、domain/entities.py、
-# domain/memory_types.py 同理**不进**变异范围：它们的变异体大面积落在
-# 「措辞表 / 展示文案 / 正则串」上（质量分的 reasons 文本、依据词表、属性名
-# 长度上限等），逐条杀掉就变成覆盖率报表而不是缺陷信号。决定行为的部分
-# 用各自的契约用例钉死：
+# domain/slots/source_order.py **这一轮进范围**（第七轮）：它是「哪个来源
+# 更新」「这条记忆是不是同源」「抽取闸门放不放行」的判据 —— 排序游标、
+# 同源判定、来源时间解析、抽取字节阈值。写反了线上表现是「用户改了偏好，
+# 系统还在用旧的那条」，必须由变异审计看守。
+# 它是从 domain/slots/support.py 拆出来的：support.py 里混着两类东西 ——
+# **判定逻辑**（进范围）与**依据词表**（不进范围）。词表项被改写是「措辞
+# 调整」，逐条钉死就变成覆盖率报表而不是缺陷信号；依据词表的**行为**
+# 由逐条隔离的契约用例守着
+# （tests/unit/test_source_marker_vocabulary.py、
+# tests/unit/test_source_support_gap_contract.py、
+# tests/unit/test_support_marker_isolation_contract.py）。
+#
+# domain/entities.py **这一轮进范围**（第七轮）：它是「事实是否过期」的
+# 唯一口径，召回 / 列表 / 槽位回填三处都问它。9 条用例、纯函数、判定分支
+# 极少 —— 收窄它没有信噪比收益，却丢掉了唯一的「改坏源码」保护。
+#
+# domain/content_quality.py、domain/memory_types.py **仍不进**范围：它们的
+# 变异体大面积落在「展示文案 / 正则串 / 属性名长度上限」上，逐条杀掉就变成
+# 覆盖率报表而不是缺陷信号。决定行为的部分用各自的契约用例钉死：
 # - 质量分的精确值 → tests/unit/test_content_quality_contract.py
-# - 来源仲裁与依据词表 → tests/unit/test_support_module_contract.py、
-#   tests/unit/test_source_marker_vocabulary.py
-# - 过期判定 → tests/unit/test_entities_expiry_contract.py
 # - 类型策略与默认注册表 → tests/unit/test_memory_type_profile_validation.py
 #   与 tests/unit/test_memory_types.py
 source_paths = ["src"]
@@ -205,6 +218,9 @@ only_mutate = [
     "src/thinkback/infra/structured_logging.py",
     "src/thinkback/rpc/converters.py",
     "src/thinkback/api/idempotency.py",
+    # 第七轮放回范围：来源仲裁与过期判定的唯一口径。
+    "src/thinkback/domain/slots/source_order.py",
+    "src/thinkback/domain/entities.py",
 ]
 pytest_add_cli_args_test_selection = [
     "tests/unit/test_memory_decay.py",
@@ -274,6 +290,15 @@ pytest_add_cli_args_test_selection = [
     # 来源仲裁口径（slots/support）：排序游标、同源判定、来源时间解析、
     # 抽取前的廉价闸门。
     "tests/unit/test_support_module_contract.py",
+    # 昵称与沟通偏好的依据词（slots/support）—— 放回变异范围后，
+    # 这份用例是那批「依据词被改写」的变异体的唯一杀手，必须被选中。
+    "tests/unit/test_source_support_gap_contract.py",
+    # 依据词表的**逐条隔离**用例（slots/support）：每个 marker 单独成立，
+    # 以及排序游标 / 字节阈值的**精确值**断言。
+    "tests/unit/test_support_marker_isolation_contract.py",
+    # 服务层调用到 support/entities 判定的那几条路径（写归属、冲突回落、
+    # 重建覆盖判定）—— 同上，不选则相关变异体全部存活。
+    "tests/unit/test_service_core_decisions.py",
     # 上下文别名表的子串匹配语义（query_slots.context_terms）。
     "tests/unit/test_context_alias_substring_contract.py",
     # 过期判定的唯一口径（entities.memory_is_expired）：召回 / 列表 /
