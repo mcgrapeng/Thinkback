@@ -9,12 +9,14 @@ import pytest
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from fastapi.testclient import TestClient
+from starlette.requests import Request
 
 from thinkback.api import idempotency as idempotency_module
 from thinkback.api.idempotency import (
     CACHE_TTL,
     CachedResponse,
     IdempotencyCache,
+    IdempotencyMiddleware,
     _caller_identity,
 )
 
@@ -23,7 +25,7 @@ def _app() -> FastAPI:
     from thinkback.api.idempotency import IdempotencyMiddleware
 
     app = FastAPI()
-    app.add_middleware(IdempotencyMiddleware)
+    app.add_middleware(IdempotencyMiddleware, cache=IdempotencyCache())
 
     @app.post("/v2/memory/a")
     async def route_a() -> dict[str, str]:
@@ -64,7 +66,7 @@ def test_read_path_is_not_cached_or_replayed() -> None:
     from thinkback.api.idempotency import IdempotencyMiddleware
 
     app = FastAPI()
-    app.add_middleware(IdempotencyMiddleware)
+    app.add_middleware(IdempotencyMiddleware, cache=IdempotencyCache())
     calls = {"n": 0}
 
     @app.post("/v2/memory/recall")
@@ -219,6 +221,70 @@ def test_a_non_string_namespace_falls_back_to_the_default_namespace() -> None:
     assert identity == "thinkback:tenant-A"
 
 
+def _request(body: bytes = b"", *, host: str = "10.0.0.7") -> Request:
+    """构造一个带对端地址的 Request（取不到调用方标识时的分域依据）。"""
+
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/v2/memory/events",
+        "headers": [],
+        "query_string": b"",
+        "client": (host, 12345),
+        "server": ("testserver", 80),
+        "scheme": "http",
+    }
+    return Request(scope, receive=_make_receive(body))
+
+
+def _make_receive(body: bytes):
+    """构造 ASGI 的 receive 回调（Request 构造时要一个可调用的 receive）。"""
+
+    async def receive() -> dict[str, object]:
+        return {"type": "http.request", "body": body, "more_body": False}
+
+    return receive
+
+
+def test_the_scope_falls_back_to_the_peer_address() -> None:
+    """取不到调用方标识时退回对端 IP —— 不能退化成空串（那就是全局一个域）。"""
+
+    request = _request(b"not json")
+
+    scope = IdempotencyMiddleware._resolve_scope(request, b"not json")
+
+    assert scope == "10.0.0.7"
+
+
+def test_the_scope_prefers_the_caller_identity_over_the_peer_address() -> None:
+    """能从请求体取到调用方标识时，就用它分域。"""
+
+    body = json.dumps({"user_id": "tenant-A"}).encode()
+    request = _request(body)
+
+    scope = IdempotencyMiddleware._resolve_scope(request, body)
+
+    assert scope == "thinkback:tenant-A"
+
+
+def test_a_request_without_a_client_still_gets_a_scope() -> None:
+    """没有对端地址时退回空串，但**不能**抛异常 —— 那会让整条写路径 500。"""
+
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/v2/memory/events",
+        "headers": [],
+        "query_string": b"",
+        "client": None,
+        "server": ("testserver", 80),
+        "scheme": "http",
+    }
+    request = Request(scope, receive=_make_receive(b""))
+
+    assert IdempotencyMiddleware._resolve_scope(request, b"") == ""
+
+
 # ---------------------------------------------------------------------------
 # 缓存容量淘汰与失败响应（此前 0 覆盖）
 # ---------------------------------------------------------------------------
@@ -286,6 +352,79 @@ def test_the_middleware_uses_the_shared_cache_instance() -> None:
     assert middleware.cache is get_idempotency_cache()
 
 
+def test_a_conflict_answers_with_the_documented_error_code() -> None:
+    """冲突响应的契约：错误码 TB-1005 + 409。
+
+    客户端按错误码分支处理；码变了就是静默的协议变更。
+    """
+    with TestClient(_app()) as client:
+        headers = {"Idempotency-Key": "conflict-code-key"}
+        client.post("/v2/memory/a", json={"user_id": "u"}, headers=headers)
+        conflict = client.post("/v2/memory/a", json={"user_id": "u", "x": 2}, headers=headers)
+
+        assert conflict.status_code == 409
+        assert conflict.json()["error"]["code"] == "TB-1005"
+        assert "request_id" in conflict.json()["error"]
+
+
+def test_the_cache_key_separates_scope_key_method_path_and_body() -> None:
+    """缓存键的每一维都要参与：少一维就是一次跨端点 / 跨调用方的串味。"""
+
+    cache = IdempotencyCache()
+    cache.put("scope-a", "k", "POST", "/v2/memory/a", "hash-1", _cached_response())
+
+    assert cache.get("scope-b", "k", "POST", "/v2/memory/a", "hash-1") is None
+    assert cache.get("scope-a", "other", "POST", "/v2/memory/a", "hash-1") is None
+    assert cache.get("scope-a", "k", "PUT", "/v2/memory/a", "hash-1") is None
+    assert cache.get("scope-a", "k", "POST", "/v2/memory/b", "hash-1") is None
+    assert cache.get("scope-a", "k", "POST", "/v2/memory/a", "hash-2") is None
+    assert cache.get("scope-a", "k", "POST", "/v2/memory/a", "hash-1") is not None
+
+
+def test_an_expired_entry_stops_conflicting_with_a_new_body() -> None:
+    """过期后换 body 必须放行：否则「过期后永远 409」，这把 key 就废了。"""
+
+    cache = IdempotencyCache()
+    stale = CachedResponse(
+        body=b"{}",
+        status_code=200,
+        content_type="application/json",
+        headers={},
+        timestamp=time.time() - CACHE_TTL - 1,
+    )
+    cache.put("scope", "k", "POST", "/v2/memory/a", "hash-old", stale)
+
+    assert cache.get_conflict("scope", "k", "POST", "/v2/memory/a", "hash-new") is False
+
+
+def test_a_different_body_under_the_same_key_is_a_conflict() -> None:
+    cache = IdempotencyCache()
+    cache.put("scope", "k", "POST", "/v2/memory/a", "hash-1", _cached_response())
+
+    assert cache.get_conflict("scope", "k", "POST", "/v2/memory/a", "hash-2") is True
+    assert cache.get_conflict("scope", "k", "POST", "/v2/memory/a", "hash-1") is False
+
+
+def test_a_key_prefix_is_not_a_conflict() -> None:
+    """key ``a`` 与 key ``a:b`` 是两把 key —— 前缀匹配会把它们误判成冲突。"""
+
+    cache = IdempotencyCache()
+    cache.put("scope", "a", "POST", "/v2/memory/a", "hash-1", _cached_response())
+
+    assert cache.get_conflict("scope", "a:b", "POST", "/v2/memory/a", "hash-2") is False
+
+
+def test_a_hit_refreshes_the_entry_position() -> None:
+    """命中的条目要移到队尾 —— 否则「最近用过」的会被先淘汰。"""
+
+    cache = IdempotencyCache()
+    cache.put("scope", "k1", "POST", "/v2/memory/a", "hash-1", _cached_response())
+    cache.put("scope", "k2", "POST", "/v2/memory/a", "hash-2", _cached_response())
+
+    assert cache.get("scope", "k1", "POST", "/v2/memory/a", "hash-1") is not None
+    assert list(cache._store)[0][1] == "k2"
+
+
 def test_a_failed_response_is_not_cached_and_can_be_retried() -> None:
     """失败响应不得进缓存：重试必须真的再执行一次。
 
@@ -295,7 +434,7 @@ def test_a_failed_response_is_not_cached_and_can_be_retried() -> None:
     from thinkback.api.idempotency import IdempotencyMiddleware
 
     app = FastAPI()
-    app.add_middleware(IdempotencyMiddleware)
+    app.add_middleware(IdempotencyMiddleware, cache=IdempotencyCache())
     calls = {"count": 0}
 
     @app.post("/v2/memory/flaky")

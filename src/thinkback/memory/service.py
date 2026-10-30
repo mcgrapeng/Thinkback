@@ -57,16 +57,13 @@ from thinkback.domain.slots import (
     memory_context_allowed,
     memory_supported_by_source,
     p0_canonical_memories_from_source,
-    p0_canonical_memory_for_source_slot,
     query_conflict_slot,
     query_conflict_slots,
-    query_is_broad_memory_request,
     round_order,
     should_extract_to_l3,
     source_canonical_memory_text,
     source_cursor,
     source_cursor_from_refs,
-    source_has_any,
 )
 from thinkback.domain.summarization import SummaryComposer
 from thinkback.infra.structured_logging import LOGGER_MEMORY
@@ -4628,10 +4625,6 @@ L2 更新 (缓存失效)
         return isinstance(combined, (int, float)) and combined >= threshold
 
     @staticmethod
-    def _query_is_broad_memory_request(query: str) -> bool:
-        return query_is_broad_memory_request(query)
-
-    @staticmethod
     def _context_terms(text: str) -> set[str]:
         return context_terms(text)
 
@@ -5642,10 +5635,6 @@ L2 更新 (缓存失效)
             memory_text, l3_metadata, allowed_slots=settings.memory_p0_slots_list
         )
 
-    @staticmethod
-    def _source_has_any(source_text: str, markers: tuple[str, ...]) -> bool:
-        return source_has_any(source_text, markers)
-
     @classmethod
     def _p0_canonical_memories_from_source(cls, source_text: str) -> list[str]:
         return p0_canonical_memories_from_source(source_text)
@@ -5673,10 +5662,6 @@ L2 更新 (缓存失效)
         if source_canonical is not None:
             return source_canonical, True
         return canonical_memory_text_from_source(memory_text, l3_metadata), False
-
-    @classmethod
-    def _p0_canonical_memory_for_source_slot(cls, memory_text: str, source_text: str) -> str | None:
-        return p0_canonical_memory_for_source_slot(memory_text, source_text)
 
     def _l3_metadata(
         self, source_refs: list[dict[str, str]], request_metadata: dict[str, Any]
@@ -5880,18 +5865,6 @@ L2 更新 (缓存失效)
             return None
         return max(cutoffs)
 
-    def _round_is_after_delete_all_cutoff(
-        self,
-        entry: JournalEntry,
-        *,
-        user_id: str,
-        memory_scope_id: str,
-    ) -> bool:
-        cutoff = self._delete_all_cutoff(user_id, memory_scope_id)
-        if cutoff is None:
-            return True
-        return self._round_is_after_timestamp(entry.source_timestamp, cutoff)
-
     def _session_delete_cutoff(
         self, user_id: str, memory_scope_id: str, session_id: str
     ) -> datetime | None:
@@ -5909,18 +5882,6 @@ L2 更新 (缓存失效)
         if not cutoffs:
             return None
         return max(cutoffs)
-
-    def _round_is_after_session_delete_cutoff(
-        self,
-        entry: JournalEntry,
-        *,
-        user_id: str,
-        memory_scope_id: str,
-    ) -> bool:
-        cutoff = self._session_delete_cutoff(user_id, memory_scope_id, entry.session_id)
-        if cutoff is None:
-            return True
-        return self._round_is_after_timestamp(entry.source_timestamp, cutoff)
 
     def _rebuild_rounds(self, request: RebuildMemoryRequest) -> list[JournalEntry]:
         l3_scope_id = self._long_term_scope_id(request)

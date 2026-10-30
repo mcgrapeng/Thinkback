@@ -166,9 +166,13 @@ def get_idempotency_cache() -> IdempotencyCache:
 class IdempotencyMiddleware(BaseHTTPMiddleware):
     """只对 /v1/* 的写操作(POST/PUT/DELETE/PATCH)做幂等保护。"""
 
-    def __init__(self, app: ASGIApp) -> None:
+    def __init__(self, app: ASGIApp, cache: IdempotencyCache | None = None) -> None:
         super().__init__(app)
-        self.cache = _idempotency_cache
+        # 默认用全局共享实例 —— 多副本下幂等的前提（见 get_idempotency_cache）。
+        # 测试可以注入自己的缓存：全局实例是**进程级**的，同一把 key 在同一
+        # 进程里跑第二遍时会命中上一轮缓存的响应，用例就不再确定（变异审计
+        # 在同一个进程里反复跑同一批用例，正好会踩到）。
+        self.cache = cache if cache is not None else _idempotency_cache
 
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
         # 只处理业务记忆路径的写操作（内网免鉴权，/memory/* 为唯一业务面）

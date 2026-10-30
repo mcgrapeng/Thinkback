@@ -3,6 +3,7 @@ from collections.abc import Generator
 
 import pytest
 from fastapi.testclient import TestClient
+from hypothesis import HealthCheck
 from hypothesis import settings as hypothesis_settings
 
 from thinkback.api import app as app_module
@@ -23,8 +24,18 @@ from thinkback.infra.database import engine as engine_module
 # - 变异审计下样例数压到 20：每个变异体都要把选中的测试整套重跑一遍，
 #   1000 个变异体 × 200 个样例 = 门禁跑几小时。20 个样例足以杀掉真变异体
 #   —— 杀不掉的那些是「样例再多也杀不掉」的等价变异，本来就该登记为存活。
+# - 变异审计下关掉 ``differing_executors`` 健康检查：mutmut 用多个 worker
+#   并行跑同一批用例，同一个属性测试天然会在不同 worker 进程里各跑一遍。
+#   这个检查防的是「同一个测试被不同执行器跑 → 回放不稳定」，指的是 flaky
+#   测试；这里跑的是纯函数属性测试（round_sort_key 之类），没有共享状态，
+#   并行执行不会让它变得不稳定。
 hypothesis_settings.register_profile("thinkback", max_examples=100, deadline=None)
-hypothesis_settings.register_profile("thinkback-mutation", max_examples=20, deadline=None)
+hypothesis_settings.register_profile(
+    "thinkback-mutation",
+    max_examples=20,
+    deadline=None,
+    suppress_health_check=[HealthCheck.differing_executors],
+)
 hypothesis_settings.load_profile(
     "thinkback-mutation" if os.environ.get("MUTANT_UNDER_TEST") else "thinkback"
 )
