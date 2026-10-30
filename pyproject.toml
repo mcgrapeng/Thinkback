@@ -111,8 +111,16 @@ omit = [
 
 [tool.mutmut]
 # 变异测试审计范围：小而纯的逻辑模块。source_paths 必须整棵 src
-# （mutants 树要能 import 完整包），用 only_mutate 收窄变异目标；
-# service.py（6000+ 行）全量变异留给 CI 夜间任务。
+# （mutants 树要能 import 完整包），用 only_mutate 收窄变异目标。
+#
+# service.py（6000+ 行）**不进**变异范围 —— 这里原先写着「全量变异留给
+# CI 夜间任务」，但那条任务从来不存在：ci.yml 的 nightly-full 跑的是
+# make check，与 PR 门禁是同一个范围。按上面的收窄标准，整份 service.py
+# 进范围会产生上千个「日志文案变了」的噪音变异体，稀释门禁信噪比。
+# service.py 里真正决定结果的部分由两条路覆盖：
+#   1. 能下沉成纯函数的，已下沉到 domain/ 并进了下面的 only_mutate；
+#   2. 下沉不了的（冲突策略回落 / 索引生命周期 / 重建覆盖判定 / 删除截止），
+#      由 tests/unit/test_service_core_decisions.py 的契约用例钉住。
 #
 # 收窄标准：**纯函数 + 有判定分支**。这类模块的变异体才代表真实缺陷
 # （比较方向翻转、阈值差一、份额写反）；胶水代码的变异体只会是
@@ -124,7 +132,6 @@ omit = [
 # domain/slots/canonical.py 是同一类东西：规范化文本 + 冲突槽位判定，
 # 也就是「什么算一条冲突事实」的共用口径。它同样是纯函数 + 判定分支，
 # 同样此前**一个变异体都没有** —— 第五轮审计补进来。
-#
 # domain/slots/extractors.py **故意不进来**：它的体量几乎全是「措辞表」
 # （约 120 条正则 + 约 40 个 marker），而这些正则彼此重叠（一句
 # "preferred name from Bob to Carol" 同时命中 7 条正则：3 条
@@ -133,7 +140,43 @@ omit = [
 # **只命中它**的样例 —— 那是「覆盖率报表」，不是缺陷信号：按上面的收窄
 # 标准，登记成存活只会稀释门禁的信噪比。措辞表逐条钉死这件事单独立项
 # （见 tests/unit/test_slot_extraction_real.py 的措辞用例），不进变异审计。
+#
+# memory/schemas.py **故意不进来**：它是 pydantic 模型定义，mutmut 会把
+# Field(description=...) / 报错文案 / 正则串全变一遍 —— 那些变异体绝大多数
+# 是「文案变了」，与行为无关。而它里面真正决定行为的**校验器**（空 ID、
+# namespace 形状、metadata 上限、删除范围互斥、预算越界）改坏时全是真实
+# 缺陷 —— 这一层用逐条契约用例钉死
+# （见 tests/unit/test_schemas_validation_contract.py），不进变异审计。
+#
+# api/idempotency.py **不进**变异范围（与 memory/schemas.py 同理）：它的
+# 变异体绝大多数落在「错误文案 / 响应头」这类与行为无关的文本上；而它里面
+# 真正决定行为的判定（同 key 同 body 重放、同 key 不同 body 报冲突、跨调用方
+# 分域、TTL 与 LRU 淘汰）改坏时全是真实缺陷 —— 「同 key 不同 body 不报冲突」
+# = 写路径上同一把 key 能把写操作执行两次，代价是重复记忆。这一层用逐条
+# 契约用例钉死（见 tests/unit/test_idempotency.py 与 tests/unit/test_api_worker_shedding.py），
+# 不进变异审计。
+#
+# domain/content_quality.py、domain/slots/support.py、domain/entities.py、
+# domain/memory_types.py 同理**不进**变异范围：它们的变异体大面积落在
+# 「措辞表 / 展示文案 / 正则串」上（质量分的 reasons 文本、依据词表、属性名
+# 长度上限等），逐条杀掉就变成覆盖率报表而不是缺陷信号。决定行为的部分
+# 用各自的契约用例钉死：
+# - 质量分的精确值 → tests/unit/test_content_quality_contract.py
+# - 来源仲裁与依据词表 → tests/unit/test_support_module_contract.py、
+#   tests/unit/test_source_marker_vocabulary.py
+# - 过期判定 → tests/unit/test_entities_expiry_contract.py
+# - 类型策略与默认注册表 → tests/unit/test_memory_type_profile_validation.py
+#   与 tests/unit/test_memory_types.py
 source_paths = ["src"]
+# mutmut 只把 source_paths / tests/ / pyproject.toml 等复制进 mutants/ 树。
+# 仓库根的 profiles/（随包发布的类型 profile 与抽取指令）与 Dockerfile
+# 是**数据 / 部署产物**，不复制过去的话：
+# - mutants/tests/unit/test_memory_types.py 里 `Path(__file__).parents[2] / "profiles"`
+#   指向 mutants/profiles —— 不存在，加载退回默认注册表，随包 profile 的用例必红；
+# - mutants/tests/unit/test_memory_type_profile.py 用 `Path("Dockerfile")`（相对 cwd）
+#   读镜像清单 —— cwd 是 mutants/，同样读不到。
+# mutmut 的「先跑一遍干净基线」这一步直接失败，审计根本跑不起来。
+also_copy = ["profiles", "Dockerfile"]
 # mutmut 的超时 = (估算用时 + 1) × timeout_multiplier。估算值来自空载机器上的
 # 单次测试耗时，而实际是 8 个 worker 并行跑 —— 墙钟时间会膨胀 3~5 倍。
 # 倍数太小会出现**假超时**：明明跑完了、被判成 timeout，白白算成「没杀掉」。
@@ -147,11 +190,13 @@ only_mutate = [
     "src/thinkback/domain/classification.py",
     "src/thinkback/domain/safety.py",
     "src/thinkback/domain/slots/canonical.py",
+    "src/thinkback/domain/slots/query_slots.py",
     "src/thinkback/memory/decay.py",
     "src/thinkback/memory/task_state.py",
     "src/thinkback/memory/retention.py",
     "src/thinkback/memory/repositories/_l1_cache.py",
     "src/thinkback/infra/structured_logging.py",
+    "src/thinkback/rpc/converters.py",
 ]
 pytest_add_cli_args_test_selection = [
     "tests/unit/test_memory_decay.py",
@@ -182,6 +227,46 @@ pytest_add_cli_args_test_selection = [
     "tests/unit/test_slot_extraction_real.py",
     "tests/unit/test_slot_extraction_chinese_nickname.py",
     "tests/unit/test_slot_extraction_chinese_preferences.py",
+    # 查询侧槽位与 gRPC 转换层：query_slots 的槽位判定（第一人称共现、槽位
+    # 优先级、n-gram 窗口）与 converters 的阈值夹取都要有能杀它们的用例。
+    "tests/unit/test_query_slot_matching.py",
+    "tests/unit/test_query_slot_third_person.py",
+    "tests/unit/test_query_slot_contract.py",
+    "tests/unit/test_memory_grpc.py",
+    "tests/unit/test_rpc_converters_contract.py",
+    # 质量打分口径（content_quality）与槽位支持口径（slots/support）：
+    # 不选对应用例，这两个模块的变异体会因为「选择集里没有能杀它的用例」
+    # 而全部存活 —— 门禁看到的是一片红，实际是用例没被选中。
+    "tests/unit/test_content_quality.py",
+    # 质量打分的**精确值**契约：方向钉住了不等于阈值钉住了（把「锚点出现
+    # 次数上限 4」写成 3，方向没变，但选出来的记忆变了）。不选它，
+    # content_quality 的数值型变异体会全部存活。
+    "tests/unit/test_content_quality_contract.py",
+    "tests/unit/test_write_pre_filter.py",
+    # 类型策略的校验与解析（memory_types）：注册表构造、prompt 版本、
+    # 属性名抽取、角色准入。
+    "tests/unit/test_memory_types.py",
+    "tests/unit/test_memory_type_policy.py",
+    "tests/unit/test_memory_type_profile.py",
+    "tests/unit/test_memory_type_profile_validation.py",
+    "tests/unit/test_memory_type_conflict_attribute.py",
+    # 过期判定（entities.memory_is_expired）与「这条记忆撑不撑得起来源」。
+    "tests/unit/test_temporal_validity.py",
+    "tests/unit/test_domain_properties.py",
+    # 幂等保证（api/idempotency）：域解析、冲突检测、TTL 清理、LRU 淘汰。
+    # 不选它，idempotency 的变异体会因为「选择集里没有能杀它的用例」而存活。
+    "tests/unit/test_idempotency.py",
+    # 防捏造闸门的依据词表（slots/support）：每个 marker 都要能独立成为证据。
+    # 不选它，那 180 个「某个依据词被改写」的变异体会全部存活。
+    "tests/unit/test_source_marker_vocabulary.py",
+    # 来源仲裁口径（slots/support）：排序游标、同源判定、来源时间解析、
+    # 抽取前的廉价闸门。
+    "tests/unit/test_support_module_contract.py",
+    # 上下文别名表的子串匹配语义（query_slots.context_terms）。
+    "tests/unit/test_context_alias_substring_contract.py",
+    # 过期判定的唯一口径（entities.memory_is_expired）：召回 / 列表 /
+    # 槽位回填三处共用的过期口径，在 entities.py 的变异范围内，必须被选中。
+    "tests/unit/test_entities_expiry_contract.py",
 ]
 
 [tool.hatch.build.targets.wheel.force-include]

@@ -135,10 +135,6 @@ class MemoryTypeRegistry:
     def names(self) -> list[str]:
         return sorted(self.types)
 
-    def default_type(self) -> MemoryTypeSpec:
-        """未指定类型时的兜底：profile 类型（当前行为）。"""
-        return self.types["profile"]
-
 
 def default_registry() -> MemoryTypeRegistry:
     """内置默认注册表：不配置时行为与现在一致。"""
