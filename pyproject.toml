@@ -120,6 +120,19 @@ omit = [
 #
 # recall_policy 是记忆系统里逻辑最密的一块（去重 / 槽位仲裁 / 预算分配 /
 # 逐层裁剪），此前**一个变异体都没有** —— 第四轮审计把它列成了缺口。
+#
+# domain/slots/canonical.py 是同一类东西：规范化文本 + 冲突槽位判定，
+# 也就是「什么算一条冲突事实」的共用口径。它同样是纯函数 + 判定分支，
+# 同样此前**一个变异体都没有** —— 第五轮审计补进来。
+#
+# domain/slots/extractors.py **故意不进来**：它的体量几乎全是「措辞表」
+# （约 120 条正则 + 约 40 个 marker），而这些正则彼此重叠（一句
+# "preferred name from Bob to Carol" 同时命中 7 条正则：3 条
+# preferred name from X to Y + 4 条 from X to Y）。于是它的变异体
+# 绝大多数是「某条措辞不被识别」，而要杀掉它们就得给每条措辞配一个
+# **只命中它**的样例 —— 那是「覆盖率报表」，不是缺陷信号：按上面的收窄
+# 标准，登记成存活只会稀释门禁的信噪比。措辞表逐条钉死这件事单独立项
+# （见 tests/unit/test_slot_extraction_real.py 的措辞用例），不进变异审计。
 source_paths = ["src"]
 # mutmut 的超时 = (估算用时 + 1) × timeout_multiplier。估算值来自空载机器上的
 # 单次测试耗时，而实际是 8 个 worker 并行跑 —— 墙钟时间会膨胀 3~5 倍。
@@ -133,6 +146,7 @@ only_mutate = [
     "src/thinkback/domain/dedup.py",
     "src/thinkback/domain/classification.py",
     "src/thinkback/domain/safety.py",
+    "src/thinkback/domain/slots/canonical.py",
     "src/thinkback/memory/decay.py",
     "src/thinkback/memory/task_state.py",
     "src/thinkback/memory/retention.py",
@@ -160,6 +174,14 @@ pytest_add_cli_args_test_selection = [
     "tests/unit/test_classification_contract.py",
     "tests/unit/test_structured_logging.py",
     "tests/unit/test_domain_dedup.py",
+    # 槽位抽取与规范化的变异目标在 domain/slots/ 下：不选上对应的用例，
+    # canonical/extractors 的变异体会因为「选择集里没有能杀它的用例」而
+    # 全部存活 —— 门禁看到的是一片红，实际是用例没被选中。
+    "tests/unit/test_p0_source_support_gate.py",
+    "tests/unit/test_slot_canonical_contract.py",
+    "tests/unit/test_slot_extraction_real.py",
+    "tests/unit/test_slot_extraction_chinese_nickname.py",
+    "tests/unit/test_slot_extraction_chinese_preferences.py",
 ]
 
 [tool.hatch.build.targets.wheel.force-include]
