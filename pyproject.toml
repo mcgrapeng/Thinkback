@@ -212,6 +212,9 @@ pytest_add_cli_args_test_selection = [
     "tests/unit/test_repository_contract.py",
     "tests/unit/test_domain_pure_functions.py",
     "tests/unit/test_l2_llm_summary.py",
+    # L2 摘要解析器（memory/l2_refresh.parse_summary_sections）的逐条契约：
+    # JSON 路径 / 【】路径 / 两者之间的回退条件。
+    "tests/unit/test_l2_summary_parser_contract.py",
     "tests/unit/test_recall_policy.py",
     "tests/unit/test_recall_policy_properties.py",
     "tests/unit/test_recall_policy_contract.py",
