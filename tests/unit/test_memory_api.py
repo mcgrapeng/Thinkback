@@ -259,6 +259,42 @@ def test_append_recall_delete_task_api(client, monkeypatch) -> None:
     assert task_response.json()["status"] == "completed"
 
 
+def test_an_unregistered_memory_type_is_rejected_with_400(client, monkeypatch) -> None:
+    """类型名必须是该 namespace 已注册的类型 —— 未注册是调用方的错（400）。
+
+    这条规则**无法用 OpenAPI 表达**：类型注册表按 namespace 动态加载，
+    静态 schema 里写不出「这个 namespace 注册了哪些类型」。
+    fuzz 审计因此放行 400（见 tests/fuzz/test_openapi_contract.py 的豁免说明），
+    行为本身由这条用例钉死。
+    """
+
+    service = MemoryService(repository=InMemoryMemoryRepository(), backend=FakeMemoryBackend())
+    monkeypatch.setattr("thinkback.api.dependencies._memory_service", service)
+
+    response = client.post(
+        "/v2/memory/events",
+        json={**append_payload(), "memory_type": "no-such-type"},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "TB-1001"
+    assert "no-such-type" in response.json()["error"]["message"]
+
+
+def test_a_registered_memory_type_is_accepted(client, monkeypatch) -> None:
+    """对照组：注册过的类型名必须被接受（别把上面的 400 写成一刀切）。"""
+
+    service = MemoryService(repository=InMemoryMemoryRepository(), backend=FakeMemoryBackend())
+    monkeypatch.setattr("thinkback.api.dependencies._memory_service", service)
+
+    response = client.post(
+        "/v2/memory/events",
+        json={**append_payload(), "memory_type": "preference"},
+    )
+
+    assert response.status_code == 200
+
+
 def test_memory_management_routes_list_get_update_and_hide_internal_fields(
     client, monkeypatch
 ) -> None:

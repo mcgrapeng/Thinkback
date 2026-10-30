@@ -33,10 +33,15 @@ from thinkback.memory.service import MemoryService
 # 四类已知豁免（弱区留痕，见 docs/report/testing-toolchain-audit.md）：
 # - allow_header_conformance：FastAPI 按 method 拆分路由，405 的 Allow 只含
 #   命中路由的方法集，Starlette 固有语义。
-# - positive_data_acceptance 放行 422：跨字段业务规则无法用 OpenAPI 表达
-#   （append 需完整 user→assistant 轮；delete scope=all 禁带 memory_id；
-#   content 去空白后非空），由单测钉死。新拒绝规则先试 schema 表达
+# - positive_data_acceptance 放行 422 与 400：跨字段/跨注册表的业务规则无法用
+#   OpenAPI 表达（append 需完整 user→assistant 轮；delete scope=all 禁带
+#   memory_id；content 去空白后非空；**memory_type 必须是该 namespace 已注册的
+#   类型**——注册表按 namespace 动态加载，静态 schema 写不出「这个 namespace
+#   注册了哪些类型」），由单测钉死。新拒绝规则先试 schema 表达
 #   （minLength 等），确实不可表达再放宽。
+#   - 422 → 由 pydantic 的字段级校验产生；
+#   - 400 → 由服务层的业务判定产生（未注册的记忆类型），钉在
+#     tests/unit/test_memory_api.py::test_an_unregistered_memory_type_is_rejected_with_400。
 # - negative_data_rejection 关闭：pydantic 默认宽松 coercion（字符串数字/
 #   布尔被接受）是全模型约定，收紧为 strict 属 API 策略变更，列为 backlog。
 # - not_a_server_error 放行 503：503 是**契约内**的合法答案（限流过载 /
@@ -52,7 +57,7 @@ fuzz_config = SchemathesisConfig(
                     expected_statuses=["2xx", "3xx", "4xx", 503]
                 ),
                 positive_data_acceptance=PositiveDataAcceptanceConfig(
-                    expected_statuses=["2xx", "3xx", 401, 403, 404, 409, 422, 429, "5xx"]
+                    expected_statuses=["2xx", "3xx", 400, 401, 403, 404, 409, 422, 429, "5xx"]
                 ),
             ),
         )
