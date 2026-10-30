@@ -92,11 +92,21 @@ def compute_suite_fingerprint(tests_root: Path | None = None) -> str:
     它自己，还取决于它 import 的辅助模块和 ``conftest.py`` 里的 fixture。
     少算一样就留一个洞，而洞是静默的。``src/`` 那边不用管 —— 源码变了
     mutmut 自己会按 mtime 重跑。
+
+    **``tests/eval/`` 不算进去**：那里放的是门禁脚本本身
+    （``check_mutation_survivors.py`` / ``refresh_mutation_stats.py`` /
+    ``check_pytest_baseline.py``），pytest 收集不到它们，也没有任何**被选中**
+    的用例 import 它们。改门禁脚本不会改变任何变异体的生死，却会让指纹变 →
+    整棵 ``mutants/`` 重审 —— 一次白跑 25 分钟。把「审计工具」算进「被审计的
+    测试」是这个指纹唯一会误伤的地方。
     """
 
     root = tests_root or (REPO_ROOT / "tests")
+    eval_dir = root / "eval"
     digest = hashlib.sha256()
     for path in sorted(root.rglob("*.py")):
+        if eval_dir in path.parents:
+            continue
         digest.update(str(path).encode("utf-8"))
         digest.update(b"\0")
         digest.update(path.read_bytes())

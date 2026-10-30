@@ -1,6 +1,6 @@
 {
   "_readme": "变异存活基线（make mutation-audit 门禁）\n\n为什么需要它：mutmut 3.8 即使有存活变异体也退出 0，`mutmut results` 只是一张\n给人看的快照——光跑 mutmut 不构成门禁。本文件登记**已验收**的存活 / 无测试变异体，\ntests/eval/check_mutation_survivors.py 拿它与当前结果比对：\n\n- 出现本文件之外的存活或无测试变异体 → 门禁失败（新增盲区，必须补测试或登记理由）\n- 本文件里已被杀死的变异体 → 只提示，不失败（是进步，可顺手清理基线）\n\n每条都必须写明理由，理由分三类：\n1. 等价变异：改了写法但行为不变（例：codec 名 utf-8 → UTF-8）。\n2. 覆盖缺口：逻辑是真的，但现有用例没断言到（例：异常文案、日志文案）。\n3. 刻意不钉死：LLM prompt 文案、后台线程调度编排等本就随调优变动的部分\n   （见 docs/report/testing-toolchain-audit.md 的\"接受存活\"清单）。\n\n复跑 / 重新登记：make mutation-audit 后看 `uv run mutmut results` 的输出，\n新增条目写清理由再登记。范围见 pyproject [tool.mutmut]。\n\n**范围变了要重生成**：mutmut 靠 mutants/ 里副本的 mtime 判断「这份文件已有变异体」。\n新增文件进范围时，那份旧副本比源文件新 → mutmut 复用那个空的变异体集合，\n一个变异体都不生成，门禁照样绿。tests/eval/refresh_mutation_stats.py 会对\n范围取指纹，指纹变了就精确清掉这些遮蔽物。\n\n**超时也要登记**：mutmut 的 timeout（测试没跑完）既不是 survived 也不是 no tests，\n以前直接从门禁视野里消失。基线的 accepted_timeouts 收它。\n\n**其余状态也要登记**：mutmut 的状态词表比 survived / no tests / timeout 长，\n还有 suspicious / skipped / not checked / 「check was interrupted by user」。\n以前只认前三个，后面的直接从门禁视野里消失 —— 现在门禁按「没被杀死」兜底：\n任何状态只要不是 killed，就必须登记（其余状态归 accepted_other）。\n",
-  "_scope": "mutmut 3.8，范围见 pyproject [tool.mutmut]（15 个文件：domain/keys.py、domain/summarization.py、domain/recall_policy.py、domain/dedup.py、domain/classification.py、domain/safety.py、domain/slots/canonical.py、domain/slots/query_slots.py、memory/decay.py、memory/task_state.py、memory/retention.py、memory/repositories/_l1_cache.py、infra/structured_logging.py、rpc/converters.py、api/idempotency.py）",
+  "_scope": "mutmut 3.8，范围见 pyproject [tool.mutmut]（17 个文件：domain/keys.py、domain/summarization.py、domain/recall_policy.py、domain/dedup.py、domain/classification.py、domain/safety.py、domain/slots/canonical.py、domain/slots/query_slots.py、domain/slots/source_order.py、domain/entities.py、memory/decay.py、memory/task_state.py、memory/retention.py、memory/repositories/_l1_cache.py、infra/structured_logging.py、rpc/converters.py、api/idempotency.py）",
   "accepted_survivors": {
     "thinkback.domain.keys.x__canonical__mutmut_2": "等价变异：ensure_ascii=None 与 ensure_ascii=False 同为假值，json.dumps 行为一致。",
     "thinkback.domain.keys.x__canonical__mutmut_6": "覆盖缺口：非 ASCII 正文下 ensure_ascii 默认值（False → True）的差异未被断言。",
@@ -170,7 +170,12 @@
     "thinkback.api.idempotency.xǁIdempotencyMiddlewareǁ_resolve_scope__mutmut_1": "等价变异：默认参数在所有调用点都被显式传值覆盖，从不使用。",
     "thinkback.api.idempotency.xǁIdempotencyMiddlewareǁdispatch__mutmut_101": "等价变异：request._body 的赋值不被读取 —— BaseHTTPMiddleware 的下游请求体走 ASGI receive 通道重放（Starlette 的 call_next 不使用 request 参数），把 _body 置 None 不改变下游看到的请求体。",
     "thinkback.api.idempotency.xǁIdempotencyMiddlewareǁdispatch__mutmut_122": "等价变异：响应体分块在到达中间件前已被 Starlette 编码成 bytes，isinstance(chunk, bytes) 恒为真 —— 短路成 or True 不改变行为。",
-    "thinkback.api.idempotency.xǁIdempotencyMiddlewareǁdispatch__mutmut_123": "等价变异：同上，str(chunk).encode() 分支不可达（chunk 恒为 bytes）。"
+    "thinkback.api.idempotency.xǁIdempotencyMiddlewareǁdispatch__mutmut_123": "等价变异：同上，str(chunk).encode() 分支不可达（chunk 恒为 bytes）。",
+    "thinkback.domain.slots.source_order.x_is_same_source_local_p0_memory__mutmut_5": "等价变异：backend_memory_id 缺省值写成 None —— str(None) 与 str(\"\") 都不是 「local-p0:」前缀，结果同样判成「不是本地 P0 记忆」（False）。",
+    "thinkback.domain.slots.source_order.x_is_same_source_local_p0_memory__mutmut_11": "等价变异：backend_memory_id 缺省值写成 \"XXXX\" —— 同样不是「local-p0:」前缀，结果同样是 False。",
+    "thinkback.domain.slots.source_order.x_is_same_source_local_p0_memory__mutmut_26": "等价变异：memory_text 缺省值写成 \"XXXX\" —— 槽位都取不到（None），与缺省空串同样判成「不是同源」。",
+    "thinkback.domain.slots.source_order.x__parse_source_timestamp__mutmut_10": "等价变异：Python 3.11+ 的 datetime.fromisoformat 原生支持 Z 后缀，那次 replace(\"Z\", \"+00:00\") 是冗余的。",
+    "thinkback.domain.slots.source_order.x__parse_source_timestamp__mutmut_11": "等价变异：同上 —— 把 \"Z\" 改成小写也不影响，因为 3.11+ 的 fromisoformat 自己就认 Z 后缀，那次 replace 是冗余的。"
   },
   "accepted_no_tests": {},
   "accepted_timeouts": {},

@@ -61,10 +61,11 @@ OTHER = "other"
 NOT_CHECKED = "not checked"
 # 这三个是已验收基线各自有独立登记桶的状态；其余状态归 accepted_other。
 KNOWN_STATUSES = frozenset({SURVIVED, NO_TESTS, TIMEOUT})
-# 读到 not checked 时的重读次数与间隔。mutmut 的 worker 落盘通常在几秒内
-# 完成；连续几次都读不到结果，才说明是真的没审到。
-SETTLE_ATTEMPTS = 4
-SETTLE_SECONDS = 5.0
+# 读到 not checked 时的重读次数与间隔。落盘滞后与审计规模成正比：2500 个
+# 变异体的一轮，worker 收尾要一分多钟 —— 15 秒的窗口不够，会把「还没落盘」
+# 误判成「没审到」。这里给到两分钟，并用「没进展就停」提前收工。
+SETTLE_ATTEMPTS = 12
+SETTLE_SECONDS = 10.0
 
 
 def read_results() -> dict[str, str]:
@@ -82,14 +83,25 @@ def read_results() -> dict[str, str]:
     费人：门禁一旦开始随机红，大家就会习惯性忽略它。
 
     所以读到 ``not checked`` 就等一会儿重读；连续几次都还是
-    ``not checked`` 才算数 —— 那时才是真的没审到（仍然 fail-closed）。
+    ``not checked``、而且数量不再变少，才算它真的没审到（仍然 fail-closed）。
     """
 
     results: dict[str, str] = {}
+    previous_pending: int | None = None
+    stalled = 0
     for attempt in range(SETTLE_ATTEMPTS):
         results = _read_results_once()
-        if not any(status == NOT_CHECKED for status in results.values()):
+        pending = sum(1 for status in results.values() if status == NOT_CHECKED)
+        if pending == 0:
             return results
+        if previous_pending is not None and pending >= previous_pending:
+            stalled += 1
+            if stalled >= 3:
+                # 连续三次没进展 → 落盘已经结束（或者真的卡住了），别再空等
+                break
+        else:
+            stalled = 0
+        previous_pending = pending
         if attempt < SETTLE_ATTEMPTS - 1:
             time.sleep(SETTLE_SECONDS)
     return results

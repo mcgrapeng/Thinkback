@@ -103,9 +103,7 @@ ANXIETY_SOURCE_SIDE_CASES = [
 
 
 @pytest.mark.parametrize(("memory_text", "source_text"), ANXIETY_SOURCE_SIDE_CASES)
-def test_each_anxiety_source_side_marker_is_evidence(
-    memory_text: str, source_text: str
-) -> None:
+def test_each_anxiety_source_side_marker_is_evidence(memory_text: str, source_text: str) -> None:
     """焦虑方向的**源侧**每个词都要能单独作为依据。
 
     少一个 → 用户在源文本里说的是「anxiety」，系统却认为没依据。
@@ -283,6 +281,21 @@ def test_a_round_with_a_source_timestamp_outranks_the_round_id_number() -> None:
     assert order[0] == 3
     assert order[1] == NOW.timestamp()
     assert order[2].startswith(f"{-1.0:020.6f}:")
+
+
+def test_the_round_index_is_part_of_the_source_timestamp_tier() -> None:
+    """库里有来源时间**且**有 round_index → 第三位带的是真的 round_index。
+
+    与上一条成对：round_index 缺失时用 -1.0，有值时必须用真值 ——
+    写成「一律 -1.0」的话，有序号的回合与没序号的回合就分不出先后了。
+    """
+    repository = InMemoryMemoryRepository()
+    _save(repository, _entry(round_id="r1", round_index=7))
+
+    order = round_order(repository, "user-1", "s1", "r1")
+
+    assert order[0] == 3
+    assert order[2].startswith(f"{7.0:020.6f}:")
 
 
 def test_the_round_index_is_used_when_the_source_timestamp_is_missing() -> None:
