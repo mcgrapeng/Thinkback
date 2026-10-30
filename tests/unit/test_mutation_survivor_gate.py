@@ -27,7 +27,7 @@ from tests.eval import check_mutation_survivors as gate
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
-def _meta(mutants: Path, source: str, codes: dict[str, int]) -> None:
+def _meta(mutants: Path, source: str, codes: dict[str, int | None]) -> None:
     path = mutants / f"{source}.meta"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps({"exit_code_by_key": codes}), encoding="utf-8")
@@ -55,6 +55,70 @@ def test_the_population_counts_every_evaluated_mutant(
 
     assert total == 3
     assert per_file == {"src/a.py": 2, "src/b.py": 1}
+
+
+def test_the_population_does_not_count_mutants_that_were_never_evaluated(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """exit_code 是 None 的那些是「注册了但还没评到」—— 不算审过了。
+
+    mutmut 审计开始时就把全部变异体注册进 ``.meta``，没评到的那个
+    exit_code 是 ``None``。把它们算进「本次评估」，门禁报出来的分母
+    就大于真正审过的量 —— 那个数字回答的是「审了多少」。
+    """
+    mutants = tmp_path / "mutants"
+    _meta(mutants, "src/a.py", {"m1": 1, "m2": None, "m3": 0})
+    monkeypatch.setattr(gate, "MUTANTS_DIR", mutants)
+
+    total, per_file = gate.evaluated_population()
+
+    assert total == 2
+    assert per_file == {"src/a.py": 2}
+
+
+def test_the_gate_waits_for_mutmut_to_flush_its_results(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """读到 not checked 要等 mutmut 落盘，不是一律判失败。
+
+    ``mutmut run`` 返回时 worker 可能还有结果没写进 ``.meta``，那些变异体
+    在快照里是 ``not checked``。不等着就判失败，会让门禁在每次全量重审后
+    **随机红一次**，而它报出来的「新增未杀死变异体」是假的。
+    """
+    calls: list[int] = []
+
+    def fake_read() -> dict[str, str]:
+        calls.append(1)
+        if len(calls) < 3:
+            return {"m1": gate.NOT_CHECKED}
+        return {"m1": "survived"}
+
+    monkeypatch.setattr(gate, "_read_results_once", fake_read)
+    monkeypatch.setattr(gate, "SETTLE_SECONDS", 0.0)
+
+    assert gate.read_results() == {"m1": "survived"}
+    assert len(calls) == 3
+
+
+def test_a_persistently_not_checked_mutant_is_still_reported(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """等到底还是 not checked —— 那就是真的没审到，门禁仍要报出来。
+
+    等待只是排除「落盘时序」这一个原因，不是把 not checked 变成放行。
+    """
+    calls: list[int] = []
+
+    def fake_read() -> dict[str, str]:
+        calls.append(1)
+        return {"m1": gate.NOT_CHECKED}
+
+    monkeypatch.setattr(gate, "_read_results_once", fake_read)
+    monkeypatch.setattr(gate, "SETTLE_SECONDS", 0.0)
+    monkeypatch.setattr(gate, "SETTLE_ATTEMPTS", 3)
+
+    assert gate.read_results() == {"m1": gate.NOT_CHECKED}
+    assert len(calls) == 3
 
 
 def test_a_scoped_file_without_mutants_is_reported(

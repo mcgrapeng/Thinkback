@@ -28,6 +28,7 @@ import json
 import re
 import subprocess
 import sys
+import time
 import tomllib
 from pathlib import Path
 
@@ -54,13 +55,47 @@ TIMEOUT = "timeout"
 # 其余状态（suspicious / skipped / not checked / interrupted）以前也从门禁
 # 视野里消失。它们归到基线的 accepted_other，同样要登记理由。
 OTHER = "other"
+# mutmut 把「注册了但还没评到」的变异体（exit_code 是 None）报成这个状态。
+# 它是**落盘时序**的产物，不是审计缺口 —— 读结果时要先等它落盘（见
+# read_results）。
+NOT_CHECKED = "not checked"
 # 这三个是已验收基线各自有独立登记桶的状态；其余状态归 accepted_other。
 KNOWN_STATUSES = frozenset({SURVIVED, NO_TESTS, TIMEOUT})
+# 读到 not checked 时的重读次数与间隔。mutmut 的 worker 落盘通常在几秒内
+# 完成；连续几次都读不到结果，才说明是真的没审到。
+SETTLE_ATTEMPTS = 4
+SETTLE_SECONDS = 5.0
 
 
 def read_results() -> dict[str, str]:
-    """跑 ``mutmut results``，返回 {变异体名: 状态}（只含未被杀死的变异体）。"""
+    """跑 ``mutmut results``，返回 {变异体名: 状态}（只含未被杀死的变异体）。
 
+    **要等结果落盘**。mutmut 在审计开始时就把所有变异体注册进 ``.meta``，
+    没评到的那个 exit_code 是 ``None``；``mutmut results`` 把 ``None``
+    报成 ``not checked``。而 ``mutmut run`` 返回时，worker 可能还有结果
+    没落盘 —— 于是「读到的快照」里有一批 ``not checked``，几秒后它们就
+    各自有了真结果。
+
+    那是**读取时序**，不是审计缺口。直接判失败，会让门禁在每次
+    「范围变了 / 测试树变了」的全量重审之后**随机红一次** —— 而它报出来
+    的「新增未杀死变异体」是假的，几秒后重跑就是绿的。这种假红比假绿更
+    费人：门禁一旦开始随机红，大家就会习惯性忽略它。
+
+    所以读到 ``not checked`` 就等一会儿重读；连续几次都还是
+    ``not checked`` 才算数 —— 那时才是真的没审到（仍然 fail-closed）。
+    """
+
+    results: dict[str, str] = {}
+    for attempt in range(SETTLE_ATTEMPTS):
+        results = _read_results_once()
+        if not any(status == NOT_CHECKED for status in results.values()):
+            return results
+        if attempt < SETTLE_ATTEMPTS - 1:
+            time.sleep(SETTLE_SECONDS)
+    return results
+
+
+def _read_results_once() -> dict[str, str]:
     completed = subprocess.run(
         [sys.executable, "-m", "mutmut", "results"],
         cwd=REPO_ROOT,
@@ -116,8 +151,12 @@ def evaluated_population() -> tuple[int, dict[str, int]]:
         if not isinstance(codes, dict):
             continue
         source = str(meta_path.relative_to(MUTANTS_DIR))[: -len(".meta")]
-        per_file[source] = len(codes)
-        total += len(codes)
+        # 只数**真的评过**的：exit_code 是 None 的那些是「注册了但还没
+        # 评到」（mutmut 落盘时序），把它们算进「本次评估」会让这个数字
+        # 大于实际审过的量 —— 门禁报出来的分母就不诚实了。
+        evaluated = sum(1 for code in codes.values() if code is not None)
+        per_file[source] = evaluated
+        total += evaluated
     return total, per_file
 
 
