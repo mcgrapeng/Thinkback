@@ -32,7 +32,7 @@ async def test_a_saturated_pool_answers_503_instead_of_hanging() -> None:
     await slots.acquire()  # 把唯一的槽位占住
     try:
         with pytest.raises(HTTPException) as excinfo:
-            await _run_memory_call_in_pool(slots, _executor(), lambda: "never", *(), **{})
+            await _run_memory_call_in_pool(slots, _executor(), lambda: "never")
     finally:
         slots.release()
 

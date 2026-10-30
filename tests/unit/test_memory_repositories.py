@@ -744,7 +744,15 @@ def test_l1_cache_clear_l1_removes_the_entry_from_cache() -> None:
 
 
 def test_l1_cache_clear_l1_on_uncached_session_is_a_noop() -> None:
-    """清一个从没缓存过的 session：不能抛异常，也不能误伤别的 session。"""
+    """清一个从没缓存过的 session：不能抛异常，也不能误伤别的 session。
+
+    删除路径会在会话没有任何 L1 条目时也调 ``clear_l1``（那一轮可能早被
+    淘汰或从没进过缓存）。抛 KeyError 会把一次删除变成 500。
+
+    这条也是并发那条用例（``clear_l1_under_concurrent_update_l1``）能杀掉的
+    变异体的**确定性**替代 —— 并发用例里那个会话在不在缓存里看时序，
+    靠它杀变异体是 flaky 的（变异审计里它时而被杀、时而存活）。
+    """
     repository = InMemoryMemoryRepository()
     repository.update_l1(
         _make_l1_entry(round_id="r-1", user_id="user-1", scope_id="scope-1", session_id="s-1"),

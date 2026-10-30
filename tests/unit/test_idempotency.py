@@ -35,6 +35,38 @@ def _app() -> FastAPI:
     async def route_b() -> dict[str, str]:
         return {"route": "b"}
 
+    @app.put("/v2/memory/a")
+    async def route_a_put() -> dict[str, str]:
+        return {"route": "a-put"}
+
+    @app.delete("/v2/memory/a")
+    async def route_a_delete() -> dict[str, str]:
+        return {"route": "a-delete"}
+
+    @app.patch("/v2/memory/a")
+    async def route_a_patch() -> dict[str, str]:
+        return {"route": "a-patch"}
+
+    return app
+
+
+def _app_with_request_id() -> FastAPI:
+    """带 trace 中间件的 app：``request.state.request_id`` 有值。"""
+
+    from thinkback.api.idempotency import IdempotencyMiddleware
+
+    app = FastAPI()
+    app.add_middleware(IdempotencyMiddleware, cache=IdempotencyCache())
+
+    @app.middleware("http")
+    async def _trace(request, call_next):  # type: ignore[no-untyped-def]
+        request.state.request_id = "req-trace-1"
+        return await call_next(request)
+
+    @app.post("/v2/memory/a")
+    async def route_a() -> dict[str, str]:
+        return {"route": "a"}
+
     return app
 
 
@@ -414,6 +446,82 @@ def test_a_key_prefix_is_not_a_conflict() -> None:
     assert cache.get_conflict("scope", "a:b", "POST", "/v2/memory/a", "hash-2") is False
 
 
+def test_a_redirect_response_is_not_cached() -> None:
+    """只有 2xx 进幂等缓存 —— 3xx 是重定向，不是「这次写入的结果」。"""
+
+    from fastapi.responses import RedirectResponse
+
+    from thinkback.api.idempotency import IdempotencyMiddleware
+
+    app = FastAPI()
+    app.add_middleware(IdempotencyMiddleware, cache=IdempotencyCache())
+
+    @app.post("/v2/memory/redirect")
+    async def route_redirect():
+        return RedirectResponse("/v2/memory/a", status_code=300)
+
+    with TestClient(app) as client:
+        headers = {"Idempotency-Key": "redirect-key"}
+        first = client.post("/v2/memory/redirect", json={"x": 1}, headers=headers)
+        second = client.post("/v2/memory/redirect", json={"x": 1}, headers=headers)
+
+        assert first.status_code == 300
+        assert second.headers.get("X-Idempotent-Replay") is None
+
+
+def test_an_entry_exactly_at_the_ttl_is_still_alive(monkeypatch: pytest.MonkeyPatch) -> None:
+    """TTL 边界：恰好等于 TTL 的条目**还没过期**（判定是 `>` 不是 `>=`）。
+
+    差这一秒的边界写反了，条目会在到期前一刻被清掉 —— 幂等重放随即失效，
+    同一把 key 会被执行两次。
+    """
+
+    now = 1_000_000.0
+    monkeypatch.setattr(idempotency_module.time, "time", lambda: now)
+    cache = IdempotencyCache()
+    cache.put(
+        "scope",
+        "k",
+        "POST",
+        "/v2/memory/a",
+        "hash",
+        CachedResponse(
+            body=b"{}",
+            status_code=200,
+            content_type="application/json",
+            headers={},
+            timestamp=now - CACHE_TTL,
+        ),
+    )
+
+    assert cache.clear_expired() == 0
+    assert cache.get("scope", "k", "POST", "/v2/memory/a", "hash") is not None
+
+
+def test_an_entry_past_the_ttl_is_expired(monkeypatch: pytest.MonkeyPatch) -> None:
+    """对照组：过了 TTL 就该被清掉（边界用例的另一侧）。"""
+
+    now = 1_000_000.0
+    monkeypatch.setattr(idempotency_module.time, "time", lambda: now)
+    cache = IdempotencyCache()
+    cache.put(
+        "scope",
+        "k",
+        "POST",
+        "/v2/memory/a",
+        "hash",
+        CachedResponse(
+            body=b"{}",
+            status_code=200,
+            content_type="application/json",
+            headers={},
+            timestamp=now - CACHE_TTL - 1,
+        ),
+    )
+
+    assert cache.clear_expired() == 1
+
+
 def test_a_hit_refreshes_the_entry_position() -> None:
     """命中的条目要移到队尾 —— 否则「最近用过」的会被先淘汰。"""
 
@@ -423,6 +531,182 @@ def test_a_hit_refreshes_the_entry_position() -> None:
 
     assert cache.get("scope", "k1", "POST", "/v2/memory/a", "hash-1") is not None
     assert list(cache._store)[0][1] == "k2"
+
+
+# ---------------------------------------------------------------------------
+# 分域：namespace / user_id 是「谁在写」，写错就是跨调用方串味
+# ---------------------------------------------------------------------------
+
+
+def test_an_explicit_namespace_becomes_part_of_the_scope() -> None:
+    """显式 namespace 必须进域 —— 归一成默认域 = 两个 namespace 共用一个域。"""
+
+    identity = _caller_identity(json.dumps({"user_id": "u", "namespace": "acme"}).encode())
+
+    assert identity == "acme:u"
+
+
+def test_a_blank_namespace_falls_back_to_the_default() -> None:
+    """空白 namespace 与「省略」是同一个请求 —— 域必须一样。"""
+
+    identity = _caller_identity(json.dumps({"user_id": "u", "namespace": "   "}).encode())
+
+    assert identity == "thinkback:u"
+
+
+def test_the_default_namespace_is_used_when_it_is_omitted() -> None:
+    assert _caller_identity(json.dumps({"user_id": "u"}).encode()) == "thinkback:u"
+
+
+# ---------------------------------------------------------------------------
+# 写方法都要受保护
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("method", "route", "expected"),
+    [
+        ("post", "/v2/memory/a", {"route": "a"}),
+        ("put", "/v2/memory/a", {"route": "a-put"}),
+        ("delete", "/v2/memory/a", {"route": "a-delete"}),
+        ("patch", "/v2/memory/a", {"route": "a-patch"}),
+    ],
+)
+def test_every_write_method_is_protected_by_the_idempotency_key(
+    method: str, route: str, expected: dict[str, str]
+) -> None:
+    """POST / PUT / DELETE / PATCH 都要受幂等保护 —— 漏一个就少一道闸。"""
+
+    with TestClient(_app()) as client:
+        headers = {"Idempotency-Key": f"method-{method}"}
+        first = client.request(method, route, json={"x": 1}, headers=headers)
+        second = client.request(method, route, json={"x": 1}, headers=headers)
+
+        assert first.status_code == 200
+        assert first.json() == expected
+        assert second.json() == expected
+        assert second.headers.get("X-Idempotent-Replay") == "true"
+
+
+def test_a_request_without_the_key_is_not_cached() -> None:
+    """没有 key 的请求不进幂等缓存 —— 否则所有无 key 的写共用一个域。"""
+
+    with TestClient(_app()) as client:
+        first = client.post("/v2/memory/a", json={"x": 1})
+        second = client.post("/v2/memory/a", json={"x": 1})
+
+        assert first.status_code == 200
+        assert second.status_code == 200
+        assert second.headers.get("X-Idempotent-Replay") is None
+
+
+# ---------------------------------------------------------------------------
+# 重放必须原样返回：状态码 / 内容类型 / 响应头
+# ---------------------------------------------------------------------------
+
+
+def test_the_replay_preserves_the_status_code_and_content_type() -> None:
+    """重放要把原响应的状态码与内容类型带回来 —— 否则调用方按状态码分支会走错。"""
+
+    with TestClient(_app()) as client:
+        headers = {"Idempotency-Key": "preserve-meta"}
+        first = client.post("/v2/memory/a", json={"x": 1}, headers=headers)
+        second = client.post("/v2/memory/a", json={"x": 1}, headers=headers)
+
+        assert second.status_code == first.status_code == 200
+        assert second.headers["content-type"] == first.headers["content-type"]
+
+
+def test_the_replay_preserves_the_original_response_headers() -> None:
+    """原响应的头必须透传 —— 丢头会把 trace 中间件设的 X-Trace-Id 抹掉。"""
+
+    with TestClient(_app()) as client:
+        headers = {"Idempotency-Key": "preserve-headers"}
+        first = client.post("/v2/memory/a", json={"x": 1}, headers=headers)
+        second = client.post("/v2/memory/a", json={"x": 1}, headers=headers)
+
+        assert second.headers.get("content-length") == first.headers.get("content-length")
+
+
+def test_the_conflict_error_carries_the_request_id() -> None:
+    """冲突响应要带上 request_id —— 排查时能对上是哪一次请求。"""
+
+    with TestClient(_app_with_request_id()) as client:
+        headers = {"Idempotency-Key": "conflict-request-id"}
+        client.post("/v2/memory/a", json={"user_id": "u"}, headers=headers)
+        conflict = client.post("/v2/memory/a", json={"user_id": "u", "x": 2}, headers=headers)
+
+        assert conflict.status_code == 409
+        assert conflict.json()["error"]["request_id"] == "req-trace-1"
+
+
+# ---------------------------------------------------------------------------
+# 缓存容量：淘汰顺序与触发时机
+# ---------------------------------------------------------------------------
+
+
+def test_the_eviction_keeps_the_newest_entries(monkeypatch: pytest.MonkeyPatch) -> None:
+    """淘汰必须从最旧的开始 —— 淘汰最新的等于把刚写的记忆扔了。"""
+
+    monkeypatch.setattr(idempotency_module, "MAX_CACHE_SIZE", 2)
+    cache = IdempotencyCache()
+    cache.put("scope", "k1", "POST", "/v2/memory/a", "hash-1", _cached_response())
+    cache.put("scope", "k2", "POST", "/v2/memory/a", "hash-2", _cached_response())
+    cache.put("scope", "k3", "POST", "/v2/memory/a", "hash-3", _cached_response())
+
+    assert cache.get("scope", "k1", "POST", "/v2/memory/a", "hash-1") is None
+    assert cache.get("scope", "k3", "POST", "/v2/memory/a", "hash-3") is not None
+
+
+def test_the_cache_holds_exactly_the_limit_before_evicting(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """装到上限不该开始淘汰 —— 刚好等于上限时两条都得在。"""
+
+    monkeypatch.setattr(idempotency_module, "MAX_CACHE_SIZE", 2)
+    cache = IdempotencyCache()
+    cache.put("scope", "k1", "POST", "/v2/memory/a", "hash-1", _cached_response())
+    cache.put("scope", "k2", "POST", "/v2/memory/a", "hash-2", _cached_response())
+
+    assert cache.get("scope", "k1", "POST", "/v2/memory/a", "hash-1") is not None
+    assert cache.get("scope", "k2", "POST", "/v2/memory/a", "hash-2") is not None
+
+
+def test_the_conflict_index_is_cleaned_when_an_entry_expires() -> None:
+    """过期条目被清掉后，它的冲突索引也必须一起清 —— 否则索引无限增长。"""
+
+    cache = IdempotencyCache()
+    stale = CachedResponse(
+        body=b"{}",
+        status_code=200,
+        content_type="application/json",
+        headers={},
+        timestamp=time.time() - CACHE_TTL - 1,
+    )
+    cache.put("scope", "k", "POST", "/v2/memory/a", "hash-old", stale)
+
+    cache.clear_expired()
+
+    assert ("scope", "k", "POST", "/v2/memory/a") not in cache._index
+
+
+def test_the_injected_cache_is_the_one_that_gets_used() -> None:
+    """注入的缓存必须真的被用 —— 否则「每条用例自己的缓存」是假的。"""
+
+    from thinkback.api.idempotency import IdempotencyMiddleware
+
+    cache = IdempotencyCache()
+    middleware = IdempotencyMiddleware(FastAPI(), cache=cache)
+
+    assert middleware.cache is cache
+
+
+def test_the_default_cache_is_still_the_shared_instance() -> None:
+    """不注入时必须用全局共享实例 —— 多副本下幂等的前提。"""
+
+    from thinkback.api.idempotency import IdempotencyMiddleware, get_idempotency_cache
+
+    assert IdempotencyMiddleware(FastAPI()).cache is get_idempotency_cache()
 
 
 def test_a_failed_response_is_not_cached_and_can_be_retried() -> None:
