@@ -237,6 +237,17 @@ only_mutate = [
     # 第八轮：L2 刷新的去抖/失败语义 + L3 队列槽位记账与关停预算。
     "src/thinkback/memory/l2_refresh.py",
     "src/thinkback/memory/l3.py",
+    # 第九轮：限流这条链（令牌桶原语 + HTTP 中间件 + gRPC 限流器）与多副本前置。
+    # 四个模块决定「谁能写、写多快、什么算同一个调用方」——
+    # 回填差一 → 限流比配置的松一倍；分桶口径错 → 租户互相挤兑；
+    # 「限额变了不重置余额」破掉 → 改配置给每个桶发一次免费额度；
+    # 天花板倍数错 → 轮换 user_id 就能绕开限流；
+    # 多副本前置漏判 → 宣称多副本，实际上幂等与限流各算各的。
+    # 此前这四个文件**一个变异体都没有**。
+    "src/thinkback/infra/token_bucket.py",
+    "src/thinkback/api/ratelimit.py",
+    "src/thinkback/rpc/ratelimit.py",
+    "src/thinkback/infra/replica_guard.py",
 ]
 pytest_add_cli_args_test_selection = [
     "tests/unit/test_memory_decay.py",
@@ -330,6 +341,13 @@ pytest_add_cli_args_test_selection = [
     # 槽位只进不出 → 队列预算被吃光；drain 提前返回 → 记账没做完。
     "tests/unit/test_l3_executor_contract.py",
     "tests/unit/test_l3_drain_callback.py",
+    # 限流的精确值契约（第九轮）：
+    # 令牌桶的回填/边界/等待秒数、HTTP 面的 429 与头字段、
+    # gRPC 面的调用方标识与对端地址、多副本前置的判定与拒绝。
+    "tests/unit/test_token_bucket_contract.py",
+    "tests/unit/test_rate_limit_contract.py",
+    "tests/unit/test_grpc_rate_limit_contract.py",
+    "tests/unit/test_replica_guard_contract.py",
 ]
 
 [tool.hatch.build.targets.wheel.force-include]
