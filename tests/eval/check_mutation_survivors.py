@@ -172,6 +172,32 @@ def evaluated_population() -> tuple[int, dict[str, int]]:
     return total, per_file
 
 
+def pending_mutants() -> list[str]:
+    """注册了但**没有结论**的变异体（mutmut 没跑完 / 那个用例挂死了）。
+
+    这些变异体在 ``mutmut results`` 里**根本不出现** —— 门禁原本完全看不见
+    它们：``evaluated_population`` 只数有结论的，``unaudited_scoped_files``
+    只按文件粒度查「有没有变异体」。于是「某个变异体让用例永远挂着、
+    mutmut 一直跑不完」这件事，对门禁是隐形的：报告说「本次评估 N 个」，
+    实际少审了几个。
+
+    第八轮就撞上过：``api/idempotency.py`` 的三个变异体让用例挂死，
+    它们在 ``mutmut results`` 里查无此人，而门禁照样绿。
+    """
+
+    pending: list[str] = []
+    for meta_path in sorted(MUTANTS_DIR.rglob("*.meta")):
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        codes = meta.get("exit_code_by_key")
+        if not isinstance(codes, dict):
+            continue
+        pending.extend(name for name, code in codes.items() if code is None)
+    return sorted(pending)
+
+
 def unaudited_scoped_files(per_file: dict[str, int]) -> list[str]:
     """声明在范围内、却一个变异体都没生成的文件。
 
@@ -252,6 +278,31 @@ def main() -> int:
         return 1
 
     results = read_results()
+    # 「注册了但没结论」的变异体对门禁是隐形的（它们不在 mutmut results 里）。
+    # 这里显式把它们捞出来 —— 挂死的用例会让 mutmut 永远跑不完，
+    # 而那种变异体恰恰是最该被抓的（它让关停流程死锁）。
+    pending = pending_mutants()
+    for _ in range(SETTLE_ATTEMPTS):
+        if not pending:
+            break
+        # mutmut 的 worker 可能还在落盘：等一会儿再读。
+        time.sleep(SETTLE_SECONDS)
+        pending = pending_mutants()
+    if pending:
+        print(
+            f"变异存活基线：{len(pending)} 个变异体没有结论（mutmut 没跑完）：",
+            file=sys.stderr,
+        )
+        for name in pending:
+            print(f"  - {name}", file=sys.stderr)
+        print(
+            "\n这些变异体不在 `mutmut results` 里 —— 门禁原本完全看不见它们。\n"
+            "多半是某个变异体让用例挂死了（mutmut 会一直等下去）。\n"
+            "重跑那几条：uv run --group dev mutmut run --max-children 8 <变异体名> …",
+            file=sys.stderr,
+        )
+        return 1
+
     grouped = not_killed_by_status(results)
     survivors = grouped.get(SURVIVED, set())
     no_tests = grouped.get(NO_TESTS, set())

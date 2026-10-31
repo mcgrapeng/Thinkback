@@ -99,6 +99,13 @@ def compute_suite_fingerprint(tests_root: Path | None = None) -> str:
     的用例 import 它们。改门禁脚本不会改变任何变异体的生死，却会让指纹变 →
     整棵 ``mutants/`` 重审 —— 一次白跑 25 分钟。把「审计工具」算进「被审计的
     测试」是这个指纹唯一会误伤的地方。
+
+    **哈希的是相对路径**：指纹要回答的是「测试树的内容变了吗」，
+    不是「它在哪个目录」。用绝对路径的话，同一份测试树在仓库里和在
+    ``/tmp`` 的隔离副本里算出两个指纹 —— 而审计**本来就该**在隔离副本里跑
+    （共享 worktree 里的 ``mutants/`` 树会被别的 agent 的审计写坏），
+    于是「把审计结果搬回仓库」这一步必然对不上指纹 → 门禁逼你再全量重审一次
+    —— 一次纯粹因为路径不同而白跑的重审。
     """
 
     root = tests_root or (REPO_ROOT / "tests")
@@ -107,7 +114,7 @@ def compute_suite_fingerprint(tests_root: Path | None = None) -> str:
     for path in sorted(root.rglob("*.py")):
         if eval_dir in path.parents:
             continue
-        digest.update(str(path).encode("utf-8"))
+        digest.update(str(path.relative_to(root)).encode("utf-8"))
         digest.update(b"\0")
         digest.update(path.read_bytes())
     return digest.hexdigest()
