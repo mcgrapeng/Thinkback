@@ -187,6 +187,19 @@ omit = [
 # - 质量分的精确值 → tests/unit/test_content_quality_contract.py
 # - 类型策略与默认注册表 → tests/unit/test_memory_type_profile_validation.py
 #   与 tests/unit/test_memory_types.py
+#
+# memory/l2_refresh.py 与 memory/l3.py **这一轮进范围**（第八轮）：它们是
+# 「什么时候再跑一次 LLM」「队列还剩几个槽位」这两个决定**资源与新鲜度**
+# 的地方，写错的线上表现全是静默的：
+# - 去抖阈值差一 → 摘要每 N+1 轮才更新一次，用户以为系统没记住；
+# - 失败不算「已尝试」 → LLM 挂掉期间每个 append 都重试，故障放大成调用风暴；
+# - 槽位只进不出 → 队列预算被吃光，该 Pod 的写入能力永久归零；
+# - drain 提前返回 → 调用方以为已关停，而记账还没做完。
+# 两者都是「小而纯的判定」：去抖计数 / LRU 上界 / 容量闸门 / 槽位记账 /
+# 关停预算，没有业务语义，变异体基本都对应真实缺陷。
+# 它们的判定分支由精确值契约用例钉死
+# （tests/unit/test_l2_refresh_decisions_contract.py、
+# tests/unit/test_l3_executor_contract.py）。
 source_paths = ["src"]
 # mutmut 只把 source_paths / tests/ / pyproject.toml 等复制进 mutants/ 树。
 # 仓库根的 profiles/（随包发布的类型 profile 与抽取指令）与 Dockerfile
@@ -221,6 +234,9 @@ only_mutate = [
     # 第七轮放回范围：来源仲裁与过期判定的唯一口径。
     "src/thinkback/domain/slots/source_order.py",
     "src/thinkback/domain/entities.py",
+    # 第八轮：L2 刷新的去抖/失败语义 + L3 队列槽位记账与关停预算。
+    "src/thinkback/memory/l2_refresh.py",
+    "src/thinkback/memory/l3.py",
 ]
 pytest_add_cli_args_test_selection = [
     "tests/unit/test_memory_decay.py",
@@ -304,6 +320,16 @@ pytest_add_cli_args_test_selection = [
     # 过期判定的唯一口径（entities.memory_is_expired）：召回 / 列表 /
     # 槽位回填三处共用的过期口径，在 entities.py 的变异范围内，必须被选中。
     "tests/unit/test_entities_expiry_contract.py",
+    # L2 刷新的去抖 / trailing / 失败语义（memory/l2_refresh.py）：
+    # 不选它，去抖阈值与「失败也算已尝试」那几条变异体会全部存活 ——
+    # 而那正是 LLM 调用量与摘要新鲜度的两个总开关。
+    "tests/unit/test_l2_refresh_decisions_contract.py",
+    # drain 静默性：trailing 刷新必须被 drain 等到（回归缺陷的钉子）。
+    "tests/unit/test_l2_drain_quiescence.py",
+    # L3 队列槽位记账与关停预算（memory/l3.py）：
+    # 槽位只进不出 → 队列预算被吃光；drain 提前返回 → 记账没做完。
+    "tests/unit/test_l3_executor_contract.py",
+    "tests/unit/test_l3_drain_callback.py",
 ]
 
 [tool.hatch.build.targets.wheel.force-include]

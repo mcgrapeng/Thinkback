@@ -118,7 +118,7 @@ def test_append_triggers_immediate_llm_refresh_on_first_round() -> None:
     composer = RecordingComposer("【主题】猫\n【进行中事项】无")
     service, _ = make_service(composer, interval=5)
     service.append(make_append("r1", "我养了一只猫叫麻薯"))
-    service.drain_l3_background_tasks(timeout=5)
+    service.drain_l3_background_tasks(timeout=0.5)
 
     summary = service.repository.get_summary("user-1", "session-1")
     assert summary is not None
@@ -136,7 +136,7 @@ def test_debounce_only_refreshes_every_interval_rounds() -> None:
     service, _ = make_service(composer, interval=3)
     for index in range(1, 5):
         service.append(make_append(f"r{index}", f"第{index}轮内容", index=index))
-    service.drain_l3_background_tasks(timeout=5)
+    service.drain_l3_background_tasks(timeout=0.5)
 
     # r1 触发（首次），r2/r3 计数，r3 达到 interval=3 再触发，r4 计数 → 共 2 次
     assert len(composer.calls) == 2
@@ -150,14 +150,14 @@ def test_previous_summary_only_fed_when_kind_is_llm() -> None:
     composer.fail = True
     service, _ = make_service(composer, interval=1)
     service.append(make_append("r1", "第一轮"))
-    service.drain_l3_background_tasks(timeout=5)
+    service.drain_l3_background_tasks(timeout=0.5)
     assert len(composer.calls) == 1
     summary = service.repository.get_summary("user-1", "session-1")
     assert summary is not None and summary.summary_kind == "concat"
 
     composer.fail = False
     service.append(make_append("r2", "第二轮", index=2))
-    service.drain_l3_background_tasks(timeout=5)
+    service.drain_l3_background_tasks(timeout=0.5)
     assert composer.calls[1][1] is None  # concat 版没有被当作上一版
 
 
@@ -167,7 +167,7 @@ def test_llm_failure_keeps_concat_fallback_and_service_alive() -> None:
     composer.fail = True
     service, _ = make_service(composer, interval=2)
     service.append(make_append("r1", "我住在杭州"))
-    service.drain_l3_background_tasks(timeout=5)
+    service.drain_l3_background_tasks(timeout=0.5)
 
     summary = service.repository.get_summary("user-1", "session-1")
     assert summary is not None
@@ -180,7 +180,7 @@ def test_llm_failure_keeps_concat_fallback_and_service_alive() -> None:
     # 所以要再攒够 interval 轮才会提交下一次刷新。
     service.append(make_append("r2", "我在换工作", index=2))
     service.append(make_append("r3", "我下周出差", index=3))
-    service.drain_l3_background_tasks(timeout=5)
+    service.drain_l3_background_tasks(timeout=0.5)
     summary = service.repository.get_summary("user-1", "session-1")
     assert summary is not None and summary.summary_kind == "llm"
 
@@ -192,7 +192,7 @@ def test_llm_failure_does_not_retry_on_every_append() -> None:
     service, _ = make_service(composer, interval=5)
     for index in range(6):
         service.append(make_append(f"r{index}", f"第 {index} 轮对话", index=index))
-    service.drain_l3_background_tasks(timeout=5)
+    service.drain_l3_background_tasks(timeout=0.5)
 
     # 6 次 append、去抖间隔 5 → 首次尝试 1 次 + 到间隔后再 1 次 = 2 次；
     # 旧行为是每个 append 一次 = 6 次（故障被放大成调用风暴）。
@@ -204,7 +204,7 @@ def test_refreshed_summary_visible_via_recall_l2_layer() -> None:
     composer = RecordingComposer("【主题】养猫与搬家\n【近期状态】杭州")
     service, _ = make_service(composer, interval=5)
     service.append(make_append("r1", "我养了一只猫叫麻薯，最近搬到杭州"))
-    service.drain_l3_background_tasks(timeout=5)
+    service.drain_l3_background_tasks(timeout=0.5)
 
     recall = service.recall(
         RecallMemoryRequest(
@@ -222,7 +222,7 @@ def test_deleted_rounds_excluded_from_llm_refresh() -> None:
     composer = RecordingComposer()
     service, _ = make_service(composer, interval=99)
     service.append(make_append("r1", "我养了一只猫叫麻薯"))
-    service.drain_l3_background_tasks(timeout=5)
+    service.drain_l3_background_tasks(timeout=0.5)
     service.delete(
         DeleteMemoryRequest(
             request_id="req-del",
@@ -233,7 +233,7 @@ def test_deleted_rounds_excluded_from_llm_refresh() -> None:
         )
     )
     service.append(make_append("r2", "新的一轮", index=2))  # 删除后新会话轮次（同 scope 重建）
-    service.drain_l3_background_tasks(timeout=5)
+    service.drain_l3_background_tasks(timeout=0.5)
     # 最后一次刷新（第二次触发：删除会重置 _llm_refreshed_scopes? 不会——进程内集合。
     # 删除后 rounds 只剩 r2 → composer 收到的轮次不含已删来源。
     round_count, _ = composer.calls[-1]
@@ -280,7 +280,7 @@ def test_delete_between_rounds_read_and_version_read_cannot_resurrect_summary() 
         l2_refresh_interval_rounds=1,
     )
     service.append(make_append("r1", "SECRET-MARKER"))
-    service.drain_l3_background_tasks(timeout=5)
+    service.drain_l3_background_tasks(timeout=0.5)
 
     summary = repository.get_summary("user-1", "session-1")
     assert summary is not None
@@ -300,7 +300,7 @@ def test_pending_scope_not_resubmitted_while_in_flight() -> None:
     def blocking_composer(
         rounds: list[Any], previous_summary: str | None
     ) -> tuple[str, dict[str, str]]:
-        release.wait(timeout=5)
+        release.wait(timeout=2)
         return "【主题】done", {"主题": "done"}
 
     repository = InMemoryMemoryRepository()
@@ -317,7 +317,7 @@ def test_pending_scope_not_resubmitted_while_in_flight() -> None:
     # 此刻在飞的只有第一次提交
     assert refresher.pending_count == 1
     release.set()
-    refresher.drain(timeout=5)
+    refresher.drain(timeout=0.5)
     assert refresher.pending_count == 0
 
 
@@ -337,7 +337,7 @@ def test_stale_refresh_cannot_resurrect_deleted_summary() -> None:
         rounds: list[Any], previous_summary: str | None
     ) -> tuple[str, dict[str, str]]:
         started.set()
-        if not release.wait(timeout=10):
+        if not release.wait(timeout=2):
             raise RuntimeError("test release timeout")
         text = "【主题】SECRET-MARKER"
         return text, {"主题": text}
@@ -351,7 +351,7 @@ def test_stale_refresh_cannot_resurrect_deleted_summary() -> None:
         l2_refresh_interval_rounds=5,
     )
     service.append(make_append("r1", "SECRET-MARKER"))
-    assert started.wait(timeout=5)
+    assert started.wait(timeout=2)
 
     service.delete(
         DeleteMemoryRequest(
@@ -363,7 +363,7 @@ def test_stale_refresh_cannot_resurrect_deleted_summary() -> None:
         )
     )
     release.set()
-    service.drain_l3_background_tasks(timeout=10)
+    service.drain_l3_background_tasks(timeout=1)
 
     summary = repository.get_summary("user-1", "session-1")
     assert summary is not None
@@ -387,7 +387,7 @@ def test_erase_stale_refresh_cannot_resurrect_erased_summary() -> None:
         rounds: list[Any], previous_summary: str | None
     ) -> tuple[str, dict[str, str]]:
         started.set()
-        if not release.wait(timeout=10):
+        if not release.wait(timeout=2):
             raise RuntimeError("test release timeout")
         text = "【主题】ERASED-SECRET"
         return text, {"主题": text}
@@ -401,7 +401,7 @@ def test_erase_stale_refresh_cannot_resurrect_erased_summary() -> None:
         l2_refresh_interval_rounds=5,
     )
     service.append(make_append("r1", "ERASED-SECRET"))
-    assert started.wait(timeout=5)
+    assert started.wait(timeout=2)
 
     service.erase(
         DeleteMemoryRequest(
@@ -413,7 +413,7 @@ def test_erase_stale_refresh_cannot_resurrect_erased_summary() -> None:
         )
     )
     release.set()
-    service.drain_l3_background_tasks(timeout=10)
+    service.drain_l3_background_tasks(timeout=1)
 
     summary = repository.get_summary("user-1", "session-1")
     assert summary is not None
@@ -452,7 +452,7 @@ def test_l2_scope_state_is_bounded() -> None:
     )
     for index in range(20):
         refresher.maybe_submit(f"user-{index}", "session-1")
-        refresher.drain(timeout=1)
+        refresher.drain(timeout=0.5)
 
     assert len(refresher._append_counters) <= 4
     assert len(refresher._llm_refreshed_scopes) <= 4
@@ -474,7 +474,7 @@ def test_refresh_in_flight_triggers_trailing_refresh() -> None:
         calls.append(len(rounds))
         if len(calls) == 1:
             started.set()
-            if not release.wait(timeout=10):
+            if not release.wait(timeout=2):
                 raise RuntimeError("test release timeout")
         text = f"【主题】刷新{len(calls)}"
         return text, {"主题": text}
@@ -488,7 +488,7 @@ def test_refresh_in_flight_triggers_trailing_refresh() -> None:
         refresh_interval_rounds=2,
     )
     refresher.maybe_submit("user-1", "session-1")
-    assert started.wait(timeout=5)
+    assert started.wait(timeout=2)
 
     # 在飞期间又来了两轮：计数达到阈值，结束后必须补一次 trailing 刷新，
     # 且这次刷新要带上全部三轮。
@@ -497,7 +497,7 @@ def test_refresh_in_flight_triggers_trailing_refresh() -> None:
     refresher.maybe_submit("user-1", "session-1")
     refresher.maybe_submit("user-1", "session-1")
     release.set()
-    refresher.drain(timeout=10)
+    refresher.drain(timeout=0.5)
 
     assert len(calls) >= 2
     assert calls[-1] >= 3
@@ -624,7 +624,7 @@ def test_l2_refresh_excludes_rounds_of_deleted_long_term_memories() -> None:
     composer = RecordingRoundComposer()
     service, _ = make_service(composer, interval=1)  # type: ignore[arg-type]
     service.append(make_append("r1", "我养了一只猫叫麻薯"))
-    service.drain_l3_background_tasks(timeout=5)
+    service.drain_l3_background_tasks(timeout=0.5)
 
     memories = service.repository.list_memories("user-1", "thinkback")
     assert memories, "append 应在长期 scope 留下一条 L3 记忆"
@@ -632,7 +632,7 @@ def test_l2_refresh_excludes_rounds_of_deleted_long_term_memories() -> None:
         service.repository.mark_memory_deleted(memory.memory_id)
 
     service.append(make_append("r2", "我住在沈阳", index=2))
-    service.drain_l3_background_tasks(timeout=5)
+    service.drain_l3_background_tasks(timeout=0.5)
 
     assert composer.round_ids, "刷新器应至少跑过一次"
     refreshed = composer.round_ids[-1]

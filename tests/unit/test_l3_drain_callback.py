@@ -140,9 +140,14 @@ def test_drain_without_a_timeout_budget_still_waits_for_the_callback() -> None:
     关停路径用的就是无预算 drain：它必须等到完成回调真的跑完才返回。
     之前所有用例都传了 timeout，无预算分支（``_remaining`` 返回 None）
     从没被执行过 —— 而它恰好是关停语义本身。
+
+    drain 放在守护线程里跑，用例自己带 5 秒上限：回调**永远不跑**的实现
+    （完成回调没挂上）会让 drain 一直等下去 —— 那时用例要**失败**，
+    而不是把整轮审计挂死。
     """
     tracker = L3WriteExecutor(workers=2)
     finished = threading.Event()
+    returned = threading.Event()
 
     def on_finished(_done: object) -> None:
         finished.set()
@@ -150,8 +155,13 @@ def test_drain_without_a_timeout_budget_still_waits_for_the_callback() -> None:
     gate, _ = _tracked_future(tracker, on_finished)
     gate.set()
 
-    tracker.drain()
+    def _drain() -> None:
+        tracker.drain()
+        returned.set()
 
+    threading.Thread(target=_drain, daemon=True).start()
+
+    assert returned.wait(timeout=5), "drain() 没有等到完成回调就返回了"
     assert finished.is_set(), "drain() 没等完成回调就返回了"
     tracker.shutdown()
 

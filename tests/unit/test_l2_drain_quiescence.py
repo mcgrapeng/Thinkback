@@ -28,13 +28,16 @@ from thinkback.memory.repositories import InMemoryMemoryRepository
 from thinkback.memory.schemas import AppendMemoryRequest
 
 
-def _append(round_id: str, content: str, *, index: int = 1) -> AppendMemoryRequest:
+def _append(
+    round_id: str, content: str, *, index: int = 1, namespace: str = "thinkback"
+) -> AppendMemoryRequest:
     return AppendMemoryRequest(
         request_id=f"req-{round_id}",
         user_id="user-1",
         session_id="session-1",
         round_id=round_id,
         round_index=index,
+        namespace=namespace,
         messages=[
             {
                 "message_id": f"{round_id}-u",
@@ -64,7 +67,7 @@ def test_drain_waits_for_the_trailing_refresh_it_is_about_to_start() -> None:
         calls.append(len(rounds))
         if len(calls) == 1:
             started.set()
-            if not release.wait(timeout=10):
+            if not release.wait(timeout=2):
                 raise RuntimeError("test release timeout")
         text = f"【主题】刷新{len(calls)}"
         return text, {"主题": text}
@@ -86,7 +89,7 @@ def test_drain_waits_for_the_trailing_refresh_it_is_about_to_start() -> None:
     )
 
     refresher.maybe_submit("user-1", "session-1")
-    assert started.wait(timeout=5)
+    assert started.wait(timeout=2)
 
     # 在飞期间又来两轮：计数达到阈值 → 刷新结束后必须补一次 trailing 刷新。
     repository.save_round(_append("r2", "第二轮", index=2))
@@ -95,15 +98,62 @@ def test_drain_waits_for_the_trailing_refresh_it_is_about_to_start() -> None:
     refresher.maybe_submit("user-1", "session-1")
 
     release.set()
-    assert in_window.wait(timeout=5), "没有进入「已摘掉 future/pending」的窗口"
+    assert in_window.wait(timeout=2), "没有进入「已摘掉 future/pending」的窗口"
 
-    refresher.drain(timeout=10)
+    refresher.drain(timeout=1)
     calls_at_drain = len(calls)
 
     assert calls_at_drain >= 2, "drain 必须等到 trailing 刷新跑完才返回"
 
     time.sleep(0.4)
     assert len(calls) == calls_at_drain, "drain 返回后仍有刷新启动"
+
+
+def test_the_trailing_refresh_keeps_the_namespace_of_its_scope() -> None:
+    """补的那次 trailing 刷新必须还是同一个命名空间。
+
+    trailing 刷新是在完成回调里提交的；命名空间传丢 → 它跑到默认命名空间
+    去了：目标命名空间的轮次永远等不到这次刷新（摘要停在旧版本），
+    另一个命名空间被无端改写。
+    """
+    started = Event()
+    release = Event()
+    calls: list[tuple[int, str | None]] = []
+
+    def composer(rounds: list[Any], previous_summary: str | None) -> tuple[str, dict[str, str]]:
+        calls.append((len(rounds), previous_summary))
+        if len(calls) == 1:
+            started.set()
+            if not release.wait(timeout=2):
+                raise RuntimeError("test release timeout")
+        text = f"【主题】刷新{len(calls)}"
+        return text, {"主题": text}
+
+    repository = InMemoryMemoryRepository()
+    repository.save_round(_append("d0", "默认命名空间那一轮"))
+    repository.save_round(_append("r1", "第一轮", namespace="other"))
+    refresher = L2BackgroundRefresher(
+        repository=repository,
+        composer=composer,
+        executor=ThreadPoolExecutor(max_workers=1),
+        refresh_interval_rounds=2,
+    )
+
+    refresher.maybe_submit("user-1", "session-1", namespace="other")
+    assert started.wait(timeout=2)
+
+    # 在飞期间又来两轮：计数达到阈值 → 刷新结束后补一次 trailing 刷新。
+    repository.save_round(_append("r2", "第二轮", index=2, namespace="other"))
+    repository.save_round(_append("r3", "第三轮", index=3, namespace="other"))
+    refresher.maybe_submit("user-1", "session-1", namespace="other")
+    refresher.maybe_submit("user-1", "session-1", namespace="other")
+
+    release.set()
+    refresher.drain(timeout=1)
+
+    assert len(calls) >= 2, "trailing 刷新没有发生"
+    # trailing 刷新必须看到**目标命名空间**的三轮（默认命名空间只有一轮）。
+    assert calls[1][0] == 3, "trailing 刷新跑到了别的命名空间"
 
 
 def test_drain_returns_when_nothing_is_pending() -> None:
@@ -116,7 +166,7 @@ def test_drain_returns_when_nothing_is_pending() -> None:
     )
 
     began = time.monotonic()
-    refresher.drain(timeout=5)
+    refresher.drain(timeout=0.5)
 
     assert time.monotonic() - began < 1.0, "无在飞刷新时 drain 不该等待"
 
@@ -153,5 +203,5 @@ def test_a_failed_submit_releases_the_scope_so_drain_can_still_quiesce() -> None
     assert released, "队列槽位没归还：后续 append 会被容量闸门挡住"
 
     began = time.monotonic()
-    refresher.drain(timeout=5)
+    refresher.drain(timeout=0.5)
     assert time.monotonic() - began < 1.0, "提交失败后 drain 没能归位"
