@@ -14,6 +14,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from thinkback.domain.content_quality import QualityDimension, score_content
 
 SPECIFICITY = QualityDimension.SPECIFICITY
@@ -222,6 +224,23 @@ def test_novelty_is_one_without_peers() -> None:
     assert score_content("我养了一只英短猫").dimension(NOVELTY) == 1.0
 
 
+def test_novelty_is_zero_when_the_content_normalizes_to_nothing() -> None:
+    """去掉标点就没剩什么的内容 → 新颖性记 0.0，不是「这一维没分」。
+
+    ``score_content`` 只对**空字符串**提前返回；「!!!」这种内容会一路走到
+    新颖性这一维，归一化后是空的。这条分支以前只有一个杀手：hypothesis 的
+    ``texts`` 策略**碰巧**生成过纯标点串 —— 概率性的。于是这个变异体
+    （``value=0.0`` 写成 ``None``）在审计里的结论是随机的：同一棵 mutants/
+    树、同一条命令，三次复跑里一次判存活、两次判被杀。
+
+    写死一个确定输入，这条分支才有确定的结论。
+    """
+    score = score_content("!!!")
+
+    assert score.dimension(NOVELTY) == 0.0
+    assert score.reasons[NOVELTY] == ("空内容",)
+
+
 # --- 边界：这些差一个字符就红 --------------------------------------------
 
 
@@ -247,3 +266,28 @@ def test_novelty_strips_punctuation_before_comparing() -> None:
     score = score_content("我养了一只猫。", peers=("我养了一只猫",))
 
     assert score.dimension(NOVELTY) == 0.0
+
+
+def test_self_containedness_adds_up_two_penalties_in_one_dimension() -> None:
+    """同一个维度里的多个扣分项要**叠加**，不能互相覆盖。
+
+    「那个东西不见了」同时踩了两个扣分项：句首悬空指代（-0.60）与没有主语
+    （-0.15）。写成 ``penalty = 0.15``（覆盖而不是累加）的话，分数会从
+    0.25 变成 0.85 —— 一条明显依赖上下文的记忆被当成能独立读懂，
+    排序键也跟着错。
+    """
+    score = score_content("那个东西不见了")
+
+    assert score.dimension(SELF_CONTAINEDNESS) == pytest.approx(1.0 - 0.60 - 0.15)
+
+
+def test_self_containedness_adds_up_a_conversation_reference_too() -> None:
+    """「句首指代」与「引用对话之外的内容」两个扣分项也要叠加。
+
+    「他之前说过的」同时踩了 -0.60 与 -0.25 两项 → 0.15。
+    第二项写成覆盖而不是累加的话，分数会从 0.15 变成 0.75 ——
+    一条纯靠上下文的话被当成能独立读懂。
+    """
+    score = score_content("他之前说过的")
+
+    assert score.dimension(SELF_CONTAINEDNESS) == pytest.approx(1.0 - 0.60 - 0.25)
