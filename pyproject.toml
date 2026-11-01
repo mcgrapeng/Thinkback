@@ -248,6 +248,14 @@ only_mutate = [
     "src/thinkback/api/ratelimit.py",
     "src/thinkback/rpc/ratelimit.py",
     "src/thinkback/infra/replica_guard.py",
+    # 第十轮：槽位抽取与内容质量 —— 「什么算一条记忆、哪两个槽位打架」。
+    # 抽取器是 P0 冲突判定的地基（canonical / query_slots 都在范围里，
+    # 但抽取器本身此前没有一条用例直接钉它）；
+    # support 是槽位标记的公共词表与判定；
+    # content_quality 是写入前的内容质量闸。
+    "src/thinkback/domain/slots/extractors.py",
+    "src/thinkback/domain/slots/support.py",
+    "src/thinkback/domain/content_quality.py",
 ]
 pytest_add_cli_args_test_selection = [
     "tests/unit/test_memory_decay.py",
@@ -348,6 +356,10 @@ pytest_add_cli_args_test_selection = [
     "tests/unit/test_rate_limit_contract.py",
     "tests/unit/test_grpc_rate_limit_contract.py",
     "tests/unit/test_replica_guard_contract.py",
+    # 槽位抽取与内容质量的精确值契约（第十轮）：
+    # 抽取器的闸门（宠物名 / 作品名 / 标记）、英文模式的大小写、
+    # 末次匹配与切分；质量维度的扣分项叠加。
+    "tests/unit/test_slot_extractors_contract.py",
 ]
 
 [tool.hatch.build.targets.wheel.force-include]

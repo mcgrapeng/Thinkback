@@ -317,6 +317,27 @@ def main() -> int:
             print("mutation scope changed → no stale artifacts to clear")
         MUTANTS_DIR.mkdir(parents=True, exist_ok=True)
         SCOPE_FINGERPRINT_PATH.write_text(scope_fingerprint + "\n", encoding="utf-8")
+        # 范围变了还要**重算 mutmut 的覆盖图**（哪个用例覆盖哪个函数）。
+        # mutmut 3.8 的覆盖图只随**用例**增量更新（``collect_or_load_stats``
+        # 见到新用例才补跑），**不随范围更新** —— 范围变大而用例没变时，
+        # 新进范围的文件在覆盖图里一个函数都没有，于是它们的变异体全部被判成
+        # 「no tests」（第十轮实测：三个模块 1513 条全是「no tests」，而那些模块
+        # 的实际覆盖率是 94% / 98%）。门禁是 fail-closed 的：这些「无测试」都要
+        # 逐条登记，否则门禁直接红 —— 于是审计范围一扩大就凭空多出上千条
+        # 假盲区。
+        #
+        # 怎么让它重算：mutmut 只在「收集到新用例」时补跑统计，而「哪些用例已经
+        # 收集过」记在 ``duration_by_test`` 里。清空它（连同覆盖图），mutmut 就把
+        # 全部用例当成新用例，重跑一遍统计，覆盖图随之重建。
+        # **不动 ``config_fingerprint``** —— 那是 mutmut 判断「用例选择变了没」的
+        # 依据；用例没变，已有结论就仍然有效，不该作废（用例也变了的话走上面那条
+        # wipe 路径，这里轮不到）。
+        if STATS_PATH.exists():
+            stats = json.loads(STATS_PATH.read_text(encoding="utf-8"))
+            stats["duration_by_test"] = {}
+            stats["tests_by_mangled_function_name"] = {}
+            STATS_PATH.write_text(json.dumps(stats), encoding="utf-8")
+            print("mutation scope changed → cleared mutmut's coverage map so it rebuilds it")
 
     # **不要删 mutmut-stats.json**：mutmut 自己的配置指纹（test_selection /
     # test_execution 两组）就存在里面，删了它 mutmut 就看不到「测试选择列表

@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -337,6 +338,44 @@ def test_the_refresh_keeps_the_stats_file_so_mutmut_can_see_its_own_fingerprint(
     assert refresh.main() == 0
 
     assert (mutants / "mutmut-stats.json").exists()
+
+
+def test_the_refresh_clears_the_coverage_map_when_the_scope_changed(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """范围变了 → mutmut 的覆盖图要清空重算。
+
+    mutmut 3.8 的覆盖图只随**用例**增量更新，不随范围更新：范围变大而用例
+    没变时，新进范围的文件在覆盖图里一个函数都没有，于是它们的变异体全部
+    被判成「no tests」（第十轮实测 1513 条，而那些模块的实际覆盖率是 94%）。
+
+    触发重算的办法是清空「哪些用例已经收集过」—— mutmut 只在见到新用例时
+    补跑统计。清空它，全部用例就都成了「新用例」。
+
+    **配置指纹要留着**：那是 mutmut 判断「用例选择变了没」的依据；用例没变，
+    已有结论仍然有效，不该作废。
+    """
+    mutants = tmp_path / "mutants"
+    mutants.mkdir()
+    stats = {
+        "duration_by_test": {"tests/unit/test_x.py::test_a": 0.1},
+        "tests_by_mangled_function_name": {
+            "thinkback.x__f__mutmut_1": ["tests/unit/test_x.py::test_a"]
+        },
+        "config_fingerprint": {"test_selection": "abc", "test_execution": "def"},
+    }
+    (mutants / "mutmut-stats.json").write_text(json.dumps(stats), encoding="utf-8")
+    _redirect_paths(monkeypatch, mutants)
+    refresh.SUITE_FINGERPRINT_PATH.write_text(
+        refresh.compute_suite_fingerprint() + "\n", encoding="utf-8"
+    )
+
+    assert refresh.main() == 0
+
+    kept = json.loads((mutants / "mutmut-stats.json").read_text(encoding="utf-8"))
+    assert kept["duration_by_test"] == {}, "覆盖图的「已收集用例」没清掉"
+    assert kept["tests_by_mangled_function_name"] == {}, "覆盖图没清掉"
+    assert kept["config_fingerprint"] == stats["config_fingerprint"], "配置指纹被弄丢了"
 
 
 def test_the_gate_refuses_a_verdict_from_an_older_test_tree(
