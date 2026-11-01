@@ -46,6 +46,25 @@ test-baseline: test
 test-fast:
 	uv run --group dev pytest --testmon -q
 
+# 顺序依赖检查：把整份单测按随机顺序再跑一遍。
+#
+# 「单独跑绿、跟别人一起跑红」的用例是变异审计的隐形杀手：mutmut 按覆盖图
+# 跑用例（按名字排序），顺序跟文件里的定义顺序不一样。第十轮实测：一条
+# gRPC 用例在乱序下挑到了被下架的记忆 → UpdateMemory 报 not found → 那一批
+# 变异体全被判成「被杀」，结论是假的
+# （docs/report/2026-11-01-thinkback-round10-testing-sweep.md §2.4）。
+#
+# 不新增插件文件：先收集用例 id，按种子打乱，再逐条跑。
+ORDER_SEEDS ?= 20261101 20261102
+
+test-order:
+	@for seed in $(ORDER_SEEDS); do \
+		echo "== 顺序依赖检查 seed=$$seed"; \
+		uv run --group dev pytest -o addopts= --collect-only -q tests/unit \
+		| uv run --group dev python -c "import random,sys;items=[l.strip() for l in sys.stdin if '::' in l];random.Random($$seed).shuffle(items);sys.stdout.write('\0'.join(items))" \
+		| xargs -0 uv run --group dev pytest -q || exit 1; \
+	done
+
 # 覆盖率观测（非阻断）。行覆盖率不再当门禁：_verify_secret 那个恒真函数
 # 在 95.9% 覆盖率下活着——覆盖率衡量「这行被执行过」，不衡量「结果对不对」。
 # COVERAGE_FLOOR 只作为观测水位打印，不让 make coverage 失败。
@@ -55,10 +74,12 @@ coverage:
 	uv run --group dev pytest --cov=thinkback --cov-report=term-missing --cov-report=xml -v
 	@uv run --group dev python -c "import xml.etree.ElementTree as ET;f=float('$(COVERAGE_FLOOR)');r=float(ET.parse('coverage.xml').getroot().get('line-rate',0))*100;print(f'行覆盖率 {r:.1f}%，观测水位 {f:.0f}%（非阻断）')" || echo "覆盖率报告不可用（非阻断）"
 
-# 完成定义：格式 / lint / 类型 / 单元测试 / 变异审计 / 评测 全绿。
+# 完成定义：格式 / lint / 类型 / 单元测试 / 顺序依赖 / 变异审计 / 评测 全绿。
 # 单元测试进 check：否则单测红着 check 照样绿 —— 门禁漏门。
+# test-order 进 check：顺序依赖的用例「单独跑绿、一起跑红」，不换顺序
+# 发现不了；而它们会让变异审计的整批判定变假（见 test-order 的注释）。
 # 全程离线确定：不触真实 PG / Milvus / LLM，不需要任何凭证。
-check: format-check lint typecheck test test-baseline mutation-audit eval
+check: format-check lint typecheck test test-baseline test-order mutation-audit eval
 
 # 前端组件测试（vitest，确定性无网络）
 test-ui:
