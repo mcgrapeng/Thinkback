@@ -67,6 +67,26 @@ def _append_event_request(event_id: str = "event-1") -> pb.AppendEventRequest:
     )
 
 
+def _live_memory_id(stub: memory_pb2_grpc.MemoryServiceStub) -> str:
+    """从列表里挑一条**还活着**的记忆（没被擦除、没被下架）。
+
+    这个模块的 gRPC 服务是 module 级的，整个文件共用一份仓库。于是别的
+    用例擦掉 / 下架的记忆会留在 ``include_deleted=True`` 的列表里 ——
+    下架的那条还在列表中，只是 ``status`` 变成了 ``MEMORY_STATUS_SUPPRESSED``。
+
+    「第一条有内容的」因此会挑到别人处理过的记忆，用例就变成**顺序依赖**的：
+    按文件顺序跑没事，按别的顺序跑就红。变异审计按覆盖图跑用例（按名字排序），
+    顺序跟文件里不一样 —— 这条用例一红，整个批次的变异体全被判成「被杀」。
+    2026-11-01 实测：干净代码在这批用例里也是红的。
+    """
+    listed = stub.ListMemories(pb.ListMemoriesRequest(user_id="u1", include_deleted=True))
+    return next(
+        item.memory_id
+        for item in listed.items
+        if item.content and item.status == pb.MEMORY_STATUS_ACTIVE
+    )
+
+
 def test_append_returns_completed(stub: memory_pb2_grpc.MemoryServiceStub) -> None:
     resp = stub.AppendEvent(_append_event_request())
     assert resp.status in {"completed", "already_done"}
@@ -322,9 +342,7 @@ def test_servicer_error_paths_abort_then_unreachable(rpc_call: str, pb_request: 
 
 def test_update_memory_over_grpc(stub: memory_pb2_grpc.MemoryServiceStub) -> None:
     stub.AppendEvent(_append_event_request("event-update"))
-    listed = stub.ListMemories(pb.ListMemoriesRequest(user_id="u1", include_deleted=True))
-    target = next(item for item in listed.items if item.content)
-    original_id = target.memory_id
+    original_id = _live_memory_id(stub)
 
     resp = stub.UpdateMemory(
         pb.UpdateMemoryRequest(
@@ -362,8 +380,7 @@ def test_get_task_reports_retry_count(stub: memory_pb2_grpc.MemoryServiceStub) -
 def test_erase_task_is_queryable_over_grpc(stub: memory_pb2_grpc.MemoryServiceStub) -> None:
     """擦除任务必须能通过 gRPC 查询：此前 op_type 缺 ERASE，转换直接 KeyError。"""
     stub.AppendEvent(_append_event_request("event-erase-grpc"))
-    listed = stub.ListMemories(pb.ListMemoriesRequest(user_id="u1", include_deleted=True))
-    target = next(item for item in listed.items if item.content)
+    target_id = _live_memory_id(stub)
 
     resp = stub.Erase(
         pb.EraseRequest(
@@ -371,7 +388,7 @@ def test_erase_task_is_queryable_over_grpc(stub: memory_pb2_grpc.MemoryServiceSt
             user_id="u1",
             scope=pb.DELETE_SCOPE_MEMORY,
             operation_id="op-erase-grpc",
-            memory_id=target.memory_id,
+            memory_id=target_id,
         )
     )
     assert resp.status in {"completed", "already_done"}
@@ -385,8 +402,7 @@ def test_erase_task_is_queryable_over_grpc(stub: memory_pb2_grpc.MemoryServiceSt
 def test_suppress_over_grpc(stub: memory_pb2_grpc.MemoryServiceStub) -> None:
     """逻辑下架在 gRPC 上与 HTTP 等价。"""
     stub.AppendEvent(_append_event_request("event-suppress-grpc"))
-    listed = stub.ListMemories(pb.ListMemoriesRequest(user_id="u1", include_deleted=True))
-    target = next(item for item in listed.items if item.content)
+    target_id = _live_memory_id(stub)
 
     resp = stub.Suppress(
         pb.SuppressRequest(
@@ -394,7 +410,7 @@ def test_suppress_over_grpc(stub: memory_pb2_grpc.MemoryServiceStub) -> None:
             user_id="u1",
             scope=pb.DELETE_SCOPE_MEMORY,
             operation_id="op-suppress-grpc",
-            memory_id=target.memory_id,
+            memory_id=target_id,
         )
     )
     assert resp.status in {"completed", "already_done"}

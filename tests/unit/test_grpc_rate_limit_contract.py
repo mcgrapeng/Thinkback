@@ -151,6 +151,34 @@ def test_the_limiter_aborts_with_the_exact_retry_hint(monkeypatch: pytest.Monkey
     assert details == "Rate limit exceeded. Retry after 61s"
 
 
+def test_the_retry_hint_is_one_second_when_the_wait_is_under_a_second(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """等待不足一秒时，重试提示是 **1 秒**。
+
+    wait = (要的令牌数 − 桶里剩的) ÷ 每秒回填数。桶里剩半个时 wait = 0.5，
+    取整成 0，再 +1 → 1。写成 ``max(2, int(wait) + 1)`` 的话提示变成 2 秒 ——
+    调用方多等一倍。回填越快（每分钟配额越大）越容易落到这一档，
+    所以这一档是常态，不是边角。
+
+    （这条曾经被登记成「等价变异：下限 1 是冗余的」—— 那条理由是错的：
+    wait ≥ 0 时 int(wait) + 1 ≥ 1 没错，但下限取 1 还是 2 结果不同。）
+    """
+    clock = _frozen_clock(monkeypatch)
+    limiter = GrpcRateLimiter(rate_limit_per_minute=60, burst=1)
+    context = _FakeContext()
+    request = SimpleNamespace(user_id="u1", namespace="ns")
+
+    limiter.check(request, cast(grpc.ServicerContext, context))  # 桶是满的
+    clock.now += 0.5  # 回填了半个令牌 → 还差半个
+
+    with pytest.raises(grpc.RpcError):
+        limiter.check(request, cast(grpc.ServicerContext, context))
+
+    assert context.aborted is not None
+    assert context.aborted[1] == "Rate limit exceeded. Retry after 1s"
+
+
 def test_two_callers_have_separate_grpc_buckets(monkeypatch: pytest.MonkeyPatch) -> None:
     """两个调用方各有一份额度 —— gRPC 面不能把所有人算成一个桶。"""
     _frozen_clock(monkeypatch)
