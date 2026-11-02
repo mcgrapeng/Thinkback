@@ -257,6 +257,14 @@ only_mutate = [
     "src/thinkback/domain/slots/support.py",
     "src/thinkback/domain/content_quality.py",
 ]
+# 词表是**数据**不是逻辑：单独一个模块，逐条改字面量产出的是「等价变异」
+# （大小写 / XX 包裹），不是缺陷信号。抽出来之后用 golden 用例逐条钉死
+# （tests/unit/test_slot_vocabulary_golden.py），变异审计留给真正的判定分支。
+# mutmut 的 should_mutate =「在 only_mutate 里」且「不在 do_not_mutate 里」，
+# 两边口径要对齐（tests/eval/refresh_mutation_stats.py::in_scope 同口径）。
+do_not_mutate = [
+    "src/thinkback/domain/slots/_vocabulary.py",
+]
 pytest_add_cli_args_test_selection = [
     "tests/unit/test_memory_decay.py",
     "tests/unit/test_memory_repositories.py",
@@ -360,6 +368,10 @@ pytest_add_cli_args_test_selection = [
     # 抽取器的闸门（宠物名 / 作品名 / 标记）、英文模式的大小写、
     # 末次匹配与切分；质量维度的扣分项叠加。
     "tests/unit/test_slot_extractors_contract.py",
+    # 词表的 golden 用例：每条措辞配一个样例，钉住「模式仍命中」+
+    # 「抽取输出不变」。词表本身已移出变异范围，这份用例就是它的替代守卫
+    # —— 不选它，词表内容的回归就没人拦。
+    "tests/unit/test_slot_vocabulary_golden.py",
 ]
 
 [tool.hatch.build.targets.wheel.force-include]

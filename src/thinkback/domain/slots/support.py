@@ -25,6 +25,23 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from thinkback.domain.slots._vocabulary import (
+    ANXIETY_MEMORY_MARKERS,
+    ANXIETY_SOURCE_MARKERS,
+    BIRTHDAY_SOURCE_MARKERS,
+    COMMUNICATION_SOURCE_MARKERS,
+    CONCISE_MEMORY_MARKERS,
+    CONCISE_SOURCE_MARKERS,
+    DRINK_SOURCE_MARKERS,
+    FOOD_SOURCE_MARKERS,
+    LOCATION_SOURCE_MARKERS,
+    NICKNAME_SOURCE_MARKERS,
+    PET_ASCII_MARKERS,
+    PET_CJK_MARKERS,
+    REASSURANCE_SOURCE_MARKERS,
+    SLEEP_SOURCE_MARKERS,
+    WORK_STATUS_SOURCE_MARKERS,
+)
 from thinkback.domain.slots.canonical import (
     memory_conflict_slot,
     p0_canonical_memories_from_source,
@@ -100,18 +117,8 @@ def memory_supported_by_source(
         pet_kind, name = pet_name
         # H-1 修复：用单词/字符边界 + 上下文模式替代裸 substring 匹配，
         # 避免 "cat" 命中 "catastrophe"、"猫" 命中 "招财猫" 等误判。
-        ascii_markers = {
-            "cat": ("cat",),
-            "dog": ("dog",),
-            "bird": ("bird", "parrot"),
-            "rabbit": ("rabbit", "bunny"),
-        }.get(pet_kind, (pet_kind,))
-        cjk_markers = {
-            "cat": ("猫",),
-            "dog": ("狗",),
-            "bird": ("鸟", "鹦鹉"),
-            "rabbit": ("兔", "兔子"),
-        }.get(pet_kind, ())
+        ascii_markers = PET_ASCII_MARKERS.get(pet_kind, (pet_kind,))
+        cjk_markers = PET_CJK_MARKERS.get(pet_kind, ())
         lowered_source = source_text.lower()
         source_pet_name = extract_pet_name(source_text)
         if source_pet_name:
@@ -144,17 +151,7 @@ def memory_supported_by_source(
     nickname = extract_current_nickname(memory_text)
     if nickname:
         lowered_source = source_text.lower()
-        nickname_markers = (
-            "叫我",
-            "称呼我",
-            "叫用户",
-            "称呼",
-            "preferred name",
-            "name should be",
-            "name is",
-            "called",
-            "addressed as",
-        )
+        nickname_markers = NICKNAME_SOURCE_MARKERS
         return nickname in source_text and any(
             marker in lowered_source for marker in nickname_markers
         )
@@ -162,7 +159,7 @@ def memory_supported_by_source(
         # 没识别出 P0 slot；gate 留空时（默认）放行，非空时已在上面 return False。
         return True
     if slot == "birthday":
-        return source_has_any(source_text, ("生日", "birthday"))
+        return source_has_any(source_text, BIRTHDAY_SOURCE_MARKERS)
     source_slots = {
         memory_conflict_slot(source_memory_text)
         for source_memory_text in p0_canonical_memories_from_source(source_text)
@@ -173,55 +170,44 @@ def memory_supported_by_source(
     if slot == "current_location":
         return source_has_any(
             source_text,
-            ("住", "搬", "城市", "location", "live", "lived", "moving", "moved", "relocated"),
+            LOCATION_SOURCE_MARKERS,
         )
     if slot == "current_work_status":
-        return source_has_any(source_text, ("工作", "offer", "job", "moonshot", "换工作"))
+        return source_has_any(source_text, WORK_STATUS_SOURCE_MARKERS)
     if slot == "communication_preference":
         lowered_memory = memory_text.lower()
         if source_has_any(
             memory_text,
-            ("anxiety", "anxious", "break down", "breaking down", "焦虑", "拆解"),
+            ANXIETY_MEMORY_MARKERS,
         ):
             return source_has_any(
                 source_text,
-                ("焦虑", "拆解", "anxiety", "anxious", "break down", "breaking down"),
+                ANXIETY_SOURCE_MARKERS,
             )
         if source_has_any(
             memory_text,
-            ("concise", "direct", "简洁", "直接"),
+            CONCISE_MEMORY_MARKERS,
         ):
             return source_has_any(
                 source_text,
-                ("简洁", "直接", "concise", "direct"),
+                CONCISE_SOURCE_MARKERS,
             )
         if "reassurance" in lowered_memory or "comfort" in lowered_memory or "安慰" in memory_text:
             return source_has_any(
                 source_text,
-                ("安慰", "reassurance", "comfort"),
+                REASSURANCE_SOURCE_MARKERS,
             )
         return source_has_any(
             source_text,
-            (
-                "沟通",
-                "建议",
-                "安慰",
-                "说教",
-                "焦虑",
-                "communication",
-                "advice",
-                "suggestions",
-                "reassurance",
-                "anxious",
-            ),
+            COMMUNICATION_SOURCE_MARKERS,
         )
     if slot == "favorite:drink":
         return source_has_any(
             source_text,
-            ("饮品", "饮料", "喝", "咖啡", "茶", "drink", "beverage", "coffee", "tea"),
+            DRINK_SOURCE_MARKERS,
         )
     if slot == "favorite:food":
-        return source_has_any(source_text, ("食物", "吃", "food"))
+        return source_has_any(source_text, FOOD_SOURCE_MARKERS)
     if slot == "sleep_reminder_preference":
-        return source_has_any(source_text, ("睡", "提醒", "sleep", "reminder"))
+        return source_has_any(source_text, SLEEP_SOURCE_MARKERS)
     return True
