@@ -24,7 +24,7 @@ Fixes #
 
 ## Checklist
 
-- [ ] I've read the [Contributing Guide](.github/CONTRIBUTING.md)
+- [ ] I've read the [Contributing Guide](CONTRIBUTING.md)
 - [ ] Tests pass (`uv run pytest tests/`)
 - [ ] Type check passes (`cd web && npx tsc --noEmit`)
 - [ ] Build passes (`cd web && npm run build`)

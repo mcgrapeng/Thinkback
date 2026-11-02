@@ -9,7 +9,7 @@
 > 这份规范描述的是 2026-10-08 当时设计的「面向公网的 v1 接入协议」。该方案**没有上线**，
 > 对应的 `/v1/memory/*` 路由、API Key / Scope / Tenant 鉴权、密钥管理接口与
 > mem0 提示词在线编辑接口都已从代码里移除。本文正文按当时的规格原样保留，作为设计决策的
-> 历史记录；**当前可用的接口面以 [docs/API.md](../../API.md) 为准**。
+> 历史记录；**当前可用的接口面以 [docs/API.md](../API.md) 为准**。
 > 正文里的「✅ done」等标记只描述当时的实施计划，不代表今天的服务状态。
 >
 > 与现状的差异（截至 2026-10-27）：
@@ -26,7 +26,7 @@
 > | `/v1/memory/l3/status` | `/memory/l3/background-status` |
 > | `/v1/memory` 列表 / `PUT`、`DELETE /v1/memory/{id}` | `/memory/items`、`/memory/items/{memory_id}`、`/memory/update`、`/memory/delete`（另有 `/memory/suppress`、`/memory/erase`） |
 >
-> 需要一份「现在就能用」的接入说明，见 [docs/SDK.md](../../SDK.md)。
+> 需要一份「现在就能用」的接入说明，见 [docs/SDK.md](../SDK.md)。
 
 ---
 

@@ -5,7 +5,7 @@
 | 适用系统 | `thinkback` |
 | 文档类型 | 干净架构重构后的权威架构描述 |
 | 覆盖范围 | 分层架构 / 组件结构 / 数据流 / API 设计 / 数据库模式 / 扩展路径 |
-| 关联文档 | [Thinkback记忆三层架构](../memory/Thinkback记忆三层架构.md)（领域口径）、[GRPC](GRPC.md) |
+| 关联文档 | [Thinkback记忆三层架构](memory/Thinkback记忆三层架构.md)（领域口径）、[GRPC](GRPC.md) |
 
 本文描述 2026-09 重构后的代码架构：领域策略下沉 `domain/`，
 编排收敛 `memory/`，基础设施隔离 `infra/`，传输层薄化 `api/` + `rpc/`。

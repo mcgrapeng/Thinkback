@@ -39,4 +39,4 @@ Thinkback v1.0 is the first public release. The roadmap is a living document —
 
 ## Vote
 
-Open an [issue](.github/ISSUE_TEMPLATE/feature_request.md) with the `[Feature]` prefix, and we'll review + prioritize based on community feedback.
+Open an [issue](../.github/ISSUE_TEMPLATE/feature_request.md) with the `[Feature]` prefix, and we'll review + prioritize based on community feedback.
