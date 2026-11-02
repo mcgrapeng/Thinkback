@@ -571,3 +571,15 @@ def test_sleep_reminder_preference_needs_sleep_evidence_in_the_source() -> None:
 
     assert memory_supported_by_source(memory_text, _meta("我接受温和的睡眠提醒"))
     assert not memory_supported_by_source(memory_text, _meta("今天天气不错"))
+
+
+def test_marker_only_nickname_slot_falls_through_to_default_allow() -> None:
+    """marker 命中但抽取器没取到昵称的 preferred_nickname 槽位走尾部默认放行。
+
+    support 的每槽位分支只覆盖 nickname/pet/birthday/location/work_status/
+    沟通偏好/吃喝/睡眠；「称呼他」这类 marker 命中而抽取器未命中的
+    preferred_nickname 没有专责分支，落到函数尾部的 ``return True`` ——
+    这是「无专责规则就默认放行」的承重默认值：翻成 False 会让这类记忆
+    全部进不了本地索引（召回静默消失）。
+    """
+    assert memory_supported_by_source("称呼他为张工", _meta("我们团队都称呼他为张工"))

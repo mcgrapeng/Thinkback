@@ -212,7 +212,7 @@ def test_excluded_source_refs_include_tombstoned_rounds(repository) -> None:  # 
     repository.mark_memory_deleted(tombstone.memory_id)
 
     assert ("s1", "r1") in repository.excluded_source_refs("user-1", "thinkback")
-    assert ("s1", "r1") in repository.excluded_source_refs_for_user("user-1")
+    assert ("s1", "r1") in repository.excluded_source_refs_for_user("user-1", "thinkback")
 
 
 def test_mark_round_states_round_trip(repository) -> None:  # type: ignore[no-untyped-def]
@@ -419,10 +419,13 @@ def test_upsert_summary_from_journal_excludes_deleted_memory_sources(
 ) -> None:
     repository.save_round(make_append(round_id="r1", content="请记住我叫阿鹏"))
     repository.save_round(make_append(round_id="r2", content="我住在沈阳"))
+    # L3 记忆行的 memory_scope_id 是 namespace（生产写入路径全部钉在
+    # l3_scope_id），不是会话 scope；排除集跨的是**表**（L3 行 → journal
+    # 里会话 scope 的轮次），不是 ins_memory 内部跨 scope。
     memory = repository.add_memory_index(
         backend_memory_id="backend-1",
         user_id="user-1",
-        memory_scope_id="session-1",
+        memory_scope_id="thinkback",
         source_refs=[{"session_id": "session-1", "round_id": "r1"}],
         memory_text="用户叫阿鹏",
     )
@@ -624,10 +627,11 @@ def test_source_ref_sets_split_deleted_and_excluded(repository) -> None:  # type
 def test_excluded_source_refs_for_user_spans_memory_scopes(
     repository: InMemoryMemoryRepository | SqlAlchemyMemoryRepository,
 ) -> None:
-    """排除集按用户聚合：跨 scope 的已删除记忆都要算进来。
+    """排除集按用户聚合：该 namespace 下已删除记忆的来源都要算进来。
 
-    L3 记忆存在长期 scope（thinkback），轮次/摘要在会话 scope；
-    按单一 scope 过滤会漏掉「记忆已删除」的那一侧。
+    生产里 ins_memory 行的 memory_scope_id 就是 namespace（L3 写入与三类
+    墓碑都钉死在 l3_scope_id）；聚合的意义是**跨表**（L3 行的来源要过滤
+    journal 里会话 scope 的轮次），不是 ins_memory 内部跨 scope。
     """
     long_term = repository.add_memory_index(
         backend_memory_id="b-long-term",
@@ -636,12 +640,12 @@ def test_excluded_source_refs_for_user_spans_memory_scopes(
         source_refs=[{"session_id": "session-1", "round_id": "r1"}],
         memory_text="长期 scope 的记忆",
     )
-    session_scoped = repository.add_memory_index(
-        backend_memory_id="b-session",
+    second_row = repository.add_memory_index(
+        backend_memory_id="b-second",
         user_id="user-1",
-        memory_scope_id="session-1",
+        memory_scope_id="thinkback",
         source_refs=[{"session_id": "session-2", "round_id": "r9"}],
-        memory_text="会话 scope 的记忆",
+        memory_text="同 namespace 的另一条记忆",
     )
     other_user = repository.add_memory_index(
         backend_memory_id="b-other-user",
@@ -651,13 +655,46 @@ def test_excluded_source_refs_for_user_spans_memory_scopes(
         memory_text="别的用户的记忆",
     )
     repository.mark_memory_deleted(long_term.memory_id)
-    repository.mark_memory_suppressed(session_scoped.memory_id)
+    repository.mark_memory_suppressed(second_row.memory_id)
     repository.mark_memory_deleted(other_user.memory_id)
 
-    assert repository.excluded_source_refs_for_user("user-1") == {
+    assert repository.excluded_source_refs_for_user("user-1", "thinkback") == {
         source_ref_key({"session_id": "session-1", "round_id": "r1"}),
         source_ref_key({"session_id": "session-2", "round_id": "r9"}),
     }
+
+
+def test_excluded_source_refs_for_user_does_not_leak_across_namespaces(
+    repository: InMemoryMemoryRepository | SqlAlchemyMemoryRepository,
+) -> None:
+    """排除集限定在本 namespace：session_id 只在 namespace 内唯一。
+
+    同一 user 在两个 namespace 复用同一 ``(session_id, round_id)`` 时，
+    A 空间删除的来源不能把 B 空间里仍活跃的同名轮次也排除掉 ——
+    否则 B 的摘要会静默丢内容。
+    """
+    deleted_in_alpha = repository.add_memory_index(
+        backend_memory_id="b-alpha-deleted",
+        user_id="user-1",
+        memory_scope_id="alpha",
+        source_refs=[{"session_id": "shared-session", "round_id": "r1"}],
+        memory_text="alpha 里被删除的记忆",
+    )
+    repository.add_memory_index(
+        backend_memory_id="b-beta-active",
+        user_id="user-1",
+        memory_scope_id="beta",
+        source_refs=[{"session_id": "shared-session", "round_id": "r1"}],
+        memory_text="beta 里仍活跃的同名轮次来源",
+    )
+    repository.mark_memory_deleted(deleted_in_alpha.memory_id)
+
+    # alpha 的排除集：自己那条被删的来源在。
+    assert repository.excluded_source_refs_for_user("user-1", "alpha") == {
+        source_ref_key({"session_id": "shared-session", "round_id": "r1"})
+    }
+    # beta 的排除集：必须是空的 —— alpha 的删除与 beta 无关。
+    assert repository.excluded_source_refs_for_user("user-1", "beta") == set()
 
 
 def test_upsert_summary_from_journal_excludes_memory_deleted_in_long_term_scope(
@@ -1023,6 +1060,28 @@ def test_list_expired_memories_includes_the_exact_boundary(repository) -> None: 
     assert "exact-boundary" in ids, "恰好到期的记忆没被列出：边界比较不是闭区间"
     assert "after-boundary" not in ids
     assert "never-expires" not in ids, "永不过期的记忆不该出现在待清理列表里"
+
+
+def test_an_empty_tenant_filter_is_not_treated_as_absent(repository) -> None:  # type: ignore[no-untyped-def]
+    """``user_id=""`` 是「传了一个空租户」，不是「没传」。
+
+    按真值判（``if user_id:``）会把整个租户过滤丢掉，查询返回**全部租户**
+    的记忆 —— 少一道隔离。两个实现必须同一口径，且口径是「按 None 判」。
+    """
+    before = datetime(2026, 1, 1, tzinfo=UTC)
+    for suffix in ("a", "b"):
+        repository.add_memory_index(
+            backend_memory_id=f"b-{suffix}",
+            user_id=f"tenant-{suffix}",
+            memory_scope_id="thinkback",
+            source_refs=[{"session_id": "session-1", "round_id": "r-1"}],
+            memory_text=f"记忆 {suffix}",
+            expires_at=before - timedelta(days=1),
+        )
+
+    listed = repository.list_expired_memories(before=before, limit=10, user_id="")
+
+    assert listed == [], "空 user_id 不能被当成「不过滤」"
 
 
 def test_list_expired_memories_respects_the_limit(repository) -> None:  # type: ignore[no-untyped-def]

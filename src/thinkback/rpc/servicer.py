@@ -25,7 +25,7 @@ from thinkback.rpc import memory_pb2_grpc
 from thinkback.rpc.converters import (
     _SUMMARY_STATE_TO_PB,
     _managed_item_to_pb,
-    _namespace,
+    _served_namespace,
     get_response_to_pb,
     list_response_to_pb,
     rebuild_response_to_pb,
@@ -35,6 +35,7 @@ from thinkback.rpc.converters import (
     to_rebuild_request,
     to_recall_request,
     to_update_request,
+    types_response_to_pb,
 )
 from thinkback.rpc.ratelimit import GrpcRateLimiter
 
@@ -101,11 +102,44 @@ class MemoryServicer(memory_pb2_grpc.MemoryServiceServicer):
         # 限额与 HTTP 面同一份配置 —— 换个协议不该绕开限流。
         self._limiter = limiter or GrpcRateLimiter.from_settings()
 
+    def _check_trusted_user(self, request: Any, context: grpc.ServicerContext) -> None:
+        """D1 接入层身份绑定（与 HTTP 面 ``api/trusted_user.py`` 同一语义）。
+
+        ``TRUSTED_USER_HEADER`` 配了受信 metadata 键名时，请求自报的
+        user_id 必须与之完全一致；头缺失或不一致一律 PERMISSION_DENIED。
+        与限流一样必须在 try 块**外**调用：abort 抛出的 RpcError 落进
+        ``except Exception`` 会被改写成 INTERNAL —— 拒绝就变成了「服务端
+        内部错误」。gRPC metadata 键一律小写（``x-user-id``），HTTP 头
+        大小写不敏感，两面配同一个名字即可。
+        """
+        from thinkback.infra.config import settings
+
+        header_name = settings.trusted_user_header
+        if not header_name:
+            return
+        trusted = ""
+        for key, value in context.invocation_metadata() or ():
+            if key == header_name.lower() and value:
+                trusted = value.strip()
+                break
+        user = (getattr(request, "user_id", "") or "").strip()
+        if not trusted:
+            context.abort(
+                grpc.StatusCode.PERMISSION_DENIED,
+                f"trusted user metadata {header_name!r} is required",
+            )
+        if user and user != trusted:
+            context.abort(
+                grpc.StatusCode.PERMISSION_DENIED,
+                f"user_id does not match the trusted {header_name!r} metadata",
+            )
+
     def AppendEvent(
         self, request: pb.AppendEventRequest, context: grpc.ServicerContext
     ) -> pb.AppendEventResponse:
         """v2 写入契约：一次一条原始事件（与 HTTP /v2/memory/events 同形）。"""
         self._limiter.check(request, context)
+        self._check_trusted_user(request, context)
         try:
             resp = self._svc.append(to_append_event_request(request).to_internal())
             return pb.AppendEventResponse(
@@ -121,6 +155,7 @@ class MemoryServicer(memory_pb2_grpc.MemoryServiceServicer):
 
     def Recall(self, request: pb.RecallRequest, context: grpc.ServicerContext) -> pb.RecallResponse:
         self._limiter.check(request, context)
+        self._check_trusted_user(request, context)
         try:
             resp = self._svc.recall(to_recall_request(request))
             items = []
@@ -149,6 +184,7 @@ class MemoryServicer(memory_pb2_grpc.MemoryServiceServicer):
 
     def Delete(self, request: pb.DeleteRequest, context: grpc.ServicerContext) -> pb.DeleteResponse:
         self._limiter.check(request, context)
+        self._check_trusted_user(request, context)
         try:
             resp = self._svc.delete(to_delete_request(request))
             kw: dict[str, Any] = {
@@ -169,6 +205,7 @@ class MemoryServicer(memory_pb2_grpc.MemoryServiceServicer):
     ) -> pb.SuppressResponse:
         """逻辑下架：不可召回，保留原文与墓碑。"""
         self._limiter.check(request, context)
+        self._check_trusted_user(request, context)
         try:
             resp = self._svc.suppress_memory(to_delete_request(request))
             kw: dict[str, Any] = {
@@ -187,6 +224,7 @@ class MemoryServicer(memory_pb2_grpc.MemoryServiceServicer):
     def Erase(self, request: pb.EraseRequest, context: grpc.ServicerContext) -> pb.EraseResponse:
         """物理擦除：原文不可恢复。"""
         self._limiter.check(request, context)
+        self._check_trusted_user(request, context)
         try:
             resp = self._svc.erase(to_delete_request(request))
             kw: dict[str, Any] = {
@@ -206,11 +244,12 @@ class MemoryServicer(memory_pb2_grpc.MemoryServiceServicer):
         self, request: pb.ListMemoriesRequest, context: grpc.ServicerContext
     ) -> pb.ListMemoriesResponse:
         self._limiter.check(request, context)
+        self._check_trusted_user(request, context)
         try:
             resp = self._svc.list_memory_items(
                 user_id=request.user_id,
                 include_deleted=request.include_deleted,
-                namespace=_namespace(request.namespace),
+                namespace=_served_namespace(request.namespace),
             )
             return list_response_to_pb(resp)
         except Exception as exc:
@@ -222,11 +261,12 @@ class MemoryServicer(memory_pb2_grpc.MemoryServiceServicer):
         self, request: pb.GetMemoryRequest, context: grpc.ServicerContext
     ) -> pb.GetMemoryResponse:
         self._limiter.check(request, context)
+        self._check_trusted_user(request, context)
         try:
             resp = self._svc.get_memory_item(
                 user_id=request.user_id,
                 memory_id=request.memory_id,
-                namespace=_namespace(request.namespace),
+                namespace=_served_namespace(request.namespace),
             )
         except Exception as exc:
             logger.bind(rpc="GetMemory", error=str(exc)).warning("grpc get_memory failed")
@@ -242,6 +282,7 @@ class MemoryServicer(memory_pb2_grpc.MemoryServiceServicer):
         self, request: pb.UpdateMemoryRequest, context: grpc.ServicerContext
     ) -> pb.UpdateMemoryResponse:
         self._limiter.check(request, context)
+        self._check_trusted_user(request, context)
         try:
             resp = self._svc.update_memory(to_update_request(request))
             kw: dict[str, Any] = {
@@ -261,6 +302,7 @@ class MemoryServicer(memory_pb2_grpc.MemoryServiceServicer):
         self, request: pb.RebuildRequest, context: grpc.ServicerContext
     ) -> pb.RebuildResponse:
         self._limiter.check(request, context)
+        self._check_trusted_user(request, context)
         try:
             resp = self._svc.rebuild(to_rebuild_request(request))
             return rebuild_response_to_pb(resp)
@@ -271,6 +313,7 @@ class MemoryServicer(memory_pb2_grpc.MemoryServiceServicer):
 
     def GetTask(self, request: pb.GetTaskRequest, context: grpc.ServicerContext) -> pb.TaskResponse:
         self._limiter.check(request, context)
+        self._check_trusted_user(request, context)
         try:
             resp = self._svc.get_task(request.task_id)
         except Exception as exc:
@@ -288,6 +331,7 @@ class MemoryServicer(memory_pb2_grpc.MemoryServiceServicer):
         context: grpc.ServicerContext,
     ) -> pb.L3BackgroundStatusResponse:
         self._limiter.check(request, context)
+        self._check_trusted_user(request, context)
         try:
             s = self._svc.l3_background_status()
             return pb.L3BackgroundStatusResponse(
@@ -301,6 +345,24 @@ class MemoryServicer(memory_pb2_grpc.MemoryServiceServicer):
         except Exception as exc:
             logger.bind(rpc="GetL3BackgroundStatus", error=str(exc)).warning(
                 "grpc l3_background_status failed"
+            )
+            _handle_error(exc, context)
+            raise RuntimeError("unreachable: _handle_error must abort")  # pragma: no cover
+
+    def ListMemoryTypes(
+        self,
+        request: pb.ListMemoryTypesRequest,
+        context: grpc.ServicerContext,
+    ) -> pb.ListMemoryTypesResponse:
+        """已注册的记忆类型清单（与 HTTP /v2/memory/types 同形）。"""
+        self._limiter.check(request, context)
+        self._check_trusted_user(request, context)
+        try:
+            resp = self._svc.list_memory_types(namespace=_served_namespace(request.namespace))
+            return types_response_to_pb(resp)
+        except Exception as exc:
+            logger.bind(rpc="ListMemoryTypes", error=str(exc)).warning(
+                "grpc list_memory_types failed"
             )
             _handle_error(exc, context)
             raise RuntimeError("unreachable: _handle_error must abort")  # pragma: no cover

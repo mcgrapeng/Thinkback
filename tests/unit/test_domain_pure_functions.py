@@ -28,6 +28,7 @@ from thinkback.domain.summarization import (
     sections_to_text,
     summarize_rounds,
 )
+from thinkback.memory.schemas import AppendMemoryRequest, MemoryMessage, MessageRole
 
 
 def _entry(round_id: str, *, round_index: int | None = None) -> JournalEntry:
@@ -225,6 +226,46 @@ class TestStructuredSummaryPrompt:
         assert "上一版摘要" not in prompt
         assert "user: 内容-r-1" in prompt
 
+    def test_prompt_keeps_only_non_empty_user_messages(self) -> None:
+        """只有**非空的 user 轮**进摘要 prompt。
+
+        选人条件是 ``role == "user" and content.strip()`` —— ``and`` 写成
+        ``or`` 的话，助手的轮次（那不是用户事实）会被摘要进去，空正文的
+        user 轮也会挤出一行空的 ``user:``。
+        """
+        entry = _entry("r-mixed")
+        entry.messages = [
+            {"role": "user", "content": "我负责 3nm 工艺"},
+            {"role": "assistant", "content": "好的，记下了"},
+            {"role": "user", "content": "   "},
+            {"role": "tool", "content": "工具返回"},
+        ]
+
+        prompt = build_structured_summary_user_prompt([entry], previous_summary=None)
+
+        assert "我负责 3nm 工艺" in prompt
+        assert "好的，记下了" not in prompt, "助手轮次不是用户事实，不该进摘要"
+        assert "工具返回" not in prompt, "工具轮次不是用户事实，不该进摘要"
+        assert prompt.count("user:") == 1, f"只该有一行 user，实际 prompt:\n{prompt}"
+
+    def test_prompt_tolerates_messages_without_content(self) -> None:
+        """消息缺 ``content`` 键、或 content 为 None 时不得炸，也不得挤出空行。
+
+        这是「取不到内容」的兜底：把它换成读别的键、或把缺省值改成 None，
+        都会让这里抛异常或多一行垃圾。
+        """
+        entry = _entry("r-missing")
+        entry.messages = [
+            {"role": "user"},
+            {"role": "user", "content": None},
+            {"role": "user", "content": "真实的一句"},
+        ]
+
+        prompt = build_structured_summary_user_prompt([entry], previous_summary=None)
+
+        assert "真实的一句" in prompt
+        assert prompt.count("user:") == 1, f"缺内容的消息不该产生空行，实际 prompt:\n{prompt}"
+
 
 def test_request_fingerprint_distinguishes_embedded_separators() -> None:
     """消息里含 | 的两组不同对话，指纹不得相同（否则幂等误判为同一轮）。"""
@@ -249,6 +290,92 @@ def test_request_fingerprint_covers_behavior_changing_metadata() -> None:
     base = make_append(round_id="r-behavior")
     forced = base.model_copy(update={"metadata": {"force_extract": True}})
     assert request_fingerprint(base) != request_fingerprint(forced)
+
+
+# ---------------------------------------------------------------------------
+# 请求指纹的**取值**（golden）
+# ---------------------------------------------------------------------------
+#
+# 上面的契约只断言性质（同→同、异→异），不断言取值。可指纹是**持久化**的：
+# 服务把 ``round_fingerprint`` 存进 PG 的 journal 行，``_assert_round_matches_request``
+# 用它判定「同 round_id 是不是同一件事」。算法一改（JSON 键名、ensure_ascii、
+# 分隔符、载荷形状），旧行的指纹就算不出来 —— 重放一个旧请求会得到 409
+# 误报（判成「同 round_id 讲了两件事」），而实际上它就是同一件事。
+#
+# 滚动升级期间尤其危险：新旧实例各算各的，同一个请求两个指纹 → 幂等失效。
+#
+# 所以取值本身就是契约。改算法时这几个值**必须**变红 —— 那是提醒你：
+# 要么别改，要么连数据迁移一起做（旧行重算指纹）。
+
+_FINGERPRINT_CASES = (
+    # (说明, 消息 [(role, content)], metadata, 期望指纹)
+    (
+        "单条用户消息（ASCII）",
+        [("user", "hello world")],
+        None,
+        "d620919617d1aac32aea9af534bdfbf3264ffc44fc63fa535a3002bf475c59dd",
+    ),
+    (
+        "单条用户消息（含中文）",
+        [("user", "我叫小明")],
+        None,
+        "6ac5376e36ba933e65b4ddd5b45f6540d9fe86908435521555658d34403782a9",
+    ),
+    (
+        "两轮消息（顺序与角色都进载荷）",
+        [("user", "我叫小明"), ("assistant", "好的小明")],
+        None,
+        "bb402b6588f8692c646a52ca6cab4e69e60b87cee2cfaf62d899ee0e4b06a3b0",
+    ),
+    (
+        "behavior_metadata 进指纹",
+        [("user", "我叫小明")],
+        {"memory_type": "profile"},
+        "2b4f6818e0279d4fc18692c481864ff460331fbda9215f04651ddc254fb22708",
+    ),
+)
+
+
+@pytest.mark.parametrize(
+    "description,messages,metadata,expected",
+    _FINGERPRINT_CASES,
+    ids=[case[0] for case in _FINGERPRINT_CASES],
+)
+def test_request_fingerprint_value_is_pinned(
+    description: str,
+    messages: list[tuple[str, str]],
+    metadata: dict[str, str] | None,
+    expected: str,
+) -> None:
+    """请求指纹的**取值**是契约：它被持久化到 PG，算法变 = 旧数据比不上。
+
+    这几个值钉的是 JSON 载荷的形状（键名 ``messages`` / ``role`` / ``content`` /
+    ``behavior_metadata``、``ensure_ascii=False``、``sort_keys=True``、
+    ``separators=(",", ":")``）。任一改动都会让这里的断言变红。
+    """
+    from thinkback.domain.keys import request_fingerprint
+
+    moment = datetime(2026, 5, 4, 10, 0, 0, tzinfo=UTC)
+    request = AppendMemoryRequest(
+        request_id="req-golden",
+        user_id="u1",
+        session_id="s1",
+        round_id="round-golden",
+        messages=[
+            MemoryMessage(
+                message_id=f"m-{index}",
+                role=MessageRole(role),
+                content=content,
+                timestamp=moment,
+            )
+            for index, (role, content) in enumerate(messages)
+        ],
+        source_timestamp=moment,
+        namespace="thinkback",
+        metadata=dict(metadata or {}),
+    )
+
+    assert request_fingerprint(request) == expected, description
 
 
 # ---------------------------------------------------------------------------

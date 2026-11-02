@@ -137,7 +137,13 @@ class MemoryTypeRegistry:
 
 
 def default_registry() -> MemoryTypeRegistry:
-    """内置默认注册表：不配置时行为与现在一致。"""
+    """内置默认注册表：不配置时行为与现在一致。
+
+    ``procedure``（程序性规则，需审批）不在默认集合里：写入路径对
+    ``review_required`` 类型一律拒绝（没有审批通道就不留「写进去但不可用」
+    的口子），把它放进默认清单等于摆一个永远写不进去的类型。需要审批流的
+    namespace 由 profile 显式定义（``review_required`` 能力保留）。
+    """
     return MemoryTypeRegistry(
         namespace="thinkback",
         version="1",
@@ -206,16 +212,6 @@ def default_registry() -> MemoryTypeRegistry:
                 retention="forever",
                 classification="personal",
                 description="约束与雷区（属用户事实，不是程序性规则）",
-            ),
-            "procedure": MemoryTypeSpec(
-                name="procedure",
-                extractor="none",
-                source_roles=("admin",),
-                conflict="none",
-                retention="forever",
-                classification="restricted",
-                review_required=True,
-                description="程序性规则：只允许管理员写入且需审批，召回时按提示词装配",
             ),
         },
     )
@@ -406,34 +402,57 @@ def extract_attribute_name(text: str) -> str | None:
         if not found or not tail.strip():
             continue
         name = head.strip()
-        if name and len(name) <= ATTRIBUTE_NAME_MAX_LEN:
+        # 「短词」= 不含空白：含空白的 head 是散文（"I like: X" 的 "I like"），
+        # 不是属性名。拿它当冲突键会让无关事实互相比拼 overwrite —— 数据丢失。
+        if name and len(name) <= ATTRIBUTE_NAME_MAX_LEN and not any(c.isspace() for c in name):
             return name
     return None
 
 
-def load_registry(profile_dir: Path, namespace: str) -> MemoryTypeRegistry:
+def profile_dirs(profile_dir: Path | str) -> list[Path]:
+    """配置目录列表：逗号分隔，按顺序找第一个命中的。
+
+    为什么允许多个目录：镜像里烤着内置 profile（``/app/profiles``），企业自己
+    的 profile 由部署方挂到另一个目录（``/etc/thinkback/profiles``）。单目录时
+    企业要新增一个记忆类型就得重建镜像 —— 配置驱动的插件形态做不到这件事。
+    多目录只是「按顺序找」，不引入任何新概念。
+
+    单个目录时行为与从前逐字一致。
+    """
+    if isinstance(profile_dir, Path):
+        return [profile_dir]
+    parts = [item.strip() for item in str(profile_dir).split(",")]
+    return [Path(item) for item in parts if item]
+
+
+def load_registry(profile_dir: Path | str, namespace: str) -> MemoryTypeRegistry:
     """按 namespace 加载 profile。
 
-    文件约定：``<profile_dir>/<namespace>.json``。文件不存在时回落到默认
-    注册表 —— 默认 namespace 就是内置类型集，缺文件是正常的。
+    文件约定：``<profile_dir>/<namespace>.json``。所有目录都没有该文件时回落到
+    默认注册表 —— 默认 namespace 就是内置类型集，缺文件是正常的。
 
     指令文件约定：``<profile_dir>/<extraction_prompt>``（相对路径），
     例如 ``prompts/semiconductor/process_preference.v1.md``。
+    指令相对**命中该 profile 的那个目录**解析。
     """
-    path = profile_dir / f"{namespace}.json"
-    if not path.is_file():
-        return default_registry()
-    payload = json.loads(path.read_text(encoding="utf-8"))
+    for directory in profile_dirs(profile_dir):
+        path = directory / f"{namespace}.json"
+        if not path.is_file():
+            continue
+        payload = json.loads(path.read_text(encoding="utf-8"))
 
-    def load_prompt(relative: str) -> str:
-        prompt_path = profile_dir / relative
-        if not prompt_path.is_file():
-            raise ValueError(f"extraction prompt file not found: {prompt_path}")
-        return prompt_path.read_text(encoding="utf-8")
+        def load_prompt(relative: str, _base: Path = directory) -> str:
+            prompt_path = _base / relative
+            if not prompt_path.is_file():
+                raise ValueError(f"extraction prompt file not found: {prompt_path}")
+            return prompt_path.read_text(encoding="utf-8")
 
-    return registry_from_dict(payload, namespace=namespace, prompt_loader=load_prompt)
+        return registry_from_dict(payload, namespace=namespace, prompt_loader=load_prompt)
+    return default_registry()
 
 
-def has_profile(profile_dir: Path, namespace: str) -> bool:
-    """该 namespace 是否有自己的 profile 文件。"""
-    return (profile_dir / f"{namespace}.json").is_file()
+def has_profile(profile_dir: Path | str, namespace: str) -> bool:
+    """该 namespace 是否有自己的 profile 文件（任一目录命中即可）。"""
+    return any(
+        (directory / f"{namespace}.json").is_file() for directory in profile_dirs(profile_dir)
+    )

@@ -14,6 +14,9 @@
 6. 幂等重放一致        完全一致
 7. BM25 与分词器        集合 schema 归 Thinkback（分析器 chinese）
                         英文词与中文词各抽样一次，必须命中
+8. 索引与引擎一致        引擎里的每条事实都要有对应的本地 ACTIVE 索引行
+                        （0 条索引缺失）。本地索引是「这条事实存不存在」的
+                        权威 —— 缺行 = 永远召不回来，且没有任何报错
 
 跑法（需要真实 Milvus + 可达的 LLM/embedding endpoint + 可写的 PG）：
 
@@ -279,6 +282,30 @@ def _milvus_rows(settings: Settings, user_id: str) -> int:
         return -1
 
 
+def _milvus_row_ids(settings: Settings, user_id: str) -> set[str]:
+    """该用户在 Milvus 主集合里的行 id —— 引擎侧的事实清单。
+
+    只查主集合：迁移窗口里的镜像集合是主集合的副本，两边都查会把同一件事
+    数成两条。
+    """
+    from pymilvus import MilvusClient
+
+    client = MilvusClient(
+        uri=settings.milvus_url,
+        token=settings.milvus_token or "",
+        db_name=settings.milvus_database,
+    )
+    try:
+        rows = client.query(
+            collection_name=settings.memory_milvus_collection,
+            filter=f'metadata["user_id"] == "{user_id}"',
+            output_fields=["id"],
+        )
+    finally:
+        client.close()
+    return {str(row["id"]) for row in rows}
+
+
 def _collection_client(settings: Settings) -> Any:
     from pymilvus import MilvusClient
 
@@ -526,6 +553,41 @@ def main() -> int:
         f"重放前后事实条数 {first_count} → {second_count}",
         value=float(second_count),
         floor=float(first_count),
+    )
+
+    # 8：索引与引擎一致 —— 召回的前提
+    #
+    # 召回时引擎给的候选必须命中本地索引才会被采用：本地索引是「这条事实
+    # 存不存在」的权威（擦除、抑制、保留期都要靠它强制执行，让引擎说了算
+    # 等于治理面失效）。于是「引擎里有、索引里没有」= 这条事实**永远召不回
+    # 来**，而且没有任何报错 —— 助手只是安静地看不到东西。第十一轮修的
+    # 「L1 缓存关掉时召回整层消失、degraded 仍是 False」就是这一类。
+    #
+    # 反方向不查：本地索引可以有引擎没有的行 —— P0 槽位回填是本地物化的，
+    # 按设计不进引擎。
+    index_ids = {
+        memory.backend_memory_id
+        for memory in repository.active_memories(user_id, scope)
+        if memory.backend_memory_id
+    }
+    try:
+        engine_ids = _milvus_row_ids(settings, user_id)
+    except Exception as exc:  # noqa: BLE001 - 查询失败本身要报出来，不能当通过
+        engine_ids = set()
+        engine_error = f"{type(exc).__name__}: {exc}"
+    else:
+        engine_error = ""
+    orphaned = engine_ids - index_ids
+    record(
+        "engine_rows_are_recallable",
+        not orphaned and not engine_error,
+        (
+            f"引擎 {len(engine_ids)} 条、本地索引 {len(index_ids)} 条、"
+            f"索引缺失 {len(orphaned)} 条"
+            + (f"（引擎查询失败：{engine_error}）" if engine_error else "")
+        ),
+        value=float(len(orphaned)),
+        floor=0.0,
     )
 
     # 7：BM25 与分词器

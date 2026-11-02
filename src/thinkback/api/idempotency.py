@@ -15,6 +15,7 @@ import json
 import time
 from collections import OrderedDict
 from dataclasses import dataclass
+from typing import Any
 
 from fastapi import Request, Response
 from loguru import logger
@@ -55,6 +56,28 @@ def _caller_identity(body: bytes) -> str:
     if not isinstance(user_id, str) or not user_id.strip():
         return ""
     namespace = payload.get("namespace")
+    if not isinstance(namespace, str) or not namespace.strip():
+        namespace = DEFAULT_NAMESPACE
+    return f"{namespace}:{user_id}"
+
+
+def _caller_identity_from_query(request: Any) -> str:
+    """从查询串里取调用方标识（namespace + user_id）。
+
+    GET 请求没有请求体，``user_id`` / ``namespace`` 在查询串里
+    （``/v2/memory/items?user_id=alice``）。取不到就返回空串，调用方退回
+    对端 IP 分域。
+
+    口径与 :func:`_caller_identity` 完全一致（含 namespace 缺省归一）——
+    两个中间件对「谁」的理解不能各说各话。
+    """
+    params = getattr(request, "query_params", None)
+    if params is None:
+        return ""
+    user_id = params.get("user_id")
+    if not isinstance(user_id, str) or not user_id.strip():
+        return ""
+    namespace = params.get("namespace")
     if not isinstance(namespace, str) or not namespace.strip():
         namespace = DEFAULT_NAMESPACE
     return f"{namespace}:{user_id}"
@@ -228,7 +251,12 @@ class IdempotencyMiddleware(BaseHTTPMiddleware):
             )
 
         # 执行请求
-        # 重建 request._body(因为已经读过了)
+        # 已知的并发窗口：两个同 key 同 body 的请求同时到达时，两边都可能
+        # 未命中缓存而双双执行（check-then-act 之间没有 in-flight 锁）。
+        # 正确性由域层幂等锚点兜底（round_id / operation_id 的 DB 唯一约束，
+        # 输家回读到已存行并得到 409），残余代价只是窄窗口内重复的引擎调用。
+        # 这里不加进程内锁：锁只覆盖单进程，而缓存本就是进程内的 ——
+        # 跨副本的同一竞态它同样拦不住，加了是假安全感。
         request._body = body
         response = await call_next(request)
 

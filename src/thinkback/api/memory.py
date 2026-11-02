@@ -36,6 +36,7 @@ from thinkback.memory.schemas import (
     GetMemoryResponse,
     L3BackgroundStatusResponse,
     ListMemoriesResponse,
+    ListMemoryTypesResponse,
     RecallMemoryRequest,
     RecallMemoryResponse,
     TaskResponse,
@@ -70,6 +71,27 @@ logger.bind(
     worker_limit=settings.memory_api_worker_limit,
     wait_seconds=settings.memory_api_worker_wait_seconds,
 ).info("memory api worker pools initialized")
+
+
+def _require_served_namespace(namespace: str) -> None:
+    """确认本部署服务这个 namespace；不服务则 403。
+
+    内网免鉴权（D10）下 namespace 只是业务分组标签，不是访问控制。设置
+    ``MEMORY_ALLOWED_NAMESPACES`` 后，本部署只服务名单内的 namespace ——
+    把「一个部署服务一个租户」从口头约定变成可执行的配置。
+
+    失败是 403 且 fail-closed：换一个 namespace 就能写进别的租户，这类
+    请求不该重试，该改配置。
+
+    为什么每个端点各写一次而不是做成路由级依赖：``/tasks/{id}`` 与
+    ``/l3/background-status`` 不带 namespace（任务 ID 是全局的），路由级
+    依赖会把它们连坐。逐端点写清楚，宁可啰嗦也不要误伤。
+    """
+
+    try:
+        settings.require_namespace(namespace)
+    except ValueError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
 
 
 async def _run_read_memory_call[**P, R](
@@ -323,6 +345,7 @@ async def append_memory(
         role=str(request.event.role),
         source=request.event.source,
     ).debug("memory append request received")
+    _require_served_namespace(request.namespace)
     try:
         response = await _run_write_memory_call(service.append, request.to_internal())
     except Exception:
@@ -388,6 +411,7 @@ async def recall_memory(
         session_id=request.session_id,
         query_length=len(request.query),
     ).debug("memory recall request received")
+    _require_served_namespace(request.namespace)
     try:
         response = await _run_read_memory_call(service.recall, request)
     except Exception:
@@ -458,6 +482,7 @@ async def delete_memory(
         operation_id=request.operation_id,
         has_memory_id=request.memory_id is not None,
     ).debug("memory delete request received")
+    _require_served_namespace(request.namespace)
     return await _run_write_memory_call(service.delete, request)
 
 
@@ -482,6 +507,7 @@ async def suppress_memory(
         operation_id=request.operation_id,
         has_memory_id=request.memory_id is not None,
     ).debug("memory suppress request received")
+    _require_served_namespace(request.namespace)
     return await _run_write_memory_call(service.suppress_memory, request)
 
 
@@ -506,7 +532,31 @@ async def erase_memory(
         operation_id=request.operation_id,
         has_memory_id=request.memory_id is not None,
     ).debug("memory erase request received")
+    _require_served_namespace(request.namespace)
     return await _run_write_memory_call(service.erase, request)
+
+
+@router.get(
+    "/types",
+    response_model=ListMemoryTypesResponse,
+    summary="列出已注册的记忆类型",
+    operation_id="memory_list_types",
+    description=(
+        "列出该 namespace 下已注册的记忆类型及其策略（TTL、分类、冲突策略、"
+        "来源角色、召回预算）。接入方靠它在运行时知道能写哪些类型，"
+        "不必把类型名写死在客户端里。"
+    ),
+)
+async def list_memory_types(
+    namespace: str = Query(
+        default="thinkback",
+        description="记忆作用域标签（企业/应用/助手/垂类）。",
+    ),
+    service: MemoryService = Depends(get_memory_service),
+) -> ListMemoryTypesResponse:
+    logger.bind(namespace=namespace).debug("memory types request received")
+    _require_served_namespace(namespace)
+    return await _run_read_memory_call(service.list_memory_types, namespace=namespace)
 
 
 @router.get(
@@ -531,6 +581,7 @@ async def list_memory_items(
     logger.bind(user_id=user_id, include_deleted=include_deleted, namespace=namespace).debug(
         "memory management list request received"
     )
+    _require_served_namespace(namespace)
     return await _run_read_memory_call(
         service.list_memory_items,
         user_id=user_id,
@@ -558,6 +609,7 @@ async def get_memory_item(
     logger.bind(user_id=user_id, memory_id=memory_id, namespace=namespace).debug(
         "memory management get request received"
     )
+    _require_served_namespace(namespace)
     response = await _run_read_memory_call(
         service.get_memory_item,
         user_id=user_id,
@@ -627,6 +679,7 @@ async def update_memory_item(
         operation_id=request.operation_id,
         content_length=len(request.content),
     ).debug("memory management update request received")
+    _require_served_namespace(request.namespace)
     return await _run_write_memory_call(service.update_memory, request)
 
 

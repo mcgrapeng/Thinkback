@@ -20,9 +20,9 @@ def test_default_registry_covers_current_behaviour() -> None:
 
     assert registry.get("profile").extractor == "mem0"
     assert registry.get("preference").source_roles == ("user",)
-    # 程序性规则只能由管理员写入且需审批
-    assert registry.get("procedure").source_roles == ("admin",)
-    assert registry.get("procedure").review_required is True
+    # procedure 不在默认注册表：写入路径对 review_required 类型一律拒绝，
+    # 默认清单里不该有永远写不进去的类型（需要审批流的 namespace 用 profile 定义）。
+    assert "procedure" not in registry.names()
     # 状态类记忆有保留期
     assert registry.get("state").retention == "ttl"
     assert registry.get("state").ttl_days == 90
@@ -110,17 +110,6 @@ DEFAULT_TYPE_TABLE: dict[str, dict[str, object]] = {
         "ttl_days": None,
         "classification": "personal",
         "review_required": False,
-        "recall_budget": None,
-        "extraction_prompt": "",
-    },
-    "procedure": {
-        "extractor": "none",
-        "source_roles": ("admin",),
-        "conflict": "none",
-        "retention": "forever",
-        "ttl_days": None,
-        "classification": "restricted",
-        "review_required": True,
         "recall_budget": None,
         "extraction_prompt": "",
     },
@@ -255,7 +244,17 @@ def test_the_attribute_name_comes_from_the_first_separator() -> None:
 
 
 def test_the_attribute_name_accepts_the_half_width_colon() -> None:
-    assert extract_attribute_name("process node: 3nm") == "process node"
+    assert extract_attribute_name("process-node: 3nm") == "process-node"
+
+
+def test_a_head_containing_whitespace_is_prose_not_an_attribute() -> None:
+    """含空白的冒号前缀是散文（"I like: X" 的 "I like"），不是属性名。
+
+    拿它当冲突键会让无关事实互相比拼 overwrite —— 数据丢失。多词属性名
+    用连字符或驼峰（"process-node" / "processNode"），抽取指令里写清楚。
+    """
+    assert extract_attribute_name("I like: sunny days") is None
+    assert extract_attribute_name("process node: 3nm") is None
 
 
 def test_the_attribute_name_is_stripped() -> None:
@@ -292,7 +291,6 @@ def test_assistant_is_not_a_default_source_role() -> None:
     assert registry.get("preference").allows_role("user") is True
     assert registry.get("preference").allows_role("assistant") is False
     assert registry.get("preference").allows_extraction() is True
-    assert registry.get("procedure").allows_extraction() is False
 
 
 def test_registry_from_dict_keeps_config_values() -> None:
@@ -507,7 +505,6 @@ def test_shipped_semiconductor_profile_loads() -> None:
 
     profile_dir = Path(__file__).resolve().parents[2] / "profiles"
     registry = load_registry(profile_dir, "semiconductor")
-
     assert "process_preference" in registry.names()
     assert "procedure" in registry.names()
     # 程序性规则必须要求审批
@@ -546,3 +543,67 @@ def test_a_type_without_an_extraction_prompt_gets_empty_prompt_fields() -> None:
     assert spec.extraction_prompt_text == ""
     assert spec.extraction_prompt_version == ""
     assert spec.recall_budget is None
+
+
+def test_shipped_thinkback_profile_matches_the_default_registry() -> None:
+    """仓库自带的 thinkback.json 与代码默认注册表必须同构。
+
+    两份是同一份默认类型集的两个载体（文件版给带 profile 目录的部署，
+    代码版给完全没有 profile 目录的环境）。任何漂移（类型增减、策略
+    改动）都会让两种部署行为不一致 —— 这里逐格钉死。文件版多出的只
+    允许是 extraction_prompt 相关字段。
+    """
+    from pathlib import Path
+
+    profile_dir = Path(__file__).resolve().parents[2] / "profiles"
+    shipped = load_registry(profile_dir, "thinkback")
+    fallback = default_registry()
+
+    # namespace/version 也钉死：错误信息（"not registered in namespace …"）
+    # 与策略版本（policy_version 落进每条记忆）都消费它们，漂了不报错但
+    # 口径全变。
+    assert shipped.namespace == fallback.namespace == "thinkback"
+    assert shipped.version == fallback.version == "1"
+    assert shipped.names() == fallback.names()
+    for name in fallback.names():
+        shipped_spec = shipped.get(name)
+        fallback_spec = fallback.get(name)
+        for policy_field in (
+            "extractor",
+            "source_roles",
+            "conflict",
+            "retention",
+            "ttl_days",
+            "classification",
+            "review_required",
+            "recall_budget",
+        ):
+            assert getattr(shipped_spec, policy_field) == getattr(fallback_spec, policy_field), (
+                f"{name}.{policy_field} drifted between shipped profile and default registry"
+            )
+
+
+def test_every_overwrite_type_in_the_shipped_profile_can_compute_conflict_keys() -> None:
+    """D2：声明 conflict=overwrite 的内置类型必须配抽取指令。
+
+    冲突键只有「属性名：值」形态的事实才算得出来；没有指令的类型抽出来
+    是自由文本，overwrite 空转 —— 新旧矛盾事实并存且都被召回。
+    """
+    from pathlib import Path
+
+    profile_dir = Path(__file__).resolve().parents[2] / "profiles"
+    shipped = load_registry(profile_dir, "thinkback")
+
+    overwrite_types = [
+        name for name in shipped.names() if shipped.get(name).conflict == "overwrite"
+    ]
+    assert overwrite_types, "内置覆盖型类型不应为空 —— 这个测试失去了对象"
+    for name in overwrite_types:
+        spec = shipped.get(name)
+        assert spec.extraction_prompt_text, f"{name} 声明了 overwrite 但没有抽取指令"
+        assert spec.extraction_prompt_version, f"{name} 的抽取指令缺版本标识"
+
+    # 指令里声明的属性名必须真能算出冲突键（无空白、长度合规）——
+    # 指令与 extract_attribute_name 的判据是两份文本，靠这条测试对上。
+    assert extract_attribute_name("居住城市：杭州") == "居住城市"
+    assert extract_attribute_name("沟通风格：直接给结论") == "沟通风格"

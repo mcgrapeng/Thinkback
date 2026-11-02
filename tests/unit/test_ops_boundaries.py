@@ -51,3 +51,36 @@ def test_api_deployment_keeps_single_replica() -> None:
     """单写者：多副本 + 每次启动都迁移 = 并发 DDL。"""
     manifest = (REPO_ROOT / "k8s" / "deployment-api.yaml").read_text(encoding="utf-8")
     assert "replicas: 1" in manifest
+
+
+def test_k8s_serves_memory_type_profiles_without_rebuilding_the_image() -> None:
+    """企业新增记忆类型只能改配置，不该要求重建镜像。
+
+    profile 目录配成「两个目录按顺序找」：企业自己的挂载点在前，镜像内置的
+    在后。ConfigMap 是 optional 的 —— 没建它时挂成空目录，服务照常起，
+    注册表回落到镜像内置的那份。
+    """
+    configmap = (REPO_ROOT / "k8s" / "configmap.yaml").read_text(encoding="utf-8")
+    deployment = (REPO_ROOT / "k8s" / "deployment-api.yaml").read_text(encoding="utf-8")
+
+    assert "MEMORY_TYPE_PROFILE_DIR" in configmap
+    assert "/etc/thinkback/profiles" in configmap
+    # 镜像内置的目录必须在搜索路径里，否则挂了企业目录就把内置的遮掉了。
+    assert "/app/profiles" in configmap
+
+    assert "name: profiles" in deployment
+    assert "mountPath: /etc/thinkback/profiles" in deployment
+    assert "name: thinkback-profiles" in deployment
+    assert "optional: true" in deployment
+
+
+def test_k8s_exposes_the_namespace_allowlist_setting() -> None:
+    """部署口径的 namespace 白名单要能被配上。
+
+    不配 = 不限制（保持内网免鉴权下的既有行为），但「一个部署服务一个租户」
+    这条约定得有一个能落地的旋钮 —— 否则它只活在文档里。清单里要有这个键，
+    接入方才知道去哪儿填。
+    """
+    configmap = (REPO_ROOT / "k8s" / "configmap.yaml").read_text(encoding="utf-8")
+
+    assert "MEMORY_ALLOWED_NAMESPACES" in configmap

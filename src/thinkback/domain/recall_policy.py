@@ -3,8 +3,9 @@
 层优先级 L3 > L2 > L1；同层按「内容质量 + 强度」排序，同内容跨层取高层。
 强度 = f(recency_hours, recall_count) —— Ebbinghaus 式信号 (S1 见 G1)。
 token 成本用 :func:`estimate_tokens` 按字符集分档估算（中文一字约一个 token，
-ASCII 约四字符一个 token），超出预算的条目**停止裁剪**（而不是跳过继续试），
-保证原子性。
+ASCII 约四字符一个 token）。层内超出预算的条目**跳过后继续尝试更短的条目**
+（引擎已按相关度排序，后面的条目只是更短，不是更不相关），不会因一条超长
+内容把整层清空。
 
 强度公式（确定性，无 LLM）：
     strength = (1 + log1p(recall_count)) * recency_factor

@@ -472,3 +472,37 @@ def test_a_managed_item_carries_its_memory_type() -> None:
     assert len(resp.items) == 1
     assert resp.items[0].memory_id == "m1"
     assert resp.items[0].memory_type == pb.MEMORY_TYPE_PREFERENCE
+
+
+def test_converter_enforces_the_namespace_whitelist(monkeypatch: pytest.MonkeyPatch) -> None:
+    """gRPC 面唯一的 namespace 解析入口要过部署白名单（fail-closed）。
+
+    白名单配置了但请求的 namespace 不在其中 → ValueError（带 fail-closed
+    前缀，servicer 映射成 PERMISSION_DENIED）；在白名单里则原样放行。
+    这条用例同时钉住 ``_served_namespace`` 真把解析结果交给了
+    ``require_namespace`` —— 换成常量（None）时白名单一配置就全线拒绝。
+    """
+    from thinkback.infra.config import settings
+    from thinkback.rpc.converters import to_append_event_request
+
+    request = pb.AppendEventRequest(
+        request_id="req-1",
+        user_id="u1",
+        session_id="s1",
+        namespace="alpha",
+        event=pb.SourceEvent(
+            event_id="event-1",
+            source="chat_round",
+            role=pb.MESSAGE_ROLE_USER,
+            payload="hello",
+            occurred_at="2026-01-01T00:00:00+00:00",
+        ),
+    )
+
+    monkeypatch.setattr(settings, "memory_allowed_namespaces", "alpha,beta")
+    internal = to_append_event_request(request)
+    assert internal.namespace == "alpha"
+
+    request.namespace = "gamma"
+    with pytest.raises(ValueError, match="fail-closed"):
+        to_append_event_request(request)

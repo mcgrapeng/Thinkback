@@ -25,6 +25,7 @@ import os
 import sys
 
 from thinkback.domain.keys import DEFAULT_NAMESPACE
+from thinkback.infra.config import get_settings
 from thinkback.mcp.server import create_mcp_server
 
 
@@ -48,6 +49,15 @@ def _build_parser() -> argparse.ArgumentParser:
         "--namespace",
         default=os.environ.get("THINKBACK_MCP_NAMESPACE", DEFAULT_NAMESPACE),
         help="记忆作用域标签；一个服务器实例对应一个 namespace。",
+    )
+    parser.add_argument(
+        "--user-id",
+        default=os.environ.get("THINKBACK_MCP_USER_ID") or None,
+        help=(
+            "绑定该 MCP 实例服务的用户（D1 接入层身份绑定）：绑定后工具"
+            "「不传 user_id 也能用，传了必须等于绑定值」—— 接进来的助手"
+            "读写不了其他用户的记忆。缺省不绑定（内网信任边界 = 网络边界）。"
+        ),
     )
     parser.add_argument(
         "--transport",
@@ -80,12 +90,21 @@ def _build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
 
+    # 部署口径的一致性检查：本部署服务哪些 namespace（MEMORY_ALLOWED_NAMESPACES），
+    # 与这个 MCP 实例绑定的 namespace 是否对得上。对不上就在启动时报错 ——
+    # 等助手写进来才发现写进了本部署不服务的 namespace，那时已经晚了。
+    try:
+        get_settings().require_namespace(args.namespace)
+    except ValueError as exc:
+        print(f"thinkback-mcp: {exc}", file=sys.stderr)
+        return 2
+
     # 服务构造放在导入之后、运行之前：import 失败要立刻报错，不能等到
     # 客户端连上来才发现。
     from thinkback.api.dependencies import get_memory_service
 
     service = get_memory_service()
-    server = create_mcp_server(service, namespace=args.namespace)
+    server = create_mcp_server(service, namespace=args.namespace, user_id=args.user_id)
 
     if args.transport == "stdio":
         server.run(transport="stdio")

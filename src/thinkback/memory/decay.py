@@ -4,8 +4,11 @@
 - **不可达而非删除**（Oblivion 2604.00131 / 本仓 SUPERSEDED 同语义）：
   decay 记忆置 ``SUPPRESSED`` + ``invalid_at``，数据保留可审计可恢复，
   不做物理删除（合规底线）。
-- **艾宾浩斯式信号**：只有"足够老 且 久未被召回"的长尾记忆才衰减；
+- **艾宾浩斯式信号**：只有"我们持有足够久 且 久未被召回"的长尾记忆才衰减；
   被召回即强化（recall 路径 ``touch_memory_recalled`` 维护信号）。
+  判龄看 ``recorded_at``（记下它多久了）而不是 ``valid_at``（它描述的事情
+  多久前发生的）—— 后者在导入/重放场景下会让刚写下的记忆立刻被抑制。
+  "内容有多旧"由 TTL 负责（``expires_at``，按写入时刻算）。
 - **槽位保护**：``memory_conflict_slot`` 命中的关键事实记忆不参与 decay
   ——它们由槽位 supersede / 双时态排序治理（职责分离），decay 只管长尾。
 - **墓碑/本地合成行保护**：source_type=system_migration 与 local-p0:
@@ -135,14 +138,25 @@ class MemoryDecaySweeper:
         # 槽位保护：关键事实记忆由槽位系统治理
         if memory_conflict_slot(memory.memory_text) is not None:
             return False
-        # 足够老（valid_at 缺失的遗留行按 created 语义处理：视为不可判老，跳过）。
+        # 足够老：**记下这条事实多久了**（recorded_at），不是「这条事实描述的
+        # 事情发生在多久前」（valid_at）。
+        #
+        # 两者在正常写入时几乎一样（事实刚被说出来就被记下），但在**导入 /
+        # 重放**场景下差很远：一次导入 200 天前的会话，事实的 valid_at 是
+        # 200 天前，而我们是**刚刚**记下它的。此前按 valid_at 判龄，于是
+        # 这条记忆在写入后的第一次清扫就被置 SUPPRESSED —— 它从落地到被
+        # 抑制之间一次都没被召回过，「久未被召回」这个前提根本不成立。
+        #
+        # 「内容有多旧」由 TTL 负责（expires_at，按写入时刻算），decay 管的是
+        # 「我们持有它多久还没用到」，两件事分开。
+        # recorded_at 缺失的遗留行回退到 valid_at；两个都没有则不可判老，跳过。
         # S3-P3: asyncpg 默认可能返回 naive datetime；归一化 UTC 后比较。
-        valid_at = getattr(memory, "valid_at", None)
-        if valid_at is None:
+        age_basis = getattr(memory, "recorded_at", None) or getattr(memory, "valid_at", None)
+        if age_basis is None:
             return False
-        if valid_at.tzinfo is None:
-            valid_at = valid_at.replace(tzinfo=UTC)
-        if valid_at > min_valid_at:
+        if age_basis.tzinfo is None:
+            age_basis = age_basis.replace(tzinfo=UTC)
+        if age_basis > min_valid_at:
             return False
         # 久未被召回（从未召回过 → last_recalled_at 为 None 视为"久未"）。
         # S3-P3: asyncpg 默认可能返回 naive datetime；归一化 UTC 后比较。

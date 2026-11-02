@@ -510,3 +510,42 @@ def test_serve_stops_gracefully_on_sigterm(monkeypatch: pytest.MonkeyPatch) -> N
 
     assert fake.started is True
     assert fake.stopped == 0.5
+
+
+def test_list_memory_types_over_grpc(stub: memory_pb2_grpc.MemoryServiceStub) -> None:
+    """gRPC 面也能发现可写的记忆类型（与 HTTP /v2/memory/types 同形）。
+
+    gRPC 客户端拿到的类型名必须和 HTTP 一致 —— 两面对同一注册表给两份
+    清单，接入方按哪份写都行。
+    """
+    response = stub.ListMemoryTypes(pb.ListMemoryTypesRequest(namespace="thinkback"))
+
+    assert response.status == "ok"
+    assert response.namespace == "thinkback"
+    assert response.policy_version
+    names = {item.name for item in response.types}
+    assert "profile" in names
+    profile = next(item for item in response.types if item.name == "profile")
+    assert profile.extractor == "mem0"
+    assert profile.source_roles == ["user"]
+    assert profile.conflict == "overwrite"
+    assert profile.retention == "forever"
+    assert profile.classification == "personal"
+    assert profile.review_required is False
+    # optional 字段：没配就是「没设」，不是 0。
+    assert not profile.HasField("ttl_days")
+    assert not profile.HasField("recall_budget")
+    assert profile.extraction_prompt_version == "default"
+
+
+def test_list_memory_types_over_grpc_reports_a_ttl_type(
+    stub: memory_pb2_grpc.MemoryServiceStub,
+) -> None:
+    """TTL 类型要把 ttl_days 带出来（optional 字段，有值才设）。"""
+    response = stub.ListMemoryTypes(pb.ListMemoryTypesRequest(namespace="thinkback"))
+
+    state = next((item for item in response.types if item.name == "state"), None)
+    assert state is not None
+    assert state.retention == "ttl"
+    assert state.HasField("ttl_days")
+    assert state.ttl_days == 90

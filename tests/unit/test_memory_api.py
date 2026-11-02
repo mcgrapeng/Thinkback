@@ -401,6 +401,35 @@ def test_append_round_conflict_returns_409(client, monkeypatch) -> None:
     assert "round_id conflict" in response.json()["detail"]
 
 
+def test_a_concurrent_round_id_conflict_returns_409_not_500(client, monkeypatch) -> None:
+    """并发写入撞了 round_id 唯一约束：与顺序写入同语义，报 409。
+
+    仓储按「先写胜出」返回已存的那轮（另一条连接刚用同一个 event_id 落库，
+    内容不同）。服务层必须把它判成 round_id 冲突 —— 裸 IntegrityError 冒到
+    API 层会变成 500，而调用方按 5xx 重试是重试不出结果的。
+    """
+
+    class ConcurrentRepository(InMemoryMemoryRepository):
+        def save_round(self, request, *, request_metadata=None):  # type: ignore[no-untyped-def]
+            other = request.model_copy(
+                update={
+                    "messages": [
+                        message.model_copy(update={"content": "另一条连接写的内容"})
+                        for message in request.messages
+                    ]
+                }
+            )
+            return super().save_round(other, request_metadata=request_metadata)
+
+    service = MemoryService(repository=ConcurrentRepository(), backend=FakeMemoryBackend())
+    monkeypatch.setattr("thinkback.api.dependencies._memory_service", service)
+
+    response = client.post("/v2/memory/events", json=append_payload())
+
+    assert response.status_code == 409
+    assert "round_id conflict" in response.json()["detail"]
+
+
 def test_delete_missing_memory_id_returns_400(client, monkeypatch) -> None:
     service = MemoryService(repository=InMemoryMemoryRepository(), backend=FakeMemoryBackend())
     monkeypatch.setattr("thinkback.api.dependencies._memory_service", service)

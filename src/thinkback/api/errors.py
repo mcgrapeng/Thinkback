@@ -2,8 +2,8 @@
 
 契约（与 /memory 路由既有语义逐字一致）：
 - ValueError 含 ``fail-closed`` → 403；含 ``conflict`` → 409；含 ``not found`` → 404；其它 → 400
-- RuntimeError 含 ``dead_letter`` / ``stale write`` → 409；``l3 background queue full`` /
-  ``repository operation timed out`` → 503；``mem0 library`` / ``memory backend`` → 502
+- RuntimeError 含 ``dead_letter`` / ``stale write`` → 409；``queue full`` / ``timed out``
+  → 503（子串匹配，与 gRPC 面同口径）；``mem0 library`` / ``memory backend`` → 502
 """
 
 from __future__ import annotations
@@ -32,9 +32,10 @@ def service_error_to_http(exc: Exception) -> HTTPException | None:
         if "optimistic lock contention exhausted" in detail:
             # 终态写没落库：调用方必须看到失败并重试，不能当成功。
             return HTTPException(status_code=409, detail=detail)
-        if "l3 background queue full" in detail:
-            return HTTPException(status_code=503, detail=detail)
-        if "repository operation timed out" in detail:
+        if "queue full" in detail or "timed out" in detail:
+            # 与 gRPC 面（rpc/servicer.py::_handle_error）同一口径：子串匹配。
+            # 精确短语会让 "embedding call timed out" 这类新超时在 HTTP 面落
+            # 500、gRPC 面落 UNAVAILABLE —— 同一错误两协议给出相反的重试语义。
             return HTTPException(status_code=503, detail=detail)
         if "mem0 library" in detail or "memory backend" in detail:
             return HTTPException(status_code=502, detail=detail)

@@ -332,8 +332,17 @@ def create_app(*, run_startup_tasks: bool = True) -> FastAPI:
     from thinkback.api.errors_standard import register_exception_handlers
     from thinkback.api.idempotency import IdempotencyMiddleware
     from thinkback.api.ratelimit import RateLimitMiddleware
+    from thinkback.api.trusted_user import TrustedUserHeaderMiddleware
 
     register_exception_handlers(app)
+    if settings.trusted_user_header:
+        # D1 接入层身份绑定：网关注入的受信头与 user_id 不一致 → 403。
+        # 挂在最外层：抢在幂等缓存之前拒绝，别让越权请求进任何业务层。
+        app.add_middleware(TrustedUserHeaderMiddleware, header_name=settings.trusted_user_header)
+        logger.warning(
+            f"trusted user header 已启用：{settings.trusted_user_header} —— "
+            "/v2/memory/* 的 user_id 必须与该头一致"
+        )
     app.add_middleware(IdempotencyMiddleware)
     app.add_middleware(
         RateLimitMiddleware,

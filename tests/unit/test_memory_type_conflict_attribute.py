@@ -118,3 +118,47 @@ def test_append_conflict_types_keep_their_history() -> None:
     # state 的 conflict 是 overwrite，但两条的属性名相同 → 应当互相覆盖
     active = service.repository.active_memories("user-1", "semiconductor")
     assert [memory.memory_text for memory in active] == ["当前批次良率：95%"]
+
+
+def test_built_in_namespace_overwrite_types_supersede_by_attribute() -> None:
+    """D2：内置 thinkback 命名空间的覆盖型类型同样按属性名覆盖。
+
+    修复前内置 8 个类型一个都没有抽取指令 → 冲突键回退到 9 个 P0 槽位
+    → 大多数声明 overwrite 的类型策略空转（新旧矛盾事实并存且都被召回）。
+    仓库自带的 thinkback.json 给覆盖型类型配了抽取指令后，垂类验证过的
+    覆盖链在内置类型上同样成立。
+    """
+    repository = InMemoryMemoryRepository()
+    service = MemoryService(
+        repository=repository,
+        backend=FakeMemoryBackend(),
+        registry_provider=lambda namespace: load_registry(PROFILE_DIR, namespace),
+    )
+
+    def _thinkback_append(round_id: str, text: str) -> None:
+        now = datetime(2026, 11, 2, 10, 0, 0, tzinfo=UTC)
+        service.append(
+            AppendMemoryRequest(
+                request_id=f"req-{round_id}",
+                user_id="user-1",
+                session_id="session-1",
+                round_id=round_id,
+                namespace="thinkback",
+                metadata={"memory_type": "profile"},
+                messages=[
+                    MemoryMessage(
+                        message_id=f"{round_id}-u",
+                        role=MessageRole.USER,
+                        content=text,
+                        timestamp=now,
+                    )
+                ],
+                source_timestamp=now,
+            )
+        )
+
+    _thinkback_append("r1", "居住城市：北京")
+    _thinkback_append("r2", "居住城市：杭州")
+
+    active = repository.active_memories("user-1", "thinkback")
+    assert [memory.memory_text for memory in active] == ["居住城市：杭州"]

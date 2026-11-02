@@ -89,10 +89,12 @@ from thinkback.memory.schemas import (
     DeleteScope,
     GetMemoryResponse,
     ListMemoriesResponse,
+    ListMemoryTypesResponse,
     ManagedMemoryItem,
     MemoryItem,
     MemoryStatus,
     MemoryType,
+    MemoryTypeInfo,
     MessageRole,
     OperationType,
     RebuildMemoryRequest,
@@ -726,6 +728,13 @@ L2 更新 (缓存失效)
             entry = existing or self.repository.save_round(
                 request, request_metadata=effective_metadata
             )
+            if existing is None:
+                # 并发写入：仓储按「先写胜出」返回了已存的那轮（可能是另一条
+                # 连接刚插进去的）。若那一轮讲的不是同一件事，那是调用方把同一个
+                # event_id 用在了两件事上 —— 与顺序写入的 round_id 冲突同语义，
+                # 报 409。这里不报的话，round_id 唯一约束的 IntegrityError 会
+                # 冒到 API 层变成 500，而调用方按 5xx 重试是重试不出结果的。
+                self._assert_round_matches_request(entry, request)
             # 作用域键统一为 namespace::session（仓储写入时已按此口径落库）；
             # 幂等重放时历史数据可能是裸 session_id，这里补齐。
             if entry.memory_scope_id != session_scope_id:
@@ -752,6 +761,7 @@ L2 更新 (缓存失效)
                     append_pending_backend_writes = self._publish_append_round_locally(
                         entry=entry,
                         request=request,
+                        effective_metadata=effective_metadata,
                         session_scope_id=session_scope_id,
                         l3_scope_id=l3_scope_id,
                     )
@@ -828,6 +838,7 @@ L2 更新 (缓存失效)
                     append_pending_backend_writes = self._publish_append_round_locally(
                         entry=entry,
                         request=request,
+                        effective_metadata=effective_metadata,
                         session_scope_id=session_scope_id,
                         l3_scope_id=l3_scope_id,
                     )
@@ -910,10 +921,16 @@ L2 更新 (缓存失效)
         *,
         entry: JournalEntry,
         request: AppendMemoryRequest,
+        effective_metadata: dict[str, Any],
         session_scope_id: str,
         l3_scope_id: str,
     ) -> list[Any]:
-        """apppend 后的本地状态发布；返回锁外待执行的 backend 写回调。"""
+        """apppend 后的本地状态发布；返回锁外待执行的 backend 写回调。
+
+        ``effective_metadata`` 是**已解析**的策略元数据（注册表类型名、
+        最严分类、TTL 到期日），不是调用方原样的 ``request.metadata``：
+        回填路径要按同一份策略判断准入与到期，两边口径必须一致。
+        """
         source_refs = [{"session_id": request.session_id, "round_id": request.round_id}]
         if self._source_refs_excluded(request.user_id, l3_scope_id, source_refs):
             # 这轮已被删除或擦除：不得再发布到 L1/L2，否则原文回到上下文。
@@ -938,7 +955,7 @@ L2 更新 (缓存失效)
             user_id=request.user_id,
             memory_scope_id=l3_scope_id,
             source_refs=[{"session_id": request.session_id, "round_id": request.round_id}],
-            request_metadata=request.metadata,
+            request_metadata=effective_metadata,
             source_timestamp=request.source_timestamp,
         )
         return pending_backend_writes
@@ -1801,7 +1818,8 @@ L2 更新 (缓存失效)
         # 但 get_l1 冷缓存会回源 journal —— 不过滤就等于把已删除事实原文复活。
         # 排除集按用户聚合（不按 scope）：L3 记忆在长期 scope，轮次在会话 scope，
         # 按 scope 过滤会漏掉「记忆已删除/已遗忘」的轮次 → 原文从 L1 复活。
-        excluded_refs = self.repository.excluded_source_refs_for_user(request.user_id)
+        # 聚合范围限定在本 namespace：session_id 只在 namespace 内唯一。
+        excluded_refs = self.repository.excluded_source_refs_for_user(request.user_id, l3_scope_id)
         for entry in self.repository.get_l1(
             request.user_id,
             session_scope_id,
@@ -2864,6 +2882,40 @@ L2 更新 (缓存失效)
                 if self._is_manageable_memory(memory)
                 # 过期事实不再出现在列表里（后端已隐藏它，本地保持一致）。
                 and not memory_is_expired(memory)
+            ],
+        )
+
+    def list_memory_types(self, *, namespace: str = LONG_TERM_SCOPE_ID) -> ListMemoryTypesResponse:
+        """列出该 namespace 下已注册的记忆类型及其策略。
+
+        接入方（企业 AI 助手）在运行时靠它知道「能写哪些类型、每个类型的
+        TTL / 分类 / 冲突策略是什么」—— 否则只能去读服务端的 profile 文件，
+        或者把类型名写死在客户端里，两边一漂移就报错。
+
+        契约：注册表读不出来就**报错**，不返回空清单。空清单会被客户端
+        当成「这个 namespace 没有类型」，于是它改用默认类型写入 —— 写进去的
+        记忆用了另一套策略，而调用方以为用的是自己的策略。
+        """
+        registry = self._type_registry(namespace)
+        return ListMemoryTypesResponse(
+            status="ok",
+            namespace=namespace,
+            policy_version=registry.version,
+            types=[
+                MemoryTypeInfo(
+                    name=spec.name,
+                    description=spec.description,
+                    extractor=spec.extractor,
+                    source_roles=list(spec.source_roles),
+                    conflict=spec.conflict,
+                    retention=spec.retention,
+                    ttl_days=spec.ttl_days,
+                    classification=spec.classification,
+                    review_required=spec.review_required,
+                    recall_budget=spec.recall_budget,
+                    extraction_prompt_version=spec.extraction_prompt_version or "default",
+                )
+                for spec in registry.types.values()
             ],
         )
 
@@ -4815,6 +4867,11 @@ L2 更新 (缓存失效)
             source_refs,
             {**effective_metadata, "source_text": source_text},
         )
+        # 索引行的时间三元组：与 L3 事件索引同口径（``_index_lifecycle``）。
+        # 回填行也是一条**事实**（本地 P0 索引），TTL 类型（如 state）必须
+        # 带上到期日，否则引擎侧到期隐藏了它、本地索引却永远 ACTIVE ——
+        # 过期事实从本地召回/列表回流。
+        valid_at, expires_at, recorded_at = self._index_lifecycle(l3_metadata, memory_scope_id)
         indexed_count = 0
         skipped_count = 0
         pending_backend_writes: list[Any] = []
@@ -4873,6 +4930,9 @@ L2 更新 (缓存失效)
                         l3_metadata.get("backend_categories")
                     ),
                     metadata={**l3_metadata, "p0_source_backfill": True},
+                    valid_at=valid_at,
+                    expires_at=expires_at,
+                    recorded_at=recorded_at,
                 )
                 indexed_count += 1
                 logger.bind(
@@ -5775,7 +5835,8 @@ L2 更新 (缓存失效)
         """
         # 排除集按用户聚合：L3 记忆在长期 scope，轮次/摘要在会话 scope，
         # 按 scope 过滤会漏掉已删除事实 → 摘要把原文复活。
-        deleted_refs = self.repository.excluded_source_refs_for_user(user_id)
+        # 聚合范围限定在本 namespace（session_id 只在 namespace 内唯一）。
+        deleted_refs = self.repository.excluded_source_refs_for_user(user_id, namespace)
         # 只取最近的一窗口，而不是整个会话历史：
         # summarize_rounds 内部只取最后 10 轮，而 list_rounds 会把该 scope 的
         # 全部轮次连同 messages JSON 拉进内存 —— 每次 append 的成本随历史线性增长。

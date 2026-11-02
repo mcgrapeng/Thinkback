@@ -36,7 +36,7 @@ from thinkback.domain.keys import (
     source_ref_key,
 )
 from thinkback.domain.summarization import summarize_rounds
-from thinkback.memory.repositories._l1_cache import L1_CACHE_LIMIT, L1CacheMixin
+from thinkback.memory.repositories._l1_cache import L1CacheMixin
 from thinkback.memory.schemas import AppendMemoryRequest
 
 
@@ -89,9 +89,9 @@ class InMemoryMemoryRepository(L1CacheMixin):
         if cached:
             return cached
         rounds = self.list_rounds(user_id, memory_scope_id, session_id, namespace=namespace)
-        for entry in rounds[-L1_CACHE_LIMIT:]:
-            super().update_l1(entry, limit=L1_CACHE_LIMIT)
-        return super().get_l1(user_id, memory_scope_id, session_id, namespace=namespace)
+        return self._l1_complete_read_through(
+            rounds, user_id, memory_scope_id, session_id, namespace=namespace
+        )
 
     def save_round(
         self, request: AppendMemoryRequest, *, request_metadata: dict[str, Any] | None = None
@@ -133,7 +133,8 @@ class InMemoryMemoryRepository(L1CacheMixin):
     ) -> SummaryEntry:
         # 排除集按**用户**聚合（不按 scope）：L3 记忆在长期 scope，
         # 轮次在会话 scope；按 scope 过滤会漏掉已删除事实 → 摘要把原文复活。
-        deleted_refs = self.excluded_source_refs_for_user(user_id)
+        # 聚合范围限定在本 namespace（session_id 只在 namespace 内唯一）。
+        deleted_refs = self.excluded_source_refs_for_user(user_id, namespace)
         rounds = [
             entry
             for entry in self.list_rounds(user_id, memory_scope_id, namespace=namespace)
@@ -441,7 +442,9 @@ class InMemoryMemoryRepository(L1CacheMixin):
             and (memory_scope_id is None or memory.memory_scope_id == memory_scope_id)
             and (user_id is None or memory.user_id == user_id)
         ]
-        expired.sort(key=lambda memory: memory.expires_at or before)
+        # 排序键也要归一：asyncpg 可能返回 naive datetime，naive 与 aware
+        # 直接比较会抛 TypeError（过滤时归一了，排序时没归一）。
+        expired.sort(key=lambda memory: _as_utc(memory.expires_at or before))
         return expired[:limit]
 
     def delete_memory_rows(self, memory_ids: list[str]) -> int:
@@ -561,15 +564,18 @@ class InMemoryMemoryRepository(L1CacheMixin):
                 refs.update(source_ref_key(source_ref) for source_ref in memory.source_refs)
         return refs
 
-    def excluded_source_refs_for_user(self, user_id: str) -> set[tuple[str | None, str | None]]:
-        """该用户全部 scope 下已删除/被取代/被遗忘记忆的来源轮次。
+    def excluded_source_refs_for_user(
+        self, user_id: str, namespace: str
+    ) -> set[tuple[str | None, str | None]]:
+        """该 namespace 内该用户全部 scope 下已删除/被取代/被遗忘记忆的来源轮次。
 
-        与 SQL 版同语义：L3 记忆在长期 scope，L1/L2 在会话 scope，
-        跨表聚合排除集时不能按单一 scope 过滤。
+        与 SQL 版同语义：L3 记忆的 ``memory_scope_id`` 即 namespace，
+        过滤必须带 namespace —— session_id 只在 namespace 内唯一，
+        A 空间删除的来源不该误伤 B 空间的同名轮次。
         """
         refs: set[tuple[str | None, str | None]] = set()
         for memory in self.memories.values():
-            if memory.user_id != user_id:
+            if memory.user_id != user_id or memory.memory_scope_id != namespace:
                 continue
             if memory.memory_status not in {
                 MemoryStatus.DELETED,

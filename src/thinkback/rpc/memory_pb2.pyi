@@ -780,3 +780,78 @@ class L3BackgroundStatusResponse(_message.Message):
         cleanup_tasks: _Optional[int] = ...,
         available_capacity: _Optional[int] = ...,
     ) -> None: ...
+
+class ListMemoryTypesRequest(_message.Message):
+    __slots__ = ("namespace",)
+    NAMESPACE_FIELD_NUMBER: _ClassVar[int]
+    namespace: str
+    def __init__(self, namespace: _Optional[str] = ...) -> None: ...
+
+class MemoryTypeInfo(_message.Message):
+    __slots__ = (
+        "name",
+        "description",
+        "extractor",
+        "source_roles",
+        "conflict",
+        "retention",
+        "ttl_days",
+        "classification",
+        "review_required",
+        "recall_budget",
+        "extraction_prompt_version",
+    )
+    NAME_FIELD_NUMBER: _ClassVar[int]
+    DESCRIPTION_FIELD_NUMBER: _ClassVar[int]
+    EXTRACTOR_FIELD_NUMBER: _ClassVar[int]
+    SOURCE_ROLES_FIELD_NUMBER: _ClassVar[int]
+    CONFLICT_FIELD_NUMBER: _ClassVar[int]
+    RETENTION_FIELD_NUMBER: _ClassVar[int]
+    TTL_DAYS_FIELD_NUMBER: _ClassVar[int]
+    CLASSIFICATION_FIELD_NUMBER: _ClassVar[int]
+    REVIEW_REQUIRED_FIELD_NUMBER: _ClassVar[int]
+    RECALL_BUDGET_FIELD_NUMBER: _ClassVar[int]
+    EXTRACTION_PROMPT_VERSION_FIELD_NUMBER: _ClassVar[int]
+    name: str
+    description: str
+    extractor: str
+    source_roles: _containers.RepeatedScalarFieldContainer[str]
+    conflict: str
+    retention: str
+    ttl_days: int
+    classification: str
+    review_required: bool
+    recall_budget: int
+    extraction_prompt_version: str
+    def __init__(
+        self,
+        name: _Optional[str] = ...,
+        description: _Optional[str] = ...,
+        extractor: _Optional[str] = ...,
+        source_roles: _Optional[_Iterable[str]] = ...,
+        conflict: _Optional[str] = ...,
+        retention: _Optional[str] = ...,
+        ttl_days: _Optional[int] = ...,
+        classification: _Optional[str] = ...,
+        review_required: bool = ...,
+        recall_budget: _Optional[int] = ...,
+        extraction_prompt_version: _Optional[str] = ...,
+    ) -> None: ...
+
+class ListMemoryTypesResponse(_message.Message):
+    __slots__ = ("status", "namespace", "policy_version", "types")
+    STATUS_FIELD_NUMBER: _ClassVar[int]
+    NAMESPACE_FIELD_NUMBER: _ClassVar[int]
+    POLICY_VERSION_FIELD_NUMBER: _ClassVar[int]
+    TYPES_FIELD_NUMBER: _ClassVar[int]
+    status: str
+    namespace: str
+    policy_version: str
+    types: _containers.RepeatedCompositeFieldContainer[MemoryTypeInfo]
+    def __init__(
+        self,
+        status: _Optional[str] = ...,
+        namespace: _Optional[str] = ...,
+        policy_version: _Optional[str] = ...,
+        types: _Optional[_Iterable[_Union[MemoryTypeInfo, _Mapping]]] = ...,
+    ) -> None: ...

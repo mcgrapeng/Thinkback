@@ -202,6 +202,57 @@ async def test_sql_repository_save_round_returns_existing_round_after_concurrent
     assert session.rolled_back is True
 
 
+@pytest.mark.asyncio
+async def test_sql_repository_save_round_returns_the_concurrent_round_when_the_content_differs() -> (
+    None
+):
+    """并发撞了 round_id 唯一约束、而已存那一轮内容不同：返回那一轮，不抛裸 IntegrityError。
+
+    裸 IntegrityError 冒到 API 层是 500（api/errors.py 不映射它）：调用方按 5xx
+    重试，重试多少次都是 500。冲突判定归服务层（``_assert_round_matches_request``
+    → 409），仓储只负责「先写胜出」—— 与顺序写入和内存实现同语义。
+    """
+    request = make_append(round_id="round-race", round_index=10, content="本次要写的内容")
+    repository = SqlAlchemyMemoryRepository()
+    concurrent_entry = repository._journal_entry_from_append_request(
+        make_append(round_id="round-race", round_index=10, content="另一条连接写的内容")
+    )
+
+    class FakeSession:
+        selects = 0
+        rolled_back = False
+
+        async def __aenter__(self):  # type: ignore[no-untyped-def]
+            return self
+
+        async def __aexit__(self, *args):  # type: ignore[no-untyped-def]
+            return None
+
+        async def scalar(self, _statement):  # type: ignore[no-untyped-def]
+            self.selects += 1
+            if self.selects == 1:
+                return None
+            return repository._journal_record_from_entry(concurrent_entry)
+
+        def add(self, _record):  # type: ignore[no-untyped-def]
+            pass
+
+        async def commit(self):  # type: ignore[no-untyped-def]
+            raise IntegrityError("insert", {}, Exception("duplicate key value"))
+
+        async def rollback(self):  # type: ignore[no-untyped-def]
+            self.rolled_back = True
+
+    session = FakeSession()
+    repository.session_factory = lambda: session  # type: ignore[assignment]
+
+    saved = await repository._save_round(request)
+
+    assert saved.round_id == request.round_id
+    assert saved.messages[0]["content"] == "另一条连接写的内容"
+    assert session.rolled_back is True
+
+
 def test_in_memory_repository_add_memory_index_updates_existing_active_backend_id() -> None:
     from thinkback.memory.repositories import InMemoryMemoryRepository
 

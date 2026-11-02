@@ -63,6 +63,19 @@ data:
   # Mem0 Library 后端调用并发上限。
   MEMORY_BACKEND_MAX_CONCURRENT_CALLS: "4"
 
+  # 记忆类型注册表 profile 目录（逗号分隔，按顺序找第一个命中的）。
+  # 第一个是企业自己的 profile 挂载点（ConfigMap thinkback-profiles，没有就当空目录），
+  # 第二个是镜像内置的（Dockerfile 把 profiles/ 烤进 /app/profiles）。
+  # 企业新增记忆类型只改这个挂载点里的文件，不必重建镜像。
+  MEMORY_TYPE_PROFILE_DIR: "/etc/thinkback/profiles,/app/profiles"
+  # 受信调用方身份头（D1）：前面的网关注入时才填（例 X-User-Id），空 = 不启用。
+  # 启用后 /v2/memory/* 的 user_id 必须与该头一致（docs/API.md 信任模型）。
+  TRUSTED_USER_HEADER: ""
+  # 本部署服务的 namespace 白名单（逗号分隔），空 = 不限制。
+  # 一个部署服务一个租户时填上它：名单外的 namespace 一律 403 / PERMISSION_DENIED，
+  # MCP 侧直接拒绝启动（docs/API.md 信任模型）。
+  MEMORY_ALLOWED_NAMESPACES: ""
+
   # 就绪检查配置
   # 单个依赖 readiness 检查超时时间，单位秒。
   READINESS_TIMEOUT_SECONDS: "3"

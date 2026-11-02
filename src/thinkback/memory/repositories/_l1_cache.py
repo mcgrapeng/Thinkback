@@ -84,6 +84,12 @@ class L1CacheMixin:
         2. 移除重复的 round_id（避免重复计算）
         3. 追加新回合
         4. 只保留最近 limit 条（其余自动淘汰）
+
+        「最近」按**回合时间**排，不按写入顺序：晚到的轮次（重试 / 重放 /
+        导入）时间戳更早，按写入顺序排它会把窗口里最新的那条挤掉 ——
+        一条 30 天前的旧轮次留在窗口里，而 2 小时前的那条被淘汰。
+        读穿透路径（``sqlalchemy.get_l1``）本来就是按时间取的，两条路径
+        必须同一口径。
         """
         if not self.l1_cache_enabled:
             return
@@ -97,6 +103,9 @@ class L1CacheMixin:
                 if cached_entry.round_id != entry.round_id
             ]
             existing.append(entry)
+            # 稳定排序：时间相同的回合保持写入顺序（round_sort_key 的
+            # round_id 兜底会让同时间的回合按 id 重排，那是另一套口径）。
+            existing.sort(key=lambda item: (item.source_timestamp, item.round_index or -1))
             self.l1_cache[key] = existing[-limit:]
             self._l1_timestamps()[key] = time.monotonic()
             self._evict_oldest_keys()
@@ -144,6 +153,30 @@ class L1CacheMixin:
                 if key.startswith(f"{prefix}:"):
                     self.l1_cache.pop(key, None)
                     stamps.pop(key, None)
+
+    def _l1_complete_read_through(
+        self,
+        rounds: list[JournalEntry],
+        user_id: str,
+        memory_scope_id: str,
+        session_id: str,
+        *,
+        namespace: str = DEFAULT_NAMESPACE,
+    ) -> list[JournalEntry]:
+        """回源之后的收尾：缓存开着就灌进缓存再读回来，关着就直接用回源结果。
+
+        缓存关掉时 ``update_l1`` 是 no-op、``get_l1`` 恒返回空 —— 两者都不做，
+        回源拿到的轮次就被丢在中间，召回的 L1 通道整个消失。多副本部署正是
+        这个配置（``MEMORY_L1_CACHE_ENABLED=false``，见 ``infra/replica_guard``），
+        所以它不是边角情况。
+
+        两个 adapter 的读穿透结构一样，收尾放这里，各自作一次。
+        """
+        if not self.l1_cache_enabled:
+            return list(rounds)
+        for entry in rounds:
+            self.update_l1(entry, limit=L1_CACHE_LIMIT)
+        return L1CacheMixin.get_l1(self, user_id, memory_scope_id, session_id, namespace=namespace)
 
     def get_l1(
         self,

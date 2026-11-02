@@ -291,3 +291,103 @@ def test_self_containedness_adds_up_a_conversation_reference_too() -> None:
     score = score_content("他之前说过的")
 
     assert score.dimension(SELF_CONTAINEDNESS) == pytest.approx(1.0 - 0.60 - 0.25)
+
+
+# ---------------------------------------------------------------------------
+# 扣分项**叠加**（变异审计暴露的覆盖缺口）
+# ---------------------------------------------------------------------------
+#
+# 每个维度的扣分项写的是 ``penalty += x``。写成 ``penalty = x`` 的话，只有
+# 最后一项生效，前面的全被覆盖 —— 一条踩了 4 个坑的正文只扣了最后一个坑的分，
+# 质量分虚高，被排进上下文。上面的用例各自只踩一两个坑，看不出这一点。
+
+
+def test_the_default_reason_appears_when_a_dimension_has_no_penalties() -> None:
+    """没有扣分项时补一条默认说明 —— 调用方要看得出「这一项为什么不扣」。
+
+    ``if not reasons: reasons.append(...)`` 写成 ``if reasons`` 的话，
+    干净的正文反而没有说明、有扣分的正文反而多一条「干净」的说明 ——
+    分值不变，但解释是反的，运维看报告会读反。
+    """
+    score = score_content("用户每天早上六点去健身房锻炼，坚持了三年")
+
+    assert score.reasons[CLARITY] == ("长度与表达都干净",)
+    assert score.reasons[SELF_CONTAINEDNESS] == ("可以脱离对话独立理解",)
+    assert score.reasons[VERIFIABILITY] == ("既无客观标记也无模糊限定词，取中性 0.5",)
+
+
+def test_clarity_penalties_accumulate_rather_than_overwrite() -> None:
+    """踩满 4 个坑时每一项都要扣：偏短 + 口头禅 + 连续重复 + 格式噪音。
+
+    期望值照公式算：``1 - (0.25 + 0.12*1 + 0.20 + 0.15) = 0.28``。
+    写成 ``penalty = x`` 的话只剩最后一项（0.15），值会是 0.85。
+    """
+    score = score_content("呃呃呃呃\t")
+
+    assert score.dimension(CLARITY) == pytest.approx(1.0 - 0.25 - 0.12 - 0.20 - 0.15)
+
+
+def test_self_containedness_penalties_accumulate() -> None:
+    """引用对话 + 没有主语 + 过短：三项各扣各的。
+
+    期望值照公式算：``1 - (0.25*1 + 0.15 + 0.30) = 0.30``。
+    写成 ``penalty = x`` 的话只剩最后一项（0.30），值会是 0.70。
+
+    正文刻意**不**以指代词开头 —— 那样会再扣 0.60 并被 clamp 到 0，
+    累加与覆盖就看不出差别了。
+    """
+    score = score_content("之前说的")
+
+    assert score.dimension(SELF_CONTAINEDNESS) == pytest.approx(1.0 - 0.25 - 0.15 - 0.30)
+
+
+def test_the_leading_reference_penalty_also_accumulates() -> None:
+    """句首指代（-0.60）与引用对话（-0.25）叠加：``1 - 0.85 = 0.15``。
+
+    只踩「句首指代」一项时看不出覆盖：``penalty += 0.60`` 与
+    ``penalty = 0.60`` 同值。这一条钉的是**两项都踩**的场景。
+    """
+    score = score_content("然后之前说的我")
+
+    assert score.dimension(SELF_CONTAINEDNESS) == pytest.approx(1.0 - 0.60 - 0.25)
+
+
+# ---------------------------------------------------------------------------
+# 相似度工具（内容去重 / 新颖性判定的地基）
+# ---------------------------------------------------------------------------
+
+
+def test_similarity_normalization_folds_case() -> None:
+    """归一化必须对大小写免疫 —— 否则同一句话的两种写法判成两条不同事实。
+
+    断言的是**输出是小写**，不只是「两种写法结果相同」：把 ``.lower()`` 换成
+    ``.upper()``，两种写法的结果照样相同（都是大写），比较不出差别 ——
+    但下游按小写比对的口径就全反了。
+    """
+    from thinkback.domain.content_quality import _normalize_for_similarity
+
+    assert _normalize_for_similarity("ABC Def") == "abcdef"
+    assert _normalize_for_similarity("abc def") == "abcdef"
+
+
+def test_bigrams_of_empty_and_single_char() -> None:
+    """空串 → 空集；单字符 → 它自己。两个边界都要对。
+
+    ``{text} if text else set()`` 的真值判据写反（恒真/恒假），这两个边界
+    就会错：空串给出 ``{""}``、单字符给出空集。
+    """
+    from thinkback.domain.content_quality import _bigrams
+
+    assert _bigrams("") == set()
+    assert _bigrams("a") == {"a"}
+
+
+def test_jaccard_of_two_empty_sets_is_zero_not_one() -> None:
+    """两侧皆空记 0（不是 1）：两条空内容不等于「完全相同」。
+
+    写成 1.0 的话，两条空内容会被当成完全重复 —— 新颖性判定会把一条
+    真实事实判成「与已有内容一模一样」而降权。
+    """
+    from thinkback.domain.content_quality import _jaccard
+
+    assert _jaccard(set(), set()) == 0.0

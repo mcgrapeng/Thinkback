@@ -739,3 +739,34 @@ class L3BackgroundStatusResponse(BaseModel):
     pending_write_tasks: int = Field(description="当前待完成的 L3 后台写入任务数。")
     cleanup_tasks: int = Field(description="当前待完成的 L3 后台清理任务数。")
     available_capacity: int = Field(description="L3 后台写入队列剩余容量。")
+
+
+class MemoryTypeInfo(BaseModel):
+    """一个已注册的记忆类型的策略摘要。
+
+    供接入方（企业 AI 助手）在**运行时**发现「这个 namespace 能写哪些类型、
+    各自的策略是什么」—— 否则它只能去读服务端的 profile 文件或写死了类型名。
+    """
+
+    name: str = Field(description="记忆类型名；写入时作为 memory_type 传入。")
+    description: str = Field(description="类型说明（仅供人阅读，不参与行为）。")
+    extractor: str = Field(description="抽取方式：mem0 = 交给引擎抽取；none = 不抽取。")
+    source_roles: list[str] = Field(description="允许作为该类型来源的事件角色。")
+    conflict: str = Field(description="同属性冲突策略：overwrite / append / none。")
+    retention: str = Field(description="保留策略：forever / ttl。")
+    ttl_days: int | None = Field(default=None, description="TTL 天数（retention=ttl 时有值）。")
+    classification: str = Field(
+        description="数据分类：normal / personal / sensitive / restricted。"
+    )
+    review_required: bool = Field(description="是否需要审批后才能被召回。")
+    recall_budget: int | None = Field(default=None, description="该类型的 token 预算上限。")
+    extraction_prompt_version: str = Field(description="抽取指令版本（无指令文件时为 default）。")
+
+
+class ListMemoryTypesResponse(BaseModel):
+    """某 namespace 下已注册的记忆类型清单。"""
+
+    status: str = Field(description="查询结果状态。")
+    namespace: str = Field(description="该清单所属的命名空间。")
+    policy_version: str = Field(description="类型注册表的策略版本。")
+    types: list[MemoryTypeInfo] = Field(default_factory=list, description="已注册的记忆类型。")

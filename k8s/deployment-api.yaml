@@ -76,6 +76,12 @@ spec:
           volumeMounts:
             - name: tmp
               mountPath: /tmp/thinkback
+            # 企业自己的记忆类型 profile：ConfigMap thinkback-profiles，
+            # optional=true 表示没建这个 ConfigMap 时挂成空目录，服务照常起
+            # （注册表回落到镜像内置的 /app/profiles）。
+            - name: profiles
+              mountPath: /etc/thinkback/profiles
+              readOnly: true
           readinessProbe:
             httpGet:
               path: /health/ready
@@ -93,3 +99,7 @@ spec:
       volumes:
         - name: tmp
           emptyDir: {}
+        - name: profiles
+          configMap:
+            name: thinkback-profiles
+            optional: true

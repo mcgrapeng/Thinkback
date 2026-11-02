@@ -303,6 +303,37 @@ message L3BackgroundStatusResponse {
   int32 available_capacity = 6;
 }
 
+// ─── 记忆类型发现 ────────────────────────────────────────────────────────────
+//
+// 接入方在写入前要知道「这个 namespace 能写哪些类型、每个类型的策略是什么」
+// —— memory_type 取值必须来自注册表，写错直接报错。与 HTTP
+// GET /v2/memory/types、MCP list_memory_types 同形。
+
+message ListMemoryTypesRequest {
+  string namespace = 1;
+}
+
+message MemoryTypeInfo {
+  string name = 1;
+  string description = 2;
+  string extractor = 3;
+  repeated string source_roles = 4;
+  string conflict = 5;
+  string retention = 6;
+  optional int32 ttl_days = 7;
+  string classification = 8;
+  bool review_required = 9;
+  optional int32 recall_budget = 10;
+  string extraction_prompt_version = 11;
+}
+
+message ListMemoryTypesResponse {
+  string status = 1;
+  string namespace = 2;
+  string policy_version = 3;
+  repeated MemoryTypeInfo types = 4;
+}
+
 // ─── Service ──────────────────────────────────────────────────────────────────
 
 service MemoryService {
@@ -320,4 +351,6 @@ service MemoryService {
   rpc Rebuild(RebuildRequest) returns (RebuildResponse);
   rpc GetTask(GetTaskRequest) returns (TaskResponse);
   rpc GetL3BackgroundStatus(L3BackgroundStatusRequest) returns (L3BackgroundStatusResponse);
+  // 已注册的记忆类型清单（与 HTTP GET /v2/memory/types、MCP list_memory_types 同形）。
+  rpc ListMemoryTypes(ListMemoryTypesRequest) returns (ListMemoryTypesResponse);
 }

@@ -286,13 +286,20 @@ class MemoryRepository(Protocol):
         self, user_id: str, memory_scope_id: str
     ) -> set[tuple[str | None, str | None]]: ...
 
-    def excluded_source_refs_for_user(self, user_id: str) -> set[tuple[str | None, str | None]]:
+    def excluded_source_refs_for_user(
+        self, user_id: str, namespace: str
+    ) -> set[tuple[str | None, str | None]]:
         """该用户**全部 scope** 下已删除/被取代/被遗忘记忆的来源轮次。
 
         跨表聚合口径：L3 记忆存在长期 scope（``thinkback``），L1 回合与 L2 摘要
         存在会话 scope，两侧 scope key 根本不同。按单一 scope 过滤排除集，
         会漏掉「记忆已删除、摘要里却还留着原文」的情况 —— 被删除/被遗忘的
         事实从 L2 摘要里复活。
+
+        聚合范围是**该 namespace 内的全部 scope**（L3 行的 memory_scope_id 就是
+        namespace）。不带 namespace 维度的话，同一 user 在两个 namespace 复用
+        同一 ``(session_id, round_id)`` 时，A 空间里删除的来源会把 B 空间里
+        仍活跃的同名轮次也排除掉 —— B 的摘要静默丢内容。
 
         来源引用自带 ``(session_id, round_id)``，因此可以安全地跨 scope 聚合：
         排除的是**具体轮次**，不会误伤同一用户的其它会话。

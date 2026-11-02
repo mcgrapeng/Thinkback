@@ -264,7 +264,7 @@ class L2BackgroundRefresher:
             )
             # 排除集按用户聚合：L3 记忆在长期 scope，轮次在会话 scope；
             # 按 scope 过滤会漏掉已删除/已遗忘的事实 → LLM 摘要把原文复活。
-            excluded_refs = self._repository.excluded_source_refs_for_user(user_id)
+            excluded_refs = self._repository.excluded_source_refs_for_user(user_id, namespace)
             rounds = [
                 entry
                 for entry in self._repository.list_rounds(
@@ -283,7 +283,7 @@ class L2BackgroundRefresher:
                 raise RuntimeError("l2 llm composer returned empty summary")
             # 写入前复核排除集：composer 期间发生的删除（删除屏障墓碑化轮次）
             # 必须让本次刷新放弃，否则摘要里会带回已删原文。
-            current_excluded = self._repository.excluded_source_refs_for_user(user_id)
+            current_excluded = self._repository.excluded_source_refs_for_user(user_id, namespace)
             resurrected = [
                 entry for entry in rounds if (entry.session_id, entry.round_id) in current_excluded
             ]

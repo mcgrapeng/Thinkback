@@ -208,14 +208,23 @@ def test_releasing_more_slots_than_reserved_never_makes_the_count_negative() -> 
 
 
 def test_reserving_from_a_full_queue_reports_the_pending_and_max_counts() -> None:
-    """队列满时报错要带上「在途多少 / 上限多少」—— 那是运维定位的唯一线索。"""
+    """队列满时报错要带上「在途多少 / 上限多少」—— 那是运维定位的唯一线索。
+
+    这里**不能**用 ``_release_slot_later``：那个守护线程 0.5 秒后归还槽位，
+    机器负载高时断言被推迟到归还之后 → 槽位已空 → 预留成功 → RuntimeError
+    不抛 → 用例**随机**红（实测整套跑时红过一次，单跑必绿）。
+
+    守护线程是给「无限等」的实现准备的（避免审计挂死）。本用例等的是
+    ``queue_wait_seconds=0``（立刻失败），不会挂死，所以不需要它 —— 断言
+    之前不释放槽位，断言的输入就是确定的。
+    """
     tracker = L3WriteExecutor(workers=1, max_pending_tasks=1, queue_wait_seconds=0)
     tracker.reserve_write_slot()
-    _release_slot_later(tracker)
 
     with pytest.raises(RuntimeError, match=r"pending=1 max=1"):
         tracker.reserve_write_slot()
 
+    tracker.release_write_slot()
     tracker.shutdown()
 
 

@@ -190,3 +190,28 @@ def test_database_url_alias_works_from_env_file_without_os_environ(tmp_path, mon
     assert settings.database_url == (
         "postgresql+asyncpg://postgres:secret@db.example.internal:5432/thinkback"
     )
+
+
+def test_no_p0_slots_warning_when_the_whitelist_is_empty() -> None:
+    """默认不设白名单：闸门关闭，不提示。"""
+    settings = Settings(memory_p0_slots="")
+
+    assert settings.memory_p0_slots_warning is None
+
+
+def test_a_non_empty_p0_slots_whitelist_is_spelled_out_at_startup() -> None:
+    """白名单非空要说清楚后果。
+
+    症状是「助手忘了事」而不是报错 —— 没人会去看配置注释，所以启动时
+    必须说一遍：只有白名单里的 slot 能跨会话召回，其余留在会话内。
+    """
+    settings = Settings(memory_p0_slots="preferred_nickname,pet_name:cat")
+
+    warning = settings.memory_p0_slots_warning
+
+    assert warning is not None
+    assert "preferred_nickname" in warning
+    assert "pet_name:cat" in warning
+    # 全局开关这件事要点破：一份部署服务多个 namespace 时，
+    # 一家调了白名单，另一家的召回覆盖面也一起变。
+    assert "global" in warning

@@ -13,7 +13,6 @@ import json
 import threading
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
-from pathlib import Path
 from typing import Any
 
 from loguru import logger
@@ -158,19 +157,24 @@ def build_registry_provider(
 ) -> Callable[[str], MemoryTypeRegistry]:
     """按 namespace 加载记忆类型注册表。
 
-    profile 目录约定：``<dir>/<namespace>.json``。
+    profile 目录约定：``<dir>/<namespace>.json``。``memory_type_profile_dir``
+    可以是逗号分隔的多个目录（按顺序找第一个命中的）—— 企业自己的 profile
+    挂在一个目录、镜像内置的在另一个目录，企业新增记忆类型不必重建镜像。
 
     两种失败分开处理：
-    - **配置缺失**（该 namespace 没有 profile 文件）：生产环境报错；开发
-      环境回落默认注册表，因为开发期 namespace 可能还没配。
+    - **配置缺失**（该 namespace 在所有目录里都没有 profile 文件）：生产环境
+      报错；开发环境回落默认注册表，因为开发期 namespace 可能还没配。
     - **配置非法**（解析失败、字段未知、取值非法）：**任何环境都报错**。
       静默换一套策略等于让企业以为在跑自己的记忆类型规则，实际跑的是
       内置默认规则 —— 这类「配置看起来生效了」比启动失败危险得多。
       ADR-0004 / D29。
     """
     current_settings = config or settings
-    profile_dir = Path(current_settings.memory_type_profile_dir)
+    profile_dir = current_settings.memory_type_profile_dir
     strict = current_settings.environment == "production"
+    # 每个 (namespace, 类型) 只报一次：注册表是按请求读的（无缓存），不去重
+    # 会把启动提示变成日志洪水。
+    warned_inert_conflicts: set[tuple[str, str]] = set()
 
     def provider(namespace: str) -> MemoryTypeRegistry:
         if not has_profile(profile_dir, namespace):
@@ -181,20 +185,59 @@ def build_registry_provider(
                 raise RuntimeError(
                     f"no memory type profile for namespace {namespace!r} in {profile_dir}"
                 )
-            return default_registry()
-        try:
-            return load_registry(profile_dir, namespace)
-        except (OSError, ValueError, json.JSONDecodeError) as exc:
-            logger.bind(
-                namespace=namespace,
-                profile_dir=str(profile_dir),
-                error_type=type(exc).__name__,
-            ).error("memory type profile load failed")
-            raise RuntimeError(
-                f"memory type profile for namespace {namespace!r} could not be loaded: {exc}"
-            ) from exc
+            registry = default_registry()
+        else:
+            try:
+                registry = load_registry(profile_dir, namespace)
+            except (OSError, ValueError, json.JSONDecodeError) as exc:
+                logger.bind(
+                    namespace=namespace,
+                    profile_dir=str(profile_dir),
+                    error_type=type(exc).__name__,
+                ).error("memory type profile load failed")
+                raise RuntimeError(
+                    f"memory type profile for namespace {namespace!r} could not be loaded: {exc}"
+                ) from exc
+        _warn_inert_conflict_policies(registry, namespace, warned_inert_conflicts)
+        return registry
 
     return provider
+
+
+def _warn_inert_conflict_policies(
+    registry: MemoryTypeRegistry,
+    namespace: str,
+    warned: set[tuple[str, str]],
+) -> None:
+    """声明了 overwrite 却算不出冲突键的类型 → 那条覆盖策略是空配置。
+
+    引擎（mem0 2.2.1）的写入路径只产 ADD、不裁决冲突，所以类型声明的
+    ``conflict`` 是**唯一**的覆盖机制。冲突键取自事实文本的「属性名：值」形状，
+    而文本形状由 per-type 抽取指令规定：指令要求写成 ``工艺节点：3nm``，
+    属性名「工艺节点」才是可信的冲突键。没有指令的类型回退到 9 个固定 P0
+    槽位（中文消费级：昵称 / 宠物 / 住址 / 生日 …）—— 企业垂类事实基本落
+    在这之外，于是 ``conflict: overwrite`` 只对命中槽位的事实生效。
+
+    这类问题在配置里看不出来：``conflict: overwrite`` 写得规规矩矩，校验也
+    全过。所以在这里点名 —— 运维改配置（补一份抽取指令）比在运行日志里猜
+    要快得多。
+
+    只报不改：补抽取指令会改变抽取形状与既有行为，那是独立一批。
+    """
+
+    for spec in registry.types.values():
+        if str(spec.conflict) != "overwrite" or spec.extraction_prompt_text:
+            continue
+        key = (namespace, spec.name)
+        if key in warned:
+            continue
+        warned.add(key)
+        logger.bind(namespace=namespace, memory_type=spec.name).warning(
+            "memory type declares conflict='overwrite' but has no per-type extraction "
+            "prompt: the overwrite policy can only take effect for facts matching the "
+            "fixed P0 slots. Add an extraction_prompt that writes facts as "
+            "'<attribute>: <value>' to make it effective."
+        )
 
 
 def get_memory_service() -> MemoryService:
@@ -219,6 +262,14 @@ def get_memory_service() -> MemoryService:
                     l2_llm_enabled=settings.memory_l2_llm_enabled,
                 )
                 service_log.info("memory service initialization started")
+                p0_slots_warning = settings.memory_p0_slots_warning
+                if p0_slots_warning:
+                    logger.bind(
+                        allowed_slots=settings.memory_p0_slots_list,
+                    ).warning(p0_slots_warning)
+                namespace_warning = settings.memory_namespace_boundary_warning
+                if namespace_warning:
+                    logger.warning(namespace_warning)
                 repository = SqlAlchemyMemoryRepository(
                     l1_cache_enabled=settings.memory_l1_cache_enabled
                 )

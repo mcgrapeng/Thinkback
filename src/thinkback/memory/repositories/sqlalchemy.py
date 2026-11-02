@@ -229,9 +229,9 @@ class SqlAlchemyMemoryRepository(L1CacheMixin):
             namespace=namespace,
         )
         rounds.reverse()
-        for entry in rounds:
-            super().update_l1(entry, limit=L1_CACHE_LIMIT)
-        return super().get_l1(user_id, memory_scope_id, session_id, namespace=namespace)
+        return self._l1_complete_read_through(
+            rounds, user_id, memory_scope_id, session_id, namespace=namespace
+        )
 
     async def _get_round(self, round_id: str) -> JournalEntry | None:
         async with self.session_factory() as session:
@@ -316,8 +316,18 @@ class SqlAlchemyMemoryRepository(L1CacheMixin):
                         SummaryRoundJournalRecord.round_id == request.round_id
                     )
                 )
-                if concurrent and concurrent.round_fingerprint == entry.round_fingerprint:
+                if concurrent:
+                    # 先写胜出：并发插入撞了 round_id 唯一约束时，返回已存的那轮，
+                    # 与顺序写入（上面的 ``if existing: return``）和内存实现同语义。
+                    #
+                    # 指纹不同说明调用方把同一个 event_id 用在了两件事上 —— 那是
+                    # 业务冲突，交给服务层判成 409。让裸 IntegrityError 冒到 API
+                    # 层会变成 500：调用方按 5xx 重试，重试多少次都是 500。
+                    # （本文件 :1377 记的就是这件事：_claim_task 已按同口径
+                    # 回读并发行，_save_round 这里原先只处理了指纹相同的情形。）
                     return self._journal_from_record(concurrent)
+                # 真的没有那一轮：不是 round_id 撞车，是别的完整性约束 violated，
+                # 原样上抛。
                 raise
         return entry
 
@@ -326,7 +336,8 @@ class SqlAlchemyMemoryRepository(L1CacheMixin):
     ) -> SummaryEntry:
         # 排除集按**用户**聚合（不按 scope）：L3 记忆在长期 scope，
         # 轮次在会话 scope；按 scope 过滤会漏掉已删除事实 → 摘要把原文复活。
-        excluded_refs = self.excluded_source_refs_for_user(user_id)
+        # 聚合范围限定在本 namespace（session_id 只在 namespace 内唯一）。
+        excluded_refs = self.excluded_source_refs_for_user(user_id, namespace)
         rounds = [
             entry
             for entry in self.list_rounds(user_id, memory_scope_id, namespace=namespace)
@@ -1068,9 +1079,13 @@ class SqlAlchemyMemoryRepository(L1CacheMixin):
             .order_by(MemoryRecord.expires_at)
             .limit(limit)
         )
-        if memory_scope_id:
+        # 判「有没有传」用 ``is not None``，不用真值：``user_id=""`` 是
+        # 「传了一个空租户」，不是「没传」。按真值判会把租户过滤整个丢掉，
+        # 于是查询返回**全部租户**的记忆 —— 与内存实现（用 ``is None``）
+        # 的行为分叉，且分叉的方向是「少一道隔离」。
+        if memory_scope_id is not None:
             statement = statement.where(MemoryRecord.memory_scope_id == memory_scope_id)
-        if user_id:
+        if user_id is not None:
             statement = statement.where(MemoryRecord.user_id == user_id)
         async with self.session_factory() as session:
             result = await session.execute(statement)
@@ -1266,20 +1281,25 @@ class SqlAlchemyMemoryRepository(L1CacheMixin):
                 refs.update(source_ref_key(source_ref) for source_ref in record.source_refs)
             return refs
 
-    def excluded_source_refs_for_user(self, user_id: str) -> set[tuple[str | None, str | None]]:
-        """该用户全部 scope 下已删除/被取代/被遗忘记忆的来源轮次。
+    def excluded_source_refs_for_user(
+        self, user_id: str, namespace: str
+    ) -> set[tuple[str | None, str | None]]:
+        """该 namespace 内该用户全部 scope 下已删除/被取代/被遗忘记忆的来源轮次。
 
-        跨表聚合口径：L3 记忆存在长期 scope（``thinkback``），L1 回合与 L2 摘要
-        存在会话 scope，两侧 scope key 不同 —— 按单一 scope 过滤排除集，
-        被删除/被遗忘的事实会从 L2 摘要里复活。来源引用自带
-        ``(session_id, round_id)``，因此跨 scope 聚合是安全的。
+        跨表聚合口径：L3 记忆存在长期 scope（``memory_scope_id`` 即 namespace），
+        L1 回合与 L2 摘要存在会话 scope，两侧 scope key 不同 —— 按单一 scope
+        过滤排除集，被删除/被遗忘的事实会从 L2 摘要里复活。
+
+        过滤必须带 namespace：来源引用 ``(session_id, round_id)`` 里的
+        session_id 只在 namespace 内唯一（同 session_id 跨 namespace 是两份
+        空间），不带这一维，A 空间删除的来源会误伤 B 空间的同名轮次。
 
         只取 ``source_refs`` 一列：这是召回热路径，不需要其余 18 列。
         """
-        return self._run(self._excluded_source_refs_for_user(user_id))
+        return self._run(self._excluded_source_refs_for_user(user_id, namespace))
 
     async def _excluded_source_refs_for_user(
-        self, user_id: str
+        self, user_id: str, namespace: str
     ) -> set[tuple[str | None, str | None]]:
         async with self.session_factory() as session:
             rows = (
@@ -1287,6 +1307,7 @@ class SqlAlchemyMemoryRepository(L1CacheMixin):
                     select(MemoryRecord.source_refs).where(
                         and_(
                             MemoryRecord.user_id == user_id,
+                            MemoryRecord.memory_scope_id == namespace,
                             MemoryRecord.memory_status.in_(
                                 [
                                     MemoryStatus.DELETED.value,
@@ -1659,7 +1680,7 @@ class SqlAlchemyMemoryRepository(L1CacheMixin):
             conditions.append(MemoryRecord.user_id == user_id)
         if memory_scope_id is not None:
             conditions.append(MemoryRecord.memory_scope_id == memory_scope_id)
-        if statuses:
+        if statuses is not None:
             conditions.append(MemoryRecord.memory_status.in_(statuses))
 
         async with self.session_factory() as session:

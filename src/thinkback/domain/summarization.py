@@ -68,7 +68,10 @@ def build_structured_summary_user_prompt(
     lines.append("本会话轮次（按时间顺序）：")
     for entry in rounds:
         for message in entry.messages:
-            if message.get("role") == "user" and str(message.get("content", "")).strip():
+            # ``content`` 可能缺键或为 None（遗留行 / 非标准写入）：都当空正文。
+            # 写成 ``str(message.get("content", ""))`` 的话 ``None`` 会变成
+            # 字面量 "None" 通过非空判定，于是 prompt 里多出一行 ``user: None``。
+            if message.get("role") == "user" and str(message.get("content") or "").strip():
                 lines.append(f"user: {str(message['content']).strip()}")
     lines.append("\n请输出更新后的 JSON 画像。")
     return "\n".join(lines)

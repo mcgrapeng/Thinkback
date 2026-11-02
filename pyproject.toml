@@ -143,14 +143,17 @@ omit = [
 # （第七轮更新：support.py 的**判定逻辑**已拆到 source_order.py 并放回范围，
 # entities.py 也放回范围，理由见下方；support.py 剩下的依据词表仍不进范围。）
 
-# domain/slots/extractors.py **故意不进来**：它的体量几乎全是「措辞表」
-# （约 120 条正则 + 约 40 个 marker），而这些正则彼此重叠（一句
-# "preferred name from Bob to Carol" 同时命中 7 条正则：3 条
-# preferred name from X to Y + 4 条 from X to Y）。于是它的变异体
-# 绝大多数是「某条措辞不被识别」，而要杀掉它们就得给每条措辞配一个
-# **只命中它**的样例 —— 那是「覆盖率报表」，不是缺陷信号：按上面的收窄
-# 标准，登记成存活只会稀释门禁的信噪比。措辞表逐条钉死这件事单独立项
-# （见 tests/unit/test_slot_extraction_real.py 的措辞用例），不进变异审计。
+# domain/slots/extractors.py **进了**变异范围（第十轮），但它的**措辞表**
+# 被搬了出去（第十一轮重构）：措辞表（约 120 条正则 + 约 85 个闸门词）
+# 是**数据**不是判定逻辑，而这些正则彼此重叠（一句 "preferred name from
+# Bob to Carol" 同时命中 7 条正则：3 条 preferred name from X to Y + 4 条
+# from X to Y）。mutmut 逐条改这些字面量，产出的大多是「等价变异」
+# （大小写 / XX 包裹）—— 那是噪音不是缺陷信号，登记成存活只会稀释门禁的
+# 信噪比。措辞表搬进 domain/slots/_vocabulary.py（do_not_mutate 排除），
+# 内容由 golden 用例逐条钉死（tests/unit/test_slot_vocabulary_golden.py：
+# 每条措辞配一个样例，钉住「模式仍命中」+「抽取输出不变」）。留在变异
+# 范围里的是抽取器的**判定分支**（闸门、末次匹配、取值清洗）—— 那才是
+# 改坏了就是真实缺陷的部分。
 #
 # memory/schemas.py **故意不进来**：它是 pydantic 模型定义，mutmut 会把
 # Field(description=...) / 报错文案 / 正则串全变一遍 —— 那些变异体绝大多数
@@ -181,9 +184,12 @@ omit = [
 # 唯一口径，召回 / 列表 / 槽位回填三处都问它。9 条用例、纯函数、判定分支
 # 极少 —— 收窄它没有信噪比收益，却丢掉了唯一的「改坏源码」保护。
 #
-# domain/content_quality.py、domain/memory_types.py **仍不进**范围：它们的
-# 变异体大面积落在「展示文案 / 正则串 / 属性名长度上限」上，逐条杀掉就变成
-# 覆盖率报表而不是缺陷信号。决定行为的部分用各自的契约用例钉死：
+# domain/content_quality.py 第十轮进范围（写入前的内容质量闸：判定分支
+# 居多）；domain/memory_types.py 第十二轮进范围（类型注册表——租户配置
+# 的信任边界，见下方 only_mutate 里的当轮注释）。两者历史上被排除的理由
+# 是「变异体大面积落在展示文案/正则串上」—— content_quality 的判定分支
+# 后来被判定为值得守；memory_types 则按门禁流程逐条登记存活者理由。
+# 决定行为的契约用例同时钉着：
 # - 质量分的精确值 → tests/unit/test_content_quality_contract.py
 # - 类型策略与默认注册表 → tests/unit/test_memory_type_profile_validation.py
 #   与 tests/unit/test_memory_types.py
@@ -256,6 +262,11 @@ only_mutate = [
     "src/thinkback/domain/slots/extractors.py",
     "src/thinkback/domain/slots/support.py",
     "src/thinkback/domain/content_quality.py",
+    # 第十二轮：类型注册表 —— 租户提交的配置能不能生效、属性名冲突键判据，
+    # 都在这一个文件里。插件形态下它是**最靠近外部输入的信任边界**
+    # （profile 由部署方/企业下发）。历史上没进范围是担心诊断文案变异体
+    # 稀释信噪比；存活者按门禁流程逐条登记理由（详见当轮审计报告）。
+    "src/thinkback/domain/memory_types.py",
 ]
 # 词表是**数据**不是逻辑：单独一个模块，逐条改字面量产出的是「等价变异」
 # （大小写 / XX 包裹），不是缺陷信号。抽出来之后用 golden 用例逐条钉死
@@ -289,6 +300,11 @@ pytest_add_cli_args_test_selection = [
     "tests/unit/test_classification_contract.py",
     "tests/unit/test_structured_logging.py",
     "tests/unit/test_domain_dedup.py",
+    # 第十一轮：对抗性审计修的 8 条缺陷 —— 去重键的小数点、decay 的判龄时钟、
+    # gRPC 的未知枚举、限流的查询串分桶、L1 缓存窗口与读穿透收尾、两个仓储
+    # 的空过滤参数。不选它，这些模块的新变异体全部存活 —— 门禁看到的是一片红，
+    # 实际是用例没被选中。
+    "tests/unit/test_round11_audit_findings.py",
     # 槽位抽取与规范化的变异目标在 domain/slots/ 下：不选上对应的用例，
     # canonical/extractors 的变异体会因为「选择集里没有能杀它的用例」而
     # 全部存活 —— 门禁看到的是一片红，实际是用例没被选中。
@@ -368,9 +384,9 @@ pytest_add_cli_args_test_selection = [
     # 抽取器的闸门（宠物名 / 作品名 / 标记）、英文模式的大小写、
     # 末次匹配与切分；质量维度的扣分项叠加。
     "tests/unit/test_slot_extractors_contract.py",
-    # 词表的 golden 用例：每条措辞配一个样例，钉住「模式仍命中」+
-    # 「抽取输出不变」。词表本身已移出变异范围，这份用例就是它的替代守卫
-    # —— 不选它，词表内容的回归就没人拦。
+    # 词表的 golden 用例（第十一轮重构后新增）：每条措辞配一个样例，
+    # 钉住「模式仍命中」+「抽取输出不变」。词表本身已移出变异范围，
+    # 这份用例就是它的替代守卫 —— 不选它，词表内容的回归就没人拦。
     "tests/unit/test_slot_vocabulary_golden.py",
 ]
 

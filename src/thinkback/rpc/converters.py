@@ -12,6 +12,7 @@ import json
 from collections.abc import Mapping
 from typing import Any
 
+from thinkback.infra.config import get_settings
 from thinkback.memory.schemas import (
     DEFAULT_NAMESPACE,
     AppendEventRequest,
@@ -20,6 +21,7 @@ from thinkback.memory.schemas import (
     DeleteScope,
     GetMemoryResponse,
     ListMemoriesResponse,
+    ListMemoryTypesResponse,
     ManagedMemoryItem,
     MemoryStatus,
     MemoryType,
@@ -183,6 +185,22 @@ def _namespace(value: str) -> str:
     return value or DEFAULT_NAMESPACE
 
 
+def _served_namespace(value: str) -> str:
+    """取请求的 namespace，并确认本部署服务它。
+
+    为什么检查落在这里：本模块的 ``_namespace`` 是 gRPC 面上**唯一**的
+    namespace 解析入口 —— 所有带 namespace 的 RPC 都经过它。落点少一个，
+    绕过路径就少一条；所以 fail-closed 检查只需要在这里做一次。
+
+    失败抛 ``ValueError``（带 ``fail-closed`` 前缀）：servicer 的
+    ``_handle_error`` 把它映射成 PERMISSION_DENIED，与 HTTP 面的 403 同义。
+    """
+
+    namespace = _namespace(value)
+    get_settings().require_namespace(namespace)
+    return namespace
+
+
 def to_append_event_request(req: pb.AppendEventRequest) -> AppendEventRequest:
     """v2 写入契约：一次一条原始事件（与 HTTP /v2/memory/events 同形）。
 
@@ -205,7 +223,7 @@ def to_append_event_request(req: pb.AppendEventRequest) -> AppendEventRequest:
             subject_ref=event.subject_ref if event.HasField("subject_ref") else None,
             provenance=dict(event.provenance),
         ),
-        namespace=_namespace(req.namespace),
+        namespace=_served_namespace(req.namespace),
         memory_type=req.memory_type if req.HasField("memory_type") else None,
         round_index=req.round_index if req.HasField("round_index") else None,
         metadata=dict(req.metadata),
@@ -221,7 +239,7 @@ def to_recall_request(req: pb.RecallRequest) -> RecallMemoryRequest:
         l3_limit=resolve_l3_limit(req.l3_limit),
         l3_score_threshold=resolve_l3_score_threshold(req.l3_score_threshold),
         token_budget=resolve_token_budget(req.token_budget),
-        namespace=_namespace(req.namespace),
+        namespace=_served_namespace(req.namespace),
     )
 
 
@@ -235,12 +253,19 @@ def to_delete_request(
         operation_id=req.operation_id,
         memory_id=req.memory_id if req.HasField("memory_id") else None,
         session_id=req.session_id if req.HasField("session_id") else None,
-        namespace=_namespace(req.namespace),
+        namespace=_served_namespace(req.namespace),
     )
 
 
 def to_update_request(req: pb.UpdateMemoryRequest) -> UpdateMemoryRequest:
-    memory_type = _MEMORY_TYPE_FROM_PB.get(req.memory_type) if req.HasField("memory_type") else None
+    # 未知枚举值必须报错（与本文件其它枚举同一口径）：客户端版本比服务端新
+    # 时会发来服务端不认的值，`.get()` 会把它悄悄丢掉 —— 更新照常成功、
+    # 类型保持旧值，调用方以为改了类型而实际没改。
+    memory_type = (
+        _enum_value(_MEMORY_TYPE_FROM_PB, req.memory_type, "memory type")
+        if req.HasField("memory_type")
+        else None
+    )
     return UpdateMemoryRequest(
         request_id=req.request_id,
         user_id=req.user_id,
@@ -249,7 +274,7 @@ def to_update_request(req: pb.UpdateMemoryRequest) -> UpdateMemoryRequest:
         content=req.content,
         memory_type=memory_type,
         memory_type_name=req.memory_type_name or None,
-        namespace=_namespace(req.namespace),
+        namespace=_served_namespace(req.namespace),
     )
 
 
@@ -262,7 +287,7 @@ def to_rebuild_request(req: pb.RebuildRequest) -> RebuildMemoryRequest:
         history_version=req.history_version if req.HasField("history_version") else None,
         rebuild_l2=req.rebuild_l2,
         rebuild_l3=req.rebuild_l3,
-        namespace=_namespace(req.namespace),
+        namespace=_served_namespace(req.namespace),
     )
 
 
@@ -305,6 +330,39 @@ def list_response_to_pb(resp: ListMemoriesResponse) -> pb.ListMemoriesResponse:
     return pb.ListMemoriesResponse(
         status=resp.status,
         items=[_managed_item_to_pb(item) for item in resp.items],
+    )
+
+
+def types_response_to_pb(resp: ListMemoryTypesResponse) -> pb.ListMemoryTypesResponse:
+    """类型清单 → proto。
+
+    ``ttl_days`` / ``recall_budget`` 是 ``optional``：proto3 的标量字段没有
+    presence，0 与「没配」分不开。语义上「没配」与「配了 0」也不同
+    （配置校验里 ttl_days=0 是非法的），所以用 optional 表达。
+    """
+    items: list[pb.MemoryTypeInfo] = []
+    for item in resp.types:
+        kwargs: dict[str, Any] = {
+            "name": item.name,
+            "description": item.description,
+            "extractor": item.extractor,
+            "source_roles": list(item.source_roles),
+            "conflict": item.conflict,
+            "retention": item.retention,
+            "classification": item.classification,
+            "review_required": item.review_required,
+            "extraction_prompt_version": item.extraction_prompt_version,
+        }
+        if item.ttl_days is not None:
+            kwargs["ttl_days"] = item.ttl_days
+        if item.recall_budget is not None:
+            kwargs["recall_budget"] = item.recall_budget
+        items.append(pb.MemoryTypeInfo(**kwargs))
+    return pb.ListMemoryTypesResponse(
+        status=resp.status,
+        namespace=resp.namespace,
+        policy_version=resp.policy_version,
+        types=items,
     )
 
 

@@ -37,9 +37,24 @@ def normalize_text(text: str) -> str:
     - ``"user:  我住在上海"`` → ``"user我住在上海"``
 
     归一只用于**比较**，不用于展示：真正注入模型的内容仍是原文。
+
+    **小数点保留**：``"1.5 万"`` 与 ``"15 万"`` 是两条不同的事实，滤掉小数点
+    会让它们落到同一个键上，召回时其中一条被当成重复静默丢掉 —— 比重复
+    更严重（丢掉的是一条真实事实）。只有夹在两个数字之间的小数点保留，
+    句末句号、冒号这些照旧滤掉。
     """
 
-    return "".join(char for char in text.casefold() if char.isalnum())
+    folded = text.casefold()
+    kept: list[str] = []
+    for index, char in enumerate(folded):
+        if char.isalnum():
+            kept.append(char)
+            continue
+        if char == "." and kept and kept[-1].isdigit():
+            following = folded[index + 1 : index + 2]
+            if following.isdigit():
+                kept.append(char)
+    return "".join(kept)
 
 
 def content_dedup_key(text: str) -> str:

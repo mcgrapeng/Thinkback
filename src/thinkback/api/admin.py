@@ -540,3 +540,42 @@ async def admin_get_config() -> dict[str, Any]:
         "environment": settings.environment,
         "fields": [{"name": name, "value": value} for name, value in fields],
     }
+
+
+def _scan_memory_type_profiles(profile_dir: str) -> dict[str, Any]:
+    """用运行时同一个加载器逐份试载 profile 目录里的全部配置文件。"""
+
+    from thinkback.domain.memory_types import load_registry, profile_dirs
+
+    results: list[dict[str, Any]] = []
+    for directory in profile_dirs(profile_dir):
+        for path in sorted(directory.glob("*.json")):
+            entry: dict[str, Any] = {"file": path.name, "directory": str(directory)}
+            try:
+                # 按该文件所在的目录加载（不是全目录搜索）：被前一个目录
+                # 遮蔽的文件也要校验出自己的错，不能跟着遮蔽者一起隐身。
+                registry = load_registry(directory, path.stem)
+            except Exception as exc:  # noqa: BLE001 - 校验端点的本职就是把错误报全
+                entry.update({"ok": False, "error": f"{type(exc).__name__}: {exc}"})
+            else:
+                entry.update(
+                    {"ok": True, "namespace": registry.namespace, "types": len(registry.types)}
+                )
+            results.append(entry)
+    ok_count = sum(1 for item in results if item.get("ok"))
+    return {"ok": ok_count == len(results), "validated": len(results), "files": results}
+
+
+@router.get("/memory-types/validate", operation_id="admin_validate_memory_type_profiles")
+async def admin_validate_memory_type_profiles() -> dict[str, Any]:
+    """校验 profile 目录下的全部类型配置（D24 的可交付半）。
+
+    注册表本来就是每请求热加载的（改文件即生效，无需 reload）—— 部署方
+    真正缺的是「下发前知道这份配置合不合法」：生产模式下非法 profile 会让
+    该 namespace 的**每次请求**都失败（fail-closed，ADR-0004），配置校验
+    必须能在下发前后独立执行。多目录时同 namespace 按目录顺序首中生效，
+    遮蔽不影响逐份校验。
+    """
+    from thinkback.infra.config import settings
+
+    return await asyncio.to_thread(_scan_memory_type_profiles, settings.memory_type_profile_dir)

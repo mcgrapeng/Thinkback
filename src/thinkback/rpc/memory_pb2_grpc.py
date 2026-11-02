@@ -102,6 +102,12 @@ class MemoryServiceStub(object):
             response_deserializer=memory__pb2.L3BackgroundStatusResponse.FromString,
             _registered_method=True,
         )
+        self.ListMemoryTypes = channel.unary_unary(
+            "/memory.MemoryService/ListMemoryTypes",
+            request_serializer=memory__pb2.ListMemoryTypesRequest.SerializeToString,
+            response_deserializer=memory__pb2.ListMemoryTypesResponse.FromString,
+            _registered_method=True,
+        )
 
 
 class MemoryServiceServicer(object):
@@ -173,6 +179,12 @@ class MemoryServiceServicer(object):
         context.set_details("Method not implemented!")
         raise NotImplementedError("Method not implemented!")
 
+    def ListMemoryTypes(self, request, context):
+        """已注册的记忆类型清单（与 HTTP GET /v2/memory/types、MCP list_memory_types 同形）。"""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details("Method not implemented!")
+        raise NotImplementedError("Method not implemented!")
+
 
 def add_MemoryServiceServicer_to_server(servicer, server):
     rpc_method_handlers = {
@@ -230,6 +242,11 @@ def add_MemoryServiceServicer_to_server(servicer, server):
             servicer.GetL3BackgroundStatus,
             request_deserializer=memory__pb2.L3BackgroundStatusRequest.FromString,
             response_serializer=memory__pb2.L3BackgroundStatusResponse.SerializeToString,
+        ),
+        "ListMemoryTypes": grpc.unary_unary_rpc_method_handler(
+            servicer.ListMemoryTypes,
+            request_deserializer=memory__pb2.ListMemoryTypesRequest.FromString,
+            response_serializer=memory__pb2.ListMemoryTypesResponse.SerializeToString,
         ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -562,6 +579,36 @@ class MemoryService(object):
             "/memory.MemoryService/GetL3BackgroundStatus",
             memory__pb2.L3BackgroundStatusRequest.SerializeToString,
             memory__pb2.L3BackgroundStatusResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True,
+        )
+
+    @staticmethod
+    def ListMemoryTypes(
+        request,
+        target,
+        options=(),
+        channel_credentials=None,
+        call_credentials=None,
+        insecure=False,
+        compression=None,
+        wait_for_ready=None,
+        timeout=None,
+        metadata=None,
+    ):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            "/memory.MemoryService/ListMemoryTypes",
+            memory__pb2.ListMemoryTypesRequest.SerializeToString,
+            memory__pb2.ListMemoryTypesResponse.FromString,
             options,
             channel_credentials,
             insecure,

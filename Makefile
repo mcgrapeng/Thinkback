@@ -123,11 +123,29 @@ load-smoke:
 # 出现**新增**存活 / 无测试变异体即失败。
 # 第一步先自愈：mutmut 的「函数↔测试」映射缓存不含测试文件内容，改了测试
 # 映射还是旧的，会把有覆盖的变异体误判成「无测试」。
+#
+# **必须在自己的副本里跑**：mutmut 的状态与变异体都记在 mutants/ 树里，
+# 两个 mutmut 实例共用同一棵树会互相写坏（实测：另一个 agent 的审计进程
+# 在跑，本进程就静默卡在 5117/5126 不动，所有 worker 停在 0.3% CPU，
+# 没有任何报错）。MUTATION_AUDIT_DIR 指向一个隔离副本即可；不设时用
+# 仓库内的树（单机单 agent 时没问题）。
+#
+# **同一台机器上只跑一个审计**：两个审计同时跑（哪怕在不同副本里）会把机器
+# 的内存吃干 —— 实测两轮各 8 个 worker 时 swap 用掉 20 GB / 21.5 GB，
+# 物理内存只剩 38 MB，审计进程被 OOM 杀掉且**没有任何报错**（进度条停在
+# 3802/5083，进程直接消失）。机器内存不够时把 --max-children 调小
+# （本轮用 4），或者等另一个审计跑完再跑。
+#
+# 审计期间**不要改 tests/ 下的任何 .py**：门禁对整个测试树取内容指纹
+# （tests/eval/refresh_mutation_stats.py），改了就得重跑整棵审计。
+MUTATION_AUDIT_DIR ?= .
+
 mutation-audit:
-	uv run --group dev python tests/eval/refresh_mutation_stats.py
-	uv run --group dev mutmut run --max-children 8
-	uv run --group dev mutmut results
-	uv run --group dev python tests/eval/check_mutation_survivors.py
+	cd $(MUTATION_AUDIT_DIR) && \
+	  uv run --group dev python tests/eval/refresh_mutation_stats.py && \
+	  uv run --group dev mutmut run --max-children 8 && \
+	  uv run --group dev mutmut results && \
+	  uv run --group dev python tests/eval/check_mutation_survivors.py
 
 # 本地开发：后端 7002 / 前端 7001 起步，占用自动顺延（script/dev.py）
 dev:

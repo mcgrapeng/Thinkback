@@ -8953,9 +8953,33 @@ def test_unregistered_memory_type_is_rejected() -> None:
 
 
 def test_review_required_type_is_rejected_without_approval_path() -> None:
-    """需要审批的类型（程序性规则）没有审批通道时明确拒绝。"""
+    """需要审批的类型（程序性规则）没有审批通道时明确拒绝。
+
+    procedure 已不在默认注册表里，这里用 profile 定义同形类型钉住
+    写入路径的拒绝语义（能力保留，默认清单不摆永远写不进去的类型）。
+    """
+    from thinkback.domain.memory_types import MemoryTypeRegistry, MemoryTypeSpec
+
+    registry = MemoryTypeRegistry(
+        namespace="thinkback",
+        version="1",
+        types={
+            "procedure": MemoryTypeSpec(
+                name="procedure",
+                extractor="none",
+                source_roles=("admin",),
+                conflict="none",
+                retention="forever",
+                classification="restricted",
+                review_required=True,
+            )
+        },
+    )
     service = MemoryService(
-        repository=InMemoryMemoryRepository(), backend=FakeMemoryBackend(), l3_write_mode="sync"
+        repository=InMemoryMemoryRepository(),
+        backend=FakeMemoryBackend(),
+        l3_write_mode="sync",
+        registry_provider=lambda _namespace: registry,
     )
 
     with pytest.raises(ValueError, match="requires review"):

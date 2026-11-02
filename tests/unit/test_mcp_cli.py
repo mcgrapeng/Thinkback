@@ -28,7 +28,11 @@ def _patch_server(monkeypatch: pytest.MonkeyPatch) -> None:
         def streamable_http_app(self) -> Any:
             return "http-app"
 
-    monkeypatch.setattr(mcp_main, "create_mcp_server", lambda service, namespace: _FakeServer())
+    monkeypatch.setattr(
+        mcp_main,
+        "create_mcp_server",
+        lambda service, namespace, **kwargs: _FakeServer(),
+    )
     monkeypatch.setattr("thinkback.api.dependencies.get_memory_service", lambda: object())
 
 
@@ -99,7 +103,11 @@ def test_main_runs_the_server_over_stdio(monkeypatch: pytest.MonkeyPatch) -> Non
         def run(self, **kwargs: Any) -> None:
             runs.append(kwargs)
 
-    monkeypatch.setattr(mcp_main, "create_mcp_server", lambda service, namespace: _FakeServer())
+    monkeypatch.setattr(
+        mcp_main,
+        "create_mcp_server",
+        lambda service, namespace, **kwargs: _FakeServer(),
+    )
     monkeypatch.setattr("thinkback.api.dependencies.get_memory_service", lambda: object())
 
     exit_code = mcp_main.main(["--transport", "stdio"])

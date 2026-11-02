@@ -113,7 +113,9 @@ class Settings(BaseSettings):
     memory_embedding_model: str = "default-embedding"
     mem0_history_db_path: str = ".mem0/history.db"
     # 记忆类型注册表 profile 目录：每个 namespace 一个 JSON（<namespace>.json）。
-    # 没有对应文件时回落到内置默认注册表。
+    # 可以是逗号分隔的多个目录，按顺序找第一个命中的 —— 企业自己的 profile
+    # 挂在一个目录、镜像内置的在另一个目录，企业新增记忆类型不必重建镜像。
+    # 所有目录都没有对应文件时回落到内置默认注册表。
     memory_type_profile_dir: str = "profiles"
     # mem0.add() 是否走 LLM 事实抽取（要 chat/completions endpoint）。
     # 设为 False 时退化为纯向量存储：raw message 落地为一条记忆，
@@ -157,6 +159,21 @@ class Settings(BaseSettings):
     memory_rate_limit_burst: int = 50
     # 读写路径的等待预算（各自独立的信号量与线程池，这里只是统一的超时值）。
     memory_api_worker_wait_seconds: float = 5.0
+    # 本部署服务的 namespace 白名单（逗号分隔）。空 = 不限制。
+    #
+    # 为什么需要它：内网免鉴权（D10）意味着「能连到本服务就能读写任何
+    # namespace 下的记忆」。插件形态下最安全的部署形状是**一个部署服务一个
+    # 租户**；这个白名单把那条约定变成可执行的配置，而不是靠人记住。
+    # 注意它**不是**访问控制：白名单内的 namespace 里，user_id 仍由调用方
+    # 自报，能连到本服务的人仍能读到这个 namespace 的全部记忆。真正的边界
+    # 仍然是网络边界（见 docs/API.md 的信任模型一节）。
+    memory_allowed_namespaces: str = ""
+    # 受信调用方身份头（D1 接入层身份绑定）：部署方前面的网关（带鉴权的
+    # 反代 / service mesh）注入的 HTTP 头 / gRPC metadata 键名。空 = 不启用
+    # （内网信任边界 = 网络边界，D10）。非空时 /v2/memory/* 里调用方自报的
+    # user_id 必须与该头一致，头缺失或不一致一律 403 / PERMISSION_DENIED ——
+    # 静默改写会掩盖「助手以为在写 A、实际写了 B」的配置错误，响亮拒绝更安全。
+    trusted_user_header: str = ""
     readiness_timeout_seconds: float = 3.0
     # 启动回收阈值：running 任务超过该秒数无任何更新（updated_at 停滞），
     # 在服务启动时被回收为 failed（进程被硬杀留下的孤儿任务，否则客户端
@@ -310,6 +327,85 @@ class Settings(BaseSettings):
         if not self.memory_p0_slots:
             return []
         return [item.strip() for item in self.memory_p0_slots.split(",") if item.strip()]
+
+    @property
+    def memory_p0_slots_warning(self) -> str | None:
+        """白名单非空时的启动提示；空则 ``None``（不提示）。
+
+        为什么要它：白名单把「哪些事实能跨会话召回」收窄了，而症状是
+        「助手忘了事」而不是报错 —— 没人会去看配置注释，所以启动时要说一遍。
+
+        这条也是**全局**开关：一份部署服务多个 namespace（= 多个企业）时，
+        一家调了白名单，另一家的召回覆盖面也一起变。
+        """
+        slots = self.memory_p0_slots_list
+        if not slots:
+            return None
+        return (
+            f"MEMORY_P0_SLOTS is set to {slots}: only these slots become recallable "
+            "L3 memories; everything else stays in L1/L2 (session-scoped). "
+            "This setting is global — it applies to every namespace."
+        )
+
+    @property
+    def memory_allowed_namespaces_list(self) -> list[str]:
+        """把 ``memory_allowed_namespaces``（逗号分隔字符串）解析成 namespace 列表。
+
+        空串 / 缺失 = 空列表 = 不限制，保持内网免鉴权下的既有行为。
+        """
+
+        if not self.memory_allowed_namespaces:
+            return []
+        return [item.strip() for item in self.memory_allowed_namespaces.split(",") if item.strip()]
+
+    def namespace_allowed(self, namespace: str) -> bool:
+        """这个 namespace 本部署是否服务。
+
+        白名单为空 = 不限制。白名单非空时只有名单内的 namespace 能被读写。
+        """
+
+        allowed = self.memory_allowed_namespaces_list
+        return not allowed or namespace in allowed
+
+    def require_namespace(self, namespace: str) -> None:
+        """本部署不服务这个 namespace 时抛错（fail-closed）。
+
+        错误文案带 ``fail-closed`` 前缀：HTTP 面映射成 403、gRPC 面映射成
+        PERMISSION_DENIED（``api/errors.py`` 与 ``rpc/servicer.py`` 同口径）。
+        措辞用「不服务」而不是「无权」—— 白名单是部署口径，不是权限体系。
+        """
+
+        if self.namespace_allowed(namespace):
+            return
+        raise ValueError(
+            "fail-closed: namespace "
+            f"{namespace!r} is not served by this deployment "
+            f"(MEMORY_ALLOWED_NAMESPACES={self.memory_allowed_namespaces_list})"
+        )
+
+    @property
+    def memory_namespace_boundary_warning(self) -> str | None:
+        """生产部署且未设 namespace 白名单时的启动提示；否则 ``None``。
+
+        为什么要它：本服务**不鉴权**（D10）。namespace 是业务分组标签，不是
+        安全边界 —— 任何能连到本服务的人都能读写**任何** namespace 下的记忆。
+        这是有意为之（内网部署），但接入方必须知道：把它当成有租户隔离的
+        服务接进生产，是这份契约里最容易踩的坑。
+
+        只在生产环境提示：开发与单测环境下这条是噪音。
+        """
+
+        if self.environment != "production":
+            return None
+        if self.memory_allowed_namespaces_list:
+            return None
+        return (
+            "MEMORY_ALLOWED_NAMESPACES is not set: this deployment serves every "
+            "namespace, and any caller that can reach it can read and write every "
+            "memory it holds (no caller authentication — see docs/API.md "
+            "'trust model'). Set MEMORY_ALLOWED_NAMESPACES to pin this deployment "
+            "to the namespaces it is meant to serve."
+        )
 
 
 @lru_cache

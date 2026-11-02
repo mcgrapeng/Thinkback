@@ -20,7 +20,7 @@ from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoin
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp
 
-from thinkback.api.idempotency import _caller_identity
+from thinkback.api.idempotency import _caller_identity, _caller_identity_from_query
 from thinkback.infra.token_bucket import BucketRegistry
 
 # 内网默认限流：单调用方 600 请求/分钟、突发 50。替代原先按 API key plan 的配额。
@@ -77,6 +77,15 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
         取不到（没有这个字段的端点、GET 请求、非 JSON 请求体）才退回对端 IP。
 
+        **GET 请求也要按租户分桶**：``/v2/memory/items?user_id=alice`` 的
+        user_id 在查询串里，按 IP 分桶等于「一个网关后面几十个租户共用一份
+        额度」—— 正是本模块开头说明要避免的那件事。gRPC 面的同一个读操作
+        按 ``namespace`` + ``user_id`` 分桶（``rpc/ratelimit.py``），两面
+        口径必须一致，否则同一个租户换个协议就换了一份额度。
+
+        对端 IP 的天花板仍然兜着底（``_PEER_CEILING_FACTOR``）：分桶键是
+        调用方给的，轮换 key 绕不开 IP 那一层。
+
         读请求体是安全的：Starlette 的 ``BaseHTTPMiddleware`` 用
         ``_CachedRequest`` 把 body 缓下来并向下游重放，下游中间件拿到的
         仍然是完整请求体。
@@ -89,6 +98,9 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         identity = _caller_identity(body)
         if identity:
             return identity
+        query_identity = _caller_identity_from_query(request)
+        if query_identity:
+            return query_identity
         return RateLimitMiddleware._peer_ip(request)
 
     @staticmethod

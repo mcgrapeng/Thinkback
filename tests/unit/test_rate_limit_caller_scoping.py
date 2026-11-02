@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -119,12 +120,29 @@ def test_admin_traffic_does_not_consume_the_peer_ip_fallback_bucket() -> None:
         assert client.get("/admin/api/memories").status_code == 429
 
 
-def test_rotating_the_caller_key_cannot_escape_the_peer_ceiling() -> None:
+def test_rotating_the_caller_key_cannot_escape_the_peer_ceiling(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """轮换 user_id 换的是「每调用方」那把桶 —— 按对端 IP 的天花板换不掉。
 
     分桶键是调用方给的，不压一层按 IP 的总闸，限额就只是个摆设：换个
     user_id 就是一把满额的新桶。
+
+    时钟冻结：天花板桶按 20/分钟回填（约每 3 秒 1 个令牌）。机器一慢，
+    21 个请求跑过 3 秒，第 21 个就能「借」到回填出来的令牌 —— 概率性
+    假绿（首轮 make test-fast 就这样挂过一次）。冻结令牌桶时钟后零回填，
+    第 21 次必然超限。
     """
+    import thinkback.infra.token_bucket as token_bucket
+
+    class _FrozenClock:
+        """time.time() 恒定不变 —— 令牌桶的回填量恒为 0。"""
+
+        def time(self) -> float:
+            return 1_000_000.0
+
+    monkeypatch.setattr(token_bucket, "time", _FrozenClock())
+
     with TestClient(_app(rate_limit_per_minute=1, burst=1)) as client:
         # 天花板是每调用方限额的 20 倍 → 这里能过 20 次
         for index in range(20):
