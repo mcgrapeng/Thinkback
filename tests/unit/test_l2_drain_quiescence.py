@@ -20,7 +20,7 @@ from __future__ import annotations
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
-from threading import Event
+from threading import Event, Thread
 from typing import Any
 
 from thinkback.memory.l2_refresh import L2BackgroundRefresher
@@ -205,3 +205,62 @@ def test_a_failed_submit_releases_the_scope_so_drain_can_still_quiesce() -> None
     began = time.monotonic()
     refresher.drain(timeout=0.5)
     assert time.monotonic() - began < 1.0, "提交失败后 drain 没能归位"
+
+
+def test_drain_waits_for_a_refresh_that_is_being_submitted() -> None:
+    """drain 返回时，**提交中**的刷新必须已经跑完。
+
+    ``maybe_submit`` 先把 scope 记进 ``_pending_scopes``，**之后**才把 future
+    登记进 ``_futures``。这两步之间有一个窗口：刷新已经在提交、但还看不到
+    future。那个窗口里 drain 若按「没有 future、没有 pending」判定静默就会
+    立刻返回 —— 而刷新其实还没提交完。
+
+    生产后果跟 trailing 那个窗口一样：关停顺序是 drain → executor
+    shutdown(wait=False)，提前返回的那段刷新撞上已关闭的 executor 被丢掉，
+    摘要停在上一轮。
+
+    天然窗口只有微秒级（提交一个 future 很快），所以这里用一个会卡住的
+    executor 把窗口放大到 drain 看得见。
+    """
+
+    class _BlockingExecutor:
+        """submit 会卡住 —— 把「pending 已登记、future 未登记」放大成可观测窗口。"""
+
+        def __init__(self) -> None:
+            self.entered = Event()
+            self.release = Event()
+            self._inner = ThreadPoolExecutor(max_workers=1)
+
+        def submit(self, fn: Any, *args: object, **kwargs: object) -> Any:
+            self.entered.set()
+            if not self.release.wait(timeout=5):
+                raise RuntimeError("test release timeout")
+            return self._inner.submit(fn, *args, **kwargs)
+
+        def shutdown(self, wait: bool = True) -> None:
+            self._inner.shutdown(wait=wait)
+
+    repository = InMemoryMemoryRepository()
+    repository.save_round(_append("r1", "第一轮"))
+    executor = _BlockingExecutor()
+    refresher = L2BackgroundRefresher(
+        repository=repository,
+        composer=lambda rounds, previous: ("【主题】x", {"主题": "x"}),
+        executor=executor,  # type: ignore[arg-type]
+        refresh_interval_rounds=2,
+    )
+
+    submitter = Thread(target=lambda: refresher.maybe_submit("user-1", "session-1"))
+    submitter.start()
+    assert executor.entered.wait(timeout=2), "没有进入「pending 已登记、future 未登记」的窗口"
+
+    drained = Event()
+    drainer = Thread(target=lambda: (refresher.drain(timeout=5), drained.set()))
+    drainer.start()
+
+    returned_early = drained.wait(timeout=1.0)
+    executor.release.set()
+    assert drained.wait(timeout=5), "drain 没有等到刷新提交完"
+    submitter.join(timeout=5)
+
+    assert not returned_early, "drain 在刷新还没提交完时就返回了 —— 那段刷新会被丢掉"
