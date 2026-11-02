@@ -1,11 +1,14 @@
 #!/usr/bin/env node
 // README 全面浏览器审计 — 渲染 + 截图 + 问题检测
+// 前置：npm i -D puppeteer-core（该依赖不在 web/package.json 里 —— 截图是
+// 文档产物，不是构建依赖，不值得为它把依赖树带进前端包）。
 const puppeteer = require("puppeteer-core");
 const fs = require("fs");
 const path = require("path");
 
 const CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
-const BASE = "/Users/zhangpeng/workspace/liaohe/Thinkback";
+// 相对脚本自身定位仓库根：写死绝对路径会让脚本只在作者那台机器上跑得动。
+const BASE = path.resolve(__dirname, "..");
 const OUT = "/tmp/readme_audit";
 
 (async () => {

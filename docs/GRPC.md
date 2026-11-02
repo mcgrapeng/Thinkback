@@ -17,19 +17,29 @@ GRPC_PORT=50051     # 默认端口
 GRPC_MAX_WORKERS=8  # 线程池大小
 ```
 
+## 受信调用方身份（可选，D1）
+
+配置 `TRUSTED_USER_HEADER=x-user-id` 后（gRPC metadata 键一律小写），业务方法
+要求 metadata 里带该键，且请求自报的 `user_id` 必须与之完全一致；缺失或不一致
+返回 `PERMISSION_DENIED`。不配置（默认）则 user_id 由调用方自报，信任边界是
+网络边界（D10）。语义与 HTTP 面、MCP 面一致，见 [API.md](API.md)。
+
 ## Proto 定义
 
-Proto 文件位于 `proto/memory.proto`，定义了 11 个核心 RPC：
+Proto 文件位于 `proto/memory.proto`，定义了 12 个核心 RPC：
 
 - `AppendEvent` - 写入一条原始事件（v2 契约，与 HTTP `/v2/memory/events` 同形）
 - `Recall` - 召回记忆
 - `Delete` - 删除记忆
+- `Suppress` - 下架记忆（不可召回，保留原文与墓碑）
+- `Erase` - 物理擦除记忆（各层原文消失）
 - `ListMemories` - 列出可管理记忆
 - `GetMemory` - 查询单条记忆
 - `UpdateMemory` - 编辑记忆
 - `Rebuild` - 重建 L2/L3
 - `GetTask` - 查询后台任务
 - `GetL3BackgroundStatus` - L3 队列状态
+- `ListMemoryTypes` - 已注册的记忆类型清单（与 HTTP `/v2/memory/types` 同形）
 
 ## 生成客户端
 

@@ -204,3 +204,109 @@ jobs:
       - name: Contract fuzz
         run: uv run --group dev pytest tests/fuzz -q
 
+  real-stack-gate:
+    name: real-stack gate (Milvus + PG + live LLM)
+    needs: lint-and-typecheck
+    # 只在夜间与手动触发时跑：它要真实 Milvus + PG + 可达的 LLM/embedding
+    # endpoint，还要分钟级时间 —— 不适合当 PR 门禁。
+    #
+    # 为什么进 CI：决策 D25 当初写「不进 CI」，是因为门禁那时还不存在。现在
+    # 它存在，而且抓到过自包含评测永远看不见的缺陷 —— L1 缓存关掉时召回整层
+    # 消失，而 degraded 标志仍然是 False，没有任何报错。只在本地跑 = 只有跑
+    # 门禁的那个人受益。
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: thinkback
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install uv
+        run: pip install uv
+      - name: Install dependencies
+        run: uv sync --frozen
+      - name: Check credentials
+        id: creds
+        # 凭据经 env 传进脚本，不直接拼进 run: —— 避免把 secret 值当代码。
+        env:
+          LLM_BASE_URL: ${{ secrets.MEMORY_LLM_BASE_URL }}
+          LLM_KEY: ${{ secrets.MEMORY_LLM_KEY }}
+        # 没配凭据就跳过，而不是红着：仓库没有 LLM 凭据时，每晚一条红 job
+        # 只会让人学会忽略它 —— 那比没有门禁更糟。
+        run: |
+          if [ -z "$LLM_BASE_URL" ] || [ -z "$LLM_KEY" ]; then
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::未配置 LLM 凭据，跳过真实栈门禁"
+          else
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Start Milvus
+        if: steps.creds.outputs.available == 'true'
+        run: docker compose -f deploy/milvus-local/docker-compose.yml up -d
+      - name: Wait for Milvus
+        if: steps.creds.outputs.available == 'true'
+        run: |
+          for i in $(seq 1 60); do
+            if curl -sf http://localhost:19540/healthz > /dev/null; then
+              echo "milvus ready"; exit 0
+            fi
+            sleep 5
+          done
+          echo "::error::Milvus 5 分钟内没就绪"
+          docker compose -f deploy/milvus-local/docker-compose.yml logs
+          exit 1
+      - name: Write credentials file
+        if: steps.creds.outputs.available == 'true'
+        # 凭据只落在这台 runner 上，不进版本库（.env 在 .gitignore 里）。
+        # secret 经 env 传进来，不拼进命令文本；含换行的值直接拒绝 ——
+        # 否则一行能塞进两条 .env 变量。
+        env:
+          LLM_BASE_URL: ${{ secrets.MEMORY_LLM_BASE_URL }}
+          LLM_KEY: ${{ secrets.MEMORY_LLM_KEY }}
+          EMBEDDING_BASE_URL: ${{ secrets.MEMORY_EMBEDDING_BASE_URL }}
+          EMBEDDING_API_KEY: ${{ secrets.MEMORY_EMBEDDING_API_KEY }}
+          EMBEDDING_DIMS: ${{ vars.MEMORY_EMBEDDING_DIMS || '1024' }}
+        run: |
+          for name in LLM_BASE_URL LLM_KEY EMBEDDING_BASE_URL EMBEDDING_API_KEY; do
+            value="${!name}"
+            if [[ "$value" == *$'\n'* ]]; then
+              echo "::error::$name 含换行，拒绝写入 .env"
+              exit 1
+            fi
+          done
+          {
+            echo "ENVIRONMENT=production"
+            echo "DATABASE_URL=postgres://postgres:postgres@localhost:5432/thinkback"
+            echo "MILVUS_URL=http://localhost:19540"
+            echo "MILVUS_DATABASE=default"
+            echo "MEMORY_LLM_BASE_URL=${LLM_BASE_URL}"
+            echo "MEMORY_LLM_KEY=${LLM_KEY}"
+            echo "MEMORY_EMBEDDING_BASE_URL=${EMBEDDING_BASE_URL}"
+            echo "MEMORY_EMBEDDING_API_KEY=${EMBEDDING_API_KEY}"
+            echo "MEMORY_EMBEDDING_DIMS=${EMBEDDING_DIMS}"
+          } > .env
+      - name: Real-stack gate
+        if: steps.creds.outputs.available == 'true'
+        run: make gate-real
+      - name: Upload gate report
+        if: steps.creds.outputs.available == 'true' && always()
+        # 报告目录在 .gitignore 里 —— 归档走 artifact，不进版本库。
+        uses: actions/upload-artifact@v4
+        with:
+          name: real-stack-gate-report
+          path: docs/memory/report/real/
+          if-no-files-found: ignore
+

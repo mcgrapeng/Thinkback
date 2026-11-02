@@ -29,9 +29,23 @@ thinkback-mcp --transport http --host 0.0.0.0 --port 8765 \
 NetworkPolicy 或带鉴权的网关把这个端口收口，再启动。忘了加会直接退出（退出码 2），
 不会静默变成「谁都能读写任意记忆」。
 
+### 绑定 user_id（D1 接入层身份绑定）
+
+`--user-id` / `THINKBACK_MCP_USER_ID` 把该 MCP 实例钉在一个用户上：
+
+```bash
+thinkback-mcp --namespace semiconductor --user-id u-1024
+```
+
+绑定后工具**不再要求**助手传 `user_id`（不传即用绑定值）；传了但与绑定值
+不一致会响亮报错。接到同一个 server 上的助手读写不了其他用户的记忆 ——
+与 namespace 的服务端绑定同一模式。一个助手服务多个用户时，为每个用户
+拉一个 MCP 实例（stdio 形态天然如此），或改用 HTTP/gRPC 面的受信头
+（`TRUSTED_USER_HEADER`，见 docs/API.md）。
+
 ## 工具面
 
-工具面刻意克制：读 2、写 1、删 1、状态 1。客户端靠工具清单做发现，工具一多就没人看得完
+工具面刻意克制：读 3、写 1、删 1、状态 1。客户端靠工具清单做发现，工具一多就没人看得完
 （Cognee 只 pin 3 个是最好参照）。每个工具都带 MCP annotations 与结构化返回。
 
 | 工具 | 作用 | annotations |
@@ -39,6 +53,7 @@ NetworkPolicy 或带鉴权的网关把这个端口收口，再启动。忘了加
 | `append_memory` | 写入一条原始事件（触发 L1/L2/L3 沉淀） | `readOnlyHint=false` `destructiveHint=false` `idempotentHint=true` |
 | `recall_memories` | 按 user / session / query 召回 L1/L2/L3 记忆 | `readOnlyHint=true` |
 | `list_memories` | 列出可管理的长期记忆（默认只返回 ACTIVE） | `readOnlyHint=true` |
+| `list_memory_types` | 列出本 namespace 可写入的记忆类型及其策略 | `readOnlyHint=true` |
 | `delete_memory` | 逻辑删除一条长期记忆（留墓碑） | `readOnlyHint=false` `destructiveHint=true` |
 | `get_operation` | 查后台任务终态（写工具返回的是任务句柄） | `readOnlyHint=true` |
 
@@ -50,24 +65,37 @@ NetworkPolicy 或带鉴权的网关把这个端口收口，再启动。忘了加
 - **删 ≠ 擦除**。`delete_memory` 是逻辑删除（不可召回、保留原文与墓碑）；
   物理擦除（各层原文消失）走管理面 `POST /v2/memory/erase`。
 - **namespace 由服务端决定**，不作为工具参数暴露。namespace 是租户/业务分组的边界，
-  让调用方自己传等于任何助手都能换租户。
+  让调用方自己传等于任何助手都能换租户。本部署用 `MEMORY_ALLOWED_NAMESPACES` 圈定
+  自己服务哪些 namespace（见 [API.md](API.md)）：名单外的 namespace，MCP 在**绑定时**
+  就拒开（退出码 2），不会先起来再拒绝。
+- **写之前先问 `list_memory_types`**。`append_memory` 的 `memory_type` 必须取自
+  本 namespace 的注册表；接入方没有枚举清单就只能猜，猜错就是一条 400。
+  清单还带上 TTL、分类与冲突策略，接入方据此决定哪些内容值得记。
+- **别指望 `conflict: overwrite` 对企业事实生效**，除非该类型配了抽取指令
+  （要求 LLM 写成「属性名：值」）。没配指令的类型只认 9 个中文个人槽位
+  （昵称/宠物/生日/住址/饮品/食物/睡眠/工作状态/沟通偏好），槽位之外的事实
+  顶不掉旧值 —— 新旧两条都会留在库里、一起进上下文。企业事实请自建 namespace
+  + 带抽取指令的 profile（见 [API.md](API.md) 的 Memory type policies）。
 
 ## 接 Lumen 怎么选
 
-Lumen（`/Users/zhangpeng/workspace/zhiman/lumen`）是 TypeScript 服务，两条路都通：
+Lumen 是 TypeScript 服务，两条路都通：
 
 | 方式 | 适用 | 说明 |
 | --- | --- | --- |
 | HTTP 客户端 | Lumen 后端调用 | `POST /v2/memory/events` / `/v2/memory/recall`；Lumen 的 `tenantId` 映射成 namespace，`userId` 映射成 `user_id` |
 | MCP 客户端 | Lumen 已有 MCP client 能力（`service/src/mcp-server/client.ts`） | 把 Thinkback 当成远程 MCP server，工具直接暴露给 Lumen 的 agent |
 
-两条路共用同一份 namespace 配置：**建议一企业一部署**。namespace 是分组标签，不是安全边界；
-跨企业共用一套部署前必须先补租户鉴权（见下节）。
+两条路共用同一份 namespace 配置：**建议一企业一部署**，并用 `MEMORY_ALLOWED_NAMESPACES`
+把它钉死（不是安全边界，是部署口径 —— 名单内的 namespace 里 `user_id` 仍由调用方自报）。
+跨企业共用一套部署前还要配 `TRUSTED_USER_HEADER`（见下节）。
 
 ## 已知边界
 
-- **namespace 不是安全边界**。业务面目前免鉴权，信任边界是内网网络。跨企业共用一套部署前
-  要补租户鉴权，或坚持一企业一部署。
+- **namespace 不是安全边界**。业务面目前免鉴权，信任边界是内网网络。
+  `MEMORY_ALLOWED_NAMESPACES`（圈定本部署服务哪些租户）与 `TRUSTED_USER_HEADER`
+  （圈定调用方能替哪个用户读写）能把这两层口径钉住，但都不是访问控制：能连到本服务
+  的人，仍能读到允许范围内的全部记忆。真正的边界还是网络。
 - **只支持单副本**。幂等缓存与限流桶在进程内，`infra/replica_guard.py` 会在「宣称多副本但
   前置没齐」时启动期硬失败。要对外承诺 HA，先把幂等与限流迁到 PG。
 - **mem0 私有表依赖**。物理擦除要动 mem0 的 SQLite `history` / `messages` 表，因此

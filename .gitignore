@@ -55,6 +55,9 @@ mutants/
 .mutmut-cache
 # pytest-testmon 影响分析数据库（make test-fast 生成）
 .testmondata
+# testmon 的 SQLite WAL 伴生文件（同一数据库的 -shm/-wal）
+.testmondata-shm
+.testmondata-wal
 
 # Translations
 *.mo
@@ -233,6 +236,8 @@ docs/superpowers/
 .serena/
 .shots/
 .mimocode/
+# 本机项目标识：只写在 .git/info/exclude 里不随仓库走，换台机器 clone 就漏。
+.mimocode-project-id
 .superpowers/
 
 # 前端

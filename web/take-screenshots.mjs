@@ -1,10 +1,16 @@
 // 用 puppeteer-core + Chrome 截图
+// 前置：npm i -D puppeteer-core（该依赖不在 web/package.json 里 —— 截图是
+// 文档产物，不是构建依赖，不值得为它把依赖树带进前端包）。
 import puppeteer from "puppeteer-core";
 import { writeFile } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
+import path from "node:path";
 
 const CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 const BASE = "http://localhost:7001";
-const OUT = "/Users/zhangpeng/workspace/liaohe/Thinkback/assets/screenshots";
+// 相对脚本自身定位仓库根：写死绝对路径会让脚本只在作者那台机器上跑得动。
+const WEB_DIR = path.dirname(fileURLToPath(import.meta.url));
+const OUT = path.resolve(WEB_DIR, "..", "assets", "screenshots");
 
 const SHOTS = [
   // 总览 - viewport (above the fold)

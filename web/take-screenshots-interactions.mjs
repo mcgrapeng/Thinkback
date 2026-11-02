@@ -1,9 +1,13 @@
 // 交互态截图 — 简化版,带超时保护
 import puppeteer from "puppeteer-core";
+import { fileURLToPath } from "node:url";
+import path from "node:path";
 
 const CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 const BASE = "http://localhost:7001";
-const OUT = "/Users/zhangpeng/workspace/liaohe/Thinkback/assets/screenshots";
+// 相对脚本自身定位仓库根：写死绝对路径会让脚本只在作者那台机器上跑得动。
+const WEB_DIR = path.dirname(fileURLToPath(import.meta.url));
+const OUT = path.resolve(WEB_DIR, "..", "assets", "screenshots");
 
 const browser = await puppeteer.launch({
   executablePath: CHROME,
