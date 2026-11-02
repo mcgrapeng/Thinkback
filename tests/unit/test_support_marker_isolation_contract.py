@@ -485,3 +485,27 @@ def test_the_cursor_uses_the_library_entry_of_the_given_user() -> None:
 
     assert cursor is not None
     assert cursor[0][0] == 3
+
+
+# ---------------------------------------------------------------------------
+# 兜底放行：认得出是 P0 槽位、但抽不出具体值的那一类
+# ---------------------------------------------------------------------------
+
+
+def test_a_nickname_slot_without_an_extractable_value_is_still_allowed() -> None:
+    """槽位认得出、值抽不出 → **放行**，不是拒。
+
+    ``memory_supported_by_source`` 的一串交叉校验只覆盖有具体取值的
+    槽位（生日 / 住址 / 工作状态 / 沟通偏好 / 饮品 / 食物 / 睡眠提醒）。
+    昵称与宠物名走的是**抽取器自身**那条路：抽不出值就不进那两段校验，
+    于是流程落到函数末尾的兜底 ``return True``。
+
+    兜底写成 ``return False`` 会把这一整类记忆静默丢掉：模型抽出
+    「用户的 preferred name 还待确认」这类**提到了槽位但没有值**的记忆，
+    进了本地索引就被抹掉（/items 看不到），而源文本里明明有。
+
+    「认得出槽位」与「抽得出值」是两件事：前者决定这条记忆**要不要
+    跟源文本对账**，对不上就拒；后者只影响要不要走具体槽位的校验。
+    """
+    assert _supported("以后叫我（还没定）", "some source text") is True
+    assert _supported("changed preferred name", "some source text") is True
