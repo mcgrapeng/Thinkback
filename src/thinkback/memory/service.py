@@ -4993,7 +4993,8 @@ L2 更新 (缓存失效)
                 │
                 ▼
             解析 backend_id / original_memory_text
-            memory_text = _canonical_memory_text_from_source(...)
+            memory_text, canonical_from_source =
+                _canonical_memory_text_with_source(...)
                 │
                 ▼
             绑定 index_log (含 backend_memory_id / slot 等)
@@ -5710,12 +5711,6 @@ L2 更新 (缓存失效)
     @classmethod
     def _canonical_memory_text(cls, memory_text: str) -> str:
         return canonical_memory_text(memory_text)
-
-    @classmethod
-    def _canonical_memory_text_from_source(
-        cls, memory_text: str, l3_metadata: dict[str, Any]
-    ) -> str:
-        return canonical_memory_text_from_source(memory_text, l3_metadata)
 
     @classmethod
     def _canonical_memory_text_with_source(
