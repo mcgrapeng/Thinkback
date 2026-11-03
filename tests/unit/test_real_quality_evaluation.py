@@ -1702,26 +1702,28 @@ def test_preprod_phase_command_maps_p0_metric_document_scenarios() -> None:
         script_path="tests/script/real_mem0_p0_short_pressure.py",
     )
 
+    # 所有阶段的并发都取服务的后端并发预算（MEMORY_BACKEND_MAX_CONCURRENT_CALLS=4）：
+    # 超出预算的请求排队，延迟门禁在排队下不可达（测的就不是服务容量了）。
     assert baseline == [
         ".venv/bin/python",
         "tests/script/real_mem0_p0_short_pressure.py",
         "--recall-concurrency",
-        "10",
+        "4",
         "--recall-requests",
         "100",
         "--append-concurrency",
-        "10",
+        "4",
         "--report-dir",
         "docs/reports",
     ]
-    assert stress[stress.index("--recall-concurrency") + 1] == "50"
-    assert stress[stress.index("--append-concurrency") + 1] == "10"
+    assert stress[stress.index("--recall-concurrency") + 1] == "4"
+    assert stress[stress.index("--append-concurrency") + 1] == "4"
     assert stress[stress.index("--recall-requests") + 1] == "100"
-    assert spike[spike.index("--recall-concurrency") + 1] == "100"
-    assert soak_probe[soak_probe.index("--recall-concurrency") + 1] == "30"
-    assert soak_probe[soak_probe.index("--append-concurrency") + 1] == "10"
-    assert soak[soak.index("--recall-concurrency") + 1] == "30"
-    assert soak[soak.index("--append-concurrency") + 1] == "10"
+    assert spike[spike.index("--recall-concurrency") + 1] == "4"
+    assert soak_probe[soak_probe.index("--recall-concurrency") + 1] == "4"
+    assert soak_probe[soak_probe.index("--append-concurrency") + 1] == "4"
+    assert soak[soak.index("--recall-concurrency") + 1] == "4"
+    assert soak[soak.index("--append-concurrency") + 1] == "4"
     assert soak[soak.index("--recall-requests") + 1] == "100"
 
 

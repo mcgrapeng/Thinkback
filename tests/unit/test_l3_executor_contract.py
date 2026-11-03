@@ -13,6 +13,7 @@ L3 后台写执行器是三件事的交汇点：队列容量、future 记账、�
 
 from __future__ import annotations
 
+import re
 import threading
 import time
 from concurrent.futures import Future, ThreadPoolExecutor
@@ -214,15 +215,32 @@ def test_reserving_from_a_full_queue_reports_the_pending_and_max_counts() -> Non
     机器负载高时断言被推迟到归还之后 → 槽位已空 → 预留成功 → RuntimeError
     不抛 → 用例**随机**红（实测整套跑时红过一次，单跑必绿）。
 
-    守护线程是给「无限等」的实现准备的（避免审计挂死）。本用例等的是
-    ``queue_wait_seconds=0``（立刻失败），不会挂死，所以不需要它 —— 断言
-    之前不释放槽位，断言的输入就是确定的。
+    断言之前不释放槽位，断言的输入就是确定的。
+
+    **预留动作放在守护线程里跑**：队列满 + 槽位永不释放时，「立即失败」是
+    正确行为，但实现写成「无限等」就会把用例**挂死** —— 挂死不是失败，
+    mutmut 只能判 timeout（免检），门禁基线里那条登记就会随机器负载在
+    killed / timeout 之间来回跳。放守护线程 + 有界 join：正常实现立刻
+    报错（断言成立），「无限等」的实现则让断言**失败**（= 变异体被杀），
+    两种结局都有界。
     """
     tracker = L3WriteExecutor(workers=1, max_pending_tasks=1, queue_wait_seconds=0)
     tracker.reserve_write_slot()
 
-    with pytest.raises(RuntimeError, match=r"pending=1 max=1"):
-        tracker.reserve_write_slot()
+    errors: list[str] = []
+
+    def _reserve() -> None:
+        try:
+            tracker.reserve_write_slot()
+        except RuntimeError as exc:
+            errors.append(str(exc))
+
+    worker = threading.Thread(target=_reserve, daemon=True)
+    worker.start()
+    worker.join(timeout=1.0)
+
+    assert errors, "队列满时预留没有立刻失败（可能是无限等）"
+    assert re.search(r"pending=1 max=1", errors[0]), f"报错里没有在途/上限信息：{errors[0]}"
 
     tracker.release_write_slot()
     tracker.shutdown()

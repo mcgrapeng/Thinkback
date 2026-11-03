@@ -1,6 +1,6 @@
 {
   "note": "pytest 套件的防回血基线：删用例或跳过用例要连带更新本文件（显式动作）",
-  "count": 2926,
+  "count": 2929,
   "tests": [
     "tests/unit/test_admin_api.py::test_a_listing_scoped_to_one_user_is_audited_too",
     "tests/unit/test_admin_api.py::test_admin_audit_invalid_action_returns_400",
@@ -1238,6 +1238,7 @@
     "tests/unit/test_memory_service.py::test_recall_does_not_expose_backend_internal_metadata",
     "tests/unit/test_memory_service.py::test_recall_does_not_skip_semantic_search_for_slot_query",
     "tests/unit/test_memory_service.py::test_recall_excludes_engine_items_missing_from_local_index",
+    "tests/unit/test_memory_service.py::test_recall_fetches_its_inputs_in_one_call",
     "tests/unit/test_memory_service.py::test_recall_filters_backend_l3_items_by_explicit_query_slot",
     "tests/unit/test_memory_service.py::test_recall_filters_noisy_backend_items_by_birthday_query_slot",
     "tests/unit/test_memory_service.py::test_recall_includes_stale_summary_with_degraded_status",
@@ -2064,6 +2065,8 @@
     "tests/unit/test_repository_contract.py::test_mark_summary_overrides_state[sqlalchemy]",
     "tests/unit/test_repository_contract.py::test_memory_status_transitions_stamp_invalid_at[in_memory]",
     "tests/unit/test_repository_contract.py::test_memory_status_transitions_stamp_invalid_at[sqlalchemy]",
+    "tests/unit/test_repository_contract.py::test_recall_inputs_matches_the_separate_reads[in_memory]",
+    "tests/unit/test_repository_contract.py::test_recall_inputs_matches_the_separate_reads[sqlalchemy]",
     "tests/unit/test_repository_contract.py::test_reclaim_stale_running_task_single_target[in_memory]",
     "tests/unit/test_repository_contract.py::test_reclaim_stale_running_task_single_target[sqlalchemy]",
     "tests/unit/test_repository_contract.py::test_reclaim_stale_running_tasks_recycles_only_aged_running[in_memory]",
