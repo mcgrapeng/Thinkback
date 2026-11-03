@@ -394,3 +394,38 @@ def test_the_gate_refuses_a_verdict_from_an_older_test_tree(
     (mutants / "mutmut-suite.sha256").write_text("过期指纹\n", encoding="utf-8")
 
     assert gate.main() == 1
+
+
+def test_timed_out_mutants_are_collected_for_a_rerun(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """超时判定也要进重跑清单：杀手测试落地后旧 timeout 不能永远遮蔽它。
+
+    负退出码（测试进程撞墙钟被杀）与「存活」一样只是**上一次**的结论。
+    实测：drain 预算类的 6 条变异体在守护线程式杀手用例（挂死表现为
+    用例失败而非挂起）落地后仍显示 timeout，基线只能按 timeout 登记 ——
+    不重跑就永远是盲区。真挂死的变异体重跑会再次撞墙钟，结论不变。
+    """
+    mutants = tmp_path / "mutants"
+    (mutants / "src").mkdir(parents=True)
+    (mutants / "src" / "a.py.meta").write_text(
+        json.dumps(
+            {
+                "exit_code_by_key": {
+                    "killed_one": 1,
+                    "survived_one": 0,
+                    "untested_one": 33,
+                    "timed_out_one": -24,
+                    "timed_out_two": -9,
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    _redirect_paths(monkeypatch, mutants)
+
+    no_tests, survived, timed_out = refresh.collect_mutants_by_outcome()
+
+    assert no_tests == ["untested_one"]
+    assert survived == ["survived_one"]
+    assert timed_out == ["timed_out_one", "timed_out_two"]

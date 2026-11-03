@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import UTC, datetime
 from typing import Any
 
@@ -848,3 +848,161 @@ def test_the_attempted_scope_cache_keeps_the_most_recently_used_scope() -> None:
 
     assert ("user-1", "thinkback", "session-1") in refresher._llm_attempted_scopes
     assert ("user-2", "thinkback", "session-2") not in refresher._llm_attempted_scopes
+
+
+# ---------------------------------------------------------------------------
+# 并发与淘汰交错：变异审计的深水区
+#
+# 下面四条钉的都是「只有状态交错才看得见」的判定。它们此前以「单线程
+# 构造不出来」登记成覆盖缺口 —— 实际上都能确定性构造：
+# 用事件阻塞构造真实竞态、用 LRU 两张表插入顺序的分叉构造淘汰交错。
+# ---------------------------------------------------------------------------
+
+
+def test_a_single_append_after_counter_eviction_does_not_resubmit() -> None:
+    """计数被 LRU 淘汰的 scope，一次 append 不够再触发刷新。
+
+    计数表与「已尝试」表的 LRU 顺序会分叉：计数表**每次 append** 都
+    move_to_end，已尝试表只在提交时插入。分叉后某个 scope 的计数被
+    淘汰而「已尝试」还在 —— 此时计数初值 ``get(scope, 0)`` 写成
+    ``get(scope, 1)`` 会让一次 append 就凑满去抖阈值（差一错误），
+    刷新频次翻倍。
+    """
+    submits: list[int] = []
+    refresher = _refresher(
+        composer=_RecordingComposer(),
+        reserve_capacity=submits.append,
+        interval=2,
+        max_tracked_scopes=2,
+    )
+
+    # A/B/C 依次首刷：C 提交时把 A 从两张表同时淘汰。
+    refresher.maybe_submit("user-a", "session-a")
+    _settle(refresher)
+    refresher.maybe_submit("user-b", "session-b")
+    _settle(refresher)
+    refresher.maybe_submit("user-c", "session-c")
+    _settle(refresher)
+    # B 再 append 一次：不够阈值（1 < 2），但把 B 挪到计数表末尾。
+    refresher.maybe_submit("user-b", "session-b")
+    _settle(refresher)
+    # D 首刷：计数表淘汰最旧的 C，已尝试表淘汰最旧的 B —— 两张表分叉，
+    # C 的计数没了、已尝试还在。
+    refresher.maybe_submit("user-d", "session-d")
+    _settle(refresher)
+    assert len(submits) == 4
+
+    refresher.maybe_submit("user-c", "session-c")  # C 的计数已被淘汰
+    _settle(refresher)
+
+    assert len(submits) == 4, "计数淘汰后一次 append 就触发了刷新：去抖阈值差一"
+    assert ("user-c", "thinkback", "session-c") in refresher._llm_attempted_scopes
+
+
+def test_the_loser_of_a_concurrent_submit_race_releases_its_capacity_slot() -> None:
+    """容量闸门期间被同类 append 抢走 scope 的那一方必须归还槽位。
+
+    两个 append 同时判定该刷新：输的一方已经 reserve 了队列槽位，
+    再不 release 就泄漏一个名额 —— L2/L3 共用的预算被慢慢吃光。
+    用事件把第一个线程精确卡在容量闸门里，并用阻塞的 composer 保证
+    赢家的刷新在输家走出闸门前一直在飞（否则窗口关闭，输家会变成
+    第二个赢家，竞态就不存在了）。
+    """
+    releases: list[int] = []
+    reserve_calls = 0
+    first_in_gate = threading.Event()
+    let_first_through = threading.Event()
+    allow_refresh = threading.Event()
+
+    def _reserve(wait: int) -> None:
+        nonlocal reserve_calls
+        reserve_calls += 1
+        if reserve_calls == 1:
+            first_in_gate.set()
+            assert let_first_through.wait(timeout=2), "测试事件超时"
+
+    def _blocking_composer(rounds: list[Any], previous: str | None) -> tuple[str, dict[str, str]]:
+        assert allow_refresh.wait(timeout=2), "测试事件超时"
+        return "【主题】x", {"主题": "x"}
+
+    repository = InMemoryMemoryRepository()
+    repository.save_round(_append("r1", "第一轮"))
+    refresher = _refresher(
+        composer=_blocking_composer,
+        repository=repository,
+        reserve_capacity=_reserve,
+        release_capacity=lambda: releases.append(1),
+    )
+
+    loser = threading.Thread(target=lambda: refresher.maybe_submit("user-1", "session-1"))
+    loser.start()
+    assert first_in_gate.wait(timeout=2), "第一个线程没有进入容量闸门"
+
+    # 赢家在输家卡在闸门里时完成提交；它的刷新被 composer 卡住，
+    # pending 状态在输家走出闸门前不会消失。
+    refresher.maybe_submit("user-1", "session-1")
+    let_first_through.set()
+    loser.join(timeout=2)
+
+    assert reserve_calls == 2
+    assert len(releases) == 1, "输掉竞态的一方没有归还队列槽位：预算泄漏"
+
+    allow_refresh.set()
+    _settle(refresher)
+    assert len(releases) == 2, "赢家的刷新结束后没有归还自己的槽位"
+
+
+def test_the_trailing_decision_treats_an_evicted_scope_as_zero_rounds() -> None:
+    """trailing 判定遇到计数已被淘汰的 scope 时按 0 轮处理。
+
+    ``get(scope, 0)`` 的缺省值去掉（两参 get / None / 1）分别表现为
+    KeyError、TypeError、以及「差一轮也算到阈值」—— 最后那种会凭空
+    多刷一次 LLM。这里直接调 ``_finish``，把「刷新在飞期间计数被
+    淘汰」这个交错摆到断言面前。
+    """
+    submits: list[int] = []
+    refresher = _refresher(
+        composer=_RecordingComposer(),
+        reserve_capacity=submits.append,
+        interval=1,
+    )
+    scope = ("user-1", "thinkback", "session-1")
+    refresher._pending_scopes.add(scope)  # 模拟在飞；计数表里没有这个 scope
+    finished: Future[None] = Future()
+    finished.set_result(None)
+
+    refresher._finish(finished, scope)
+
+    assert submits == [], "计数被淘汰的 scope 被当成已攒够阈值：凭空补了一次刷新"
+    assert scope not in refresher._pending_scopes
+    assert refresher._finishing == 0
+
+
+def test_the_attempted_cache_holds_exactly_the_budget_at_the_boundary() -> None:
+    """已尝试缓存的淘汰上界是**超过**才淘汰：恰好装满时不淘汰。
+
+    上界写成 ``>=`` 会少装一个 scope。少装的那个若刷新失败过（无摘要、
+    有尝试记录），下一次 append 立刻按「从未尝试」再提交 —— 正是
+    「失败不重试风暴」要防的形态。
+    """
+    submits: list[int] = []
+    refresher = _refresher(
+        composer=_RecordingComposer(),
+        reserve_capacity=submits.append,
+        interval=2,
+        max_tracked_scopes=2,
+    )
+    stale = ("user-stale", "thinkback", "session-stale")
+    fresh = ("user-fresh", "thinkback", "session-fresh")
+    refresher._llm_attempted_scopes[stale] = None
+    refresher._llm_attempted_scopes[fresh] = None
+
+    refresher._trim_scopes()
+
+    assert stale in refresher._llm_attempted_scopes, "恰好装满就淘汰：容量少装了一个"
+    # 行为面：没被错误淘汰的「已尝试」让单次 append（计数 1 < 2）不触发刷新；
+    # 被提前淘汰的话，同一 append 会按「从未尝试」立刻提交。
+    user_id, namespace, session_scope_id = stale
+    refresher.maybe_submit(user_id, session_scope_id, namespace=namespace)
+
+    assert submits == [], "已尝试标记被提前淘汰后，一次 append 就再提交了"

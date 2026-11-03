@@ -59,6 +59,12 @@ SCOPE_FIELDS = ("source_paths", "paths_to_mutate", "only_mutate", "do_not_mutate
 NO_TESTS_EXIT_CODE = 33
 # 退出码 0 = 变异体没被杀死（测试在变异后仍然通过）。
 SURVIVED_EXIT_CODE = 0
+# 负退出码 = 测试进程撞上 mutmut 的墙钟预算被杀（timeout）。超时和存活
+# 一样是「上一次跑出来的结论」，不是终审：杀手测试落地后若不重跑，旧的
+# timeout 判定会永远遮蔽它 —— 实测 drain 预算类的 6 条变异体在守护线程
+# 式杀手用例（挂死会让用例失败而不是挂起）落地后仍显示 timeout，基线
+# 只能按 timeout 登记。所以超时那批每次也要重跑：真挂死的会再次撞墙钟，
+# 结论不变；已被新用例钉死的会翻成 killed。
 
 
 def selected_test_files(pyproject: Path | None = None) -> list[str]:
@@ -268,11 +274,12 @@ def _iter_source_files() -> list[str]:
     return sorted(found)
 
 
-def collect_mutants_by_outcome() -> tuple[list[str], list[str]]:
-    """扫描 mutants 下的 meta，返回（无测试的、存活的）变异体名。"""
+def collect_mutants_by_outcome() -> tuple[list[str], list[str], list[str]]:
+    """扫描 mutants 下的 meta，返回（无测试的、存活的、超时的）变异体名。"""
 
     no_tests: list[str] = []
     survived: list[str] = []
+    timed_out: list[str] = []
     for meta_path in sorted(MUTANTS_DIR.rglob("*.meta")):
         try:
             meta = json.loads(meta_path.read_text(encoding="utf-8"))
@@ -286,7 +293,9 @@ def collect_mutants_by_outcome() -> tuple[list[str], list[str]]:
                 no_tests.append(name)
             elif code == SURVIVED_EXIT_CODE:
                 survived.append(name)
-    return sorted(no_tests), sorted(survived)
+            elif isinstance(code, int) and code < 0:
+                timed_out.append(name)
+    return sorted(no_tests), sorted(survived), sorted(timed_out)
 
 
 def main() -> int:
@@ -346,18 +355,19 @@ def main() -> int:
     if STATS_PATH.exists():
         print("keeping mutants/mutmut-stats.json (mutmut 的配置指纹在里面)")
 
-    no_test_names, survived_names = collect_mutants_by_outcome()
-    if not no_test_names and not survived_names:
-        print("no mutants marked 'no tests' or 'survived'")
+    no_test_names, survived_names, timed_out_names = collect_mutants_by_outcome()
+    if not no_test_names and not survived_names and not timed_out_names:
+        print("no mutants marked 'no tests', 'survived' or 'timed out'")
         return 0
 
     # 显式点名重跑：mutmut 只对「被点名的变异体」强制重跑，
     # 源码没变时它会直接沿用上次的结论。新加的测试对存活的变异体有没有杀伤力，
-    # 只有重跑才知道。
-    names = [*no_test_names, *survived_names]
+    # 只有重跑才知道。超时同理（见 collect_mutants_by_outcome 的说明）。
+    names = [*no_test_names, *survived_names, *timed_out_names]
     print(
-        f"re-running {len(no_test_names)} mutant(s) marked 'no tests' "
-        f"and {len(survived_names)} marked 'survived'"
+        f"re-running {len(no_test_names)} mutant(s) marked 'no tests', "
+        f"{len(survived_names)} marked 'survived' "
+        f"and {len(timed_out_names)} marked 'timed out'"
     )
     return subprocess.call(
         [sys.executable, "-m", "mutmut", "run", "--max-children", "8", *names],
