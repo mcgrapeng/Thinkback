@@ -1,6 +1,6 @@
 # 安全门/评测用例的假 fixture，非真实凭据：
 # - JWT 头片段 eyJhbGciOiJIUzI1NiJ9（无 payload/签名），用于验证凭据被拦截
 # - sk-1234567890abcdef / sk-secret-12345 显式占位符
-1f73601af6a07096c819d54e3aa74542da6f1924:tests/unit/test_safety_gate_patterns.py:generic-api-key:59
-88cfa45e5742c1d0085095eda52aa5812393f5a3:tests/script/run_production_readiness_evaluation.py:generic-api-key:943
-88cfa45e5742c1d0085095eda52aa5812393f5a3:tests/script/run_production_readiness_evaluation.py:generic-api-key:998
+79ae3f7fe2df2e3e0b3007a90dd0255a165cb559:tests/unit/test_safety_gate_patterns.py:generic-api-key:59
+42a8490081bfdc12f585dad34a513fc5cbc51887:tests/script/run_production_readiness_evaluation.py:generic-api-key:943
+42a8490081bfdc12f585dad34a513fc5cbc51887:tests/script/run_production_readiness_evaluation.py:generic-api-key:998
