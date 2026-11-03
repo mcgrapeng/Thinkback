@@ -1708,7 +1708,7 @@ def test_preprod_phase_command_maps_p0_metric_document_scenarios() -> None:
         ".venv/bin/python",
         "tests/script/real_mem0_p0_short_pressure.py",
         "--recall-concurrency",
-        "4",
+        "8",
         "--recall-requests",
         "100",
         "--append-concurrency",
@@ -1716,13 +1716,13 @@ def test_preprod_phase_command_maps_p0_metric_document_scenarios() -> None:
         "--report-dir",
         "docs/reports",
     ]
-    assert stress[stress.index("--recall-concurrency") + 1] == "4"
+    assert stress[stress.index("--recall-concurrency") + 1] == "8"
     assert stress[stress.index("--append-concurrency") + 1] == "4"
     assert stress[stress.index("--recall-requests") + 1] == "100"
-    assert spike[spike.index("--recall-concurrency") + 1] == "4"
-    assert soak_probe[soak_probe.index("--recall-concurrency") + 1] == "4"
+    assert spike[spike.index("--recall-concurrency") + 1] == "8"
+    assert soak_probe[soak_probe.index("--recall-concurrency") + 1] == "8"
     assert soak_probe[soak_probe.index("--append-concurrency") + 1] == "4"
-    assert soak[soak.index("--recall-concurrency") + 1] == "4"
+    assert soak[soak.index("--recall-concurrency") + 1] == "8"
     assert soak[soak.index("--append-concurrency") + 1] == "4"
     assert soak[soak.index("--recall-requests") + 1] == "100"
 

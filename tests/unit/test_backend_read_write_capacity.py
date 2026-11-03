@@ -40,7 +40,8 @@ def test_read_is_not_blocked_by_slow_writes() -> None:
     backend = Mem0LibraryMemoryBackend(
         config={"history_db_path": ".mem0/history.db"},
         memory_client=client,
-        max_concurrent_calls=1,
+        max_concurrent_writes=1,
+        max_concurrent_reads=1,
     )
 
     writer = threading.Thread(

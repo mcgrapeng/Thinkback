@@ -312,8 +312,8 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--recall-concurrency",
         type=int,
-        default=4,
-        help="并发召回数；默认取服务的后端并发预算（MEMORY_BACKEND_MAX_CONCURRENT_CALLS=4）"
+        default=8,
+        help="并发召回数；默认取服务的读预算（MEMORY_BACKEND_MAX_CONCURRENT_READS=8）"
         "—— 超出预算的请求排队，延迟门禁在排队下不可达",
     )
     parser.add_argument("--recall-requests", type=int, default=20)
@@ -321,7 +321,7 @@ def _parse_args() -> argparse.Namespace:
         "--append-concurrency",
         type=int,
         default=4,
-        help="并发写入数；写路径的额度同样只有 4（mem0 的 Memory 实例不是线程安全的）",
+        help="并发写入数；默认取服务的写预算（MEMORY_BACKEND_MAX_CONCURRENT_WRITES=4）",
     )
     parser.add_argument("--recall-p95-gate-ms", type=int, default=1500)
     parser.add_argument("--recall-p99-gate-ms", type=int, default=3000)

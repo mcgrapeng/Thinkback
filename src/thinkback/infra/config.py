@@ -128,7 +128,12 @@ class Settings(BaseSettings):
     memory_l3_executor_workers: int = 16
     memory_l3_max_pending_tasks: int = 256
     memory_l3_queue_wait_seconds: float = 5.0
-    memory_backend_max_concurrent_calls: int = 4
+    # 后端并发预算：读、写分开两把信号量，数值各自按 Little's Law 定
+    # （并发 = 目标吞吐 × 单次服务时间）。写路径打 LLM 抽取（实测 ~2.5s/次），
+    # 读路径只要 embedding + 向量检索（实测 ~0.3s/次），service time 差一个
+    # 量级，用同一个数限会有一边被饿死、一边在排队。
+    memory_backend_max_concurrent_writes: int = 4
+    memory_backend_max_concurrent_reads: int = 8
 
     # ── L2 综合摘要（P0：LLM 化）───────────────────────────────────────
     # 关闭后 L2 保持拼接式降级实现（行为与 V1 相同）。
@@ -212,13 +217,22 @@ class Settings(BaseSettings):
             raise ValueError("memory_l3_executor_workers must be >= 1")
         return value
 
-    @field_validator("memory_backend_max_concurrent_calls")
+    @field_validator("memory_backend_max_concurrent_writes")
     @classmethod
-    def validate_memory_backend_max_concurrent_calls(cls, value: int) -> int:
-        """mem0 / Milvus 后端并发调用上限必须 >= 1，避免信号量零值。"""
+    def validate_memory_backend_max_concurrent_writes(cls, value: int) -> int:
+        """mem0 / Milvus 后端写并发上限必须 >= 1，避免信号量零值。"""
 
         if value < 1:
-            raise ValueError("memory_backend_max_concurrent_calls must be >= 1")
+            raise ValueError("memory_backend_max_concurrent_writes must be >= 1")
+        return value
+
+    @field_validator("memory_backend_max_concurrent_reads")
+    @classmethod
+    def validate_memory_backend_max_concurrent_reads(cls, value: int) -> int:
+        """mem0 / Milvus 后端读并发上限必须 >= 1，避免信号量零值。"""
+
+        if value < 1:
+            raise ValueError("memory_backend_max_concurrent_reads must be >= 1")
         return value
 
     @field_validator("memory_api_worker_limit")

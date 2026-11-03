@@ -89,10 +89,12 @@ def test_register_mem0_embedder_provider_without_mem0_raises_runtime_error(
         register_mem0_embedder_provider()
 
 
-def test_backend_rejects_non_positive_max_concurrent_calls() -> None:
-    """并发上限小于 1 会让信号量永远拿不到名额，必须在构造期拒绝。"""
-    with pytest.raises(ValueError, match="max_concurrent_calls must be >= 1"):
-        Mem0LibraryMemoryBackend(config={}, memory_client=object(), max_concurrent_calls=0)
+def test_backend_rejects_non_positive_concurrency_budgets() -> None:
+    """并发上限小于 1 会让信号量永远拿不到名额，必须在构造期拒绝（读、写各自）。"""
+    with pytest.raises(ValueError, match="max_concurrent_writes must be >= 1"):
+        Mem0LibraryMemoryBackend(config={}, memory_client=object(), max_concurrent_writes=0)
+    with pytest.raises(ValueError, match="max_concurrent_reads must be >= 1"):
+        Mem0LibraryMemoryBackend(config={}, memory_client=object(), max_concurrent_reads=0)
 
 
 # ── search 的 explain 传参形状 ────────────────────────────────────────

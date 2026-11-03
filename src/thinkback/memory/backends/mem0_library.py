@@ -187,7 +187,8 @@ class Mem0LibraryMemoryBackend:
         config: dict[str, Any],
         memory_client: Any | None = None,
         memory_factory: Callable[[dict[str, Any]], Any] | None = None,
-        max_concurrent_calls: int = 4,
+        max_concurrent_writes: int = 4,
+        max_concurrent_reads: int = 8,
         collection_analyzer: str = DEFAULT_ANALYZER_TYPE,
         mirror: MilvusMirror | None = None,
     ) -> None:
@@ -195,30 +196,37 @@ class Mem0LibraryMemoryBackend:
 
         config 是传给 Mem0 的完整配置，会被 deepcopy 保存以避免外部修改；memory_client
         允许测试或上层注入现成客户端；memory_factory 用于延迟构造真实客户端；
-        max_concurrent_calls 限制进入 Mem0 的并发，保护本进程和后端资源。
+        max_concurrent_writes / max_concurrent_reads 限制进入 Mem0 的并发，
+        保护本进程和后端资源。
 
         collection_analyzer 是 Thinkback 预建集合时给 ``text`` 字段定的分析器
         （ADR-0007）；mirror 是迁移窗口里的次集合，给了才双写 + 双读回落。
         """
-        if max_concurrent_calls < 1:
-            raise ValueError("max_concurrent_calls must be >= 1")
+        if max_concurrent_writes < 1:
+            raise ValueError("max_concurrent_writes must be >= 1")
+        if max_concurrent_reads < 1:
+            raise ValueError("max_concurrent_reads must be >= 1")
         self.config = deepcopy(config)
         self._memory_client = memory_client
         self._memory_factory = memory_factory
         self._memory_client_lock = RLock()
-        self.max_concurrent_calls = max_concurrent_calls
+        self.max_concurrent_writes = max_concurrent_writes
+        self.max_concurrent_reads = max_concurrent_reads
         self.collection_analyzer = collection_analyzer
         self.mirror = mirror
         self._mirror_client: Any | None = None
         self._mirror_memory: Any | None = None
         self._primary_client: Any | None = None
-        # 读、写两把独立的并发预算。
-        # 写路径要打 LLM（抽取，慢），读路径只要 embedding + 向量检索（快）。
+        # 读、写两把独立的并发预算，数值各自按 Little's Law 定
+        # （并发 = 目标吞吐 × 单次服务时间）。
+        # 写路径要打 LLM（抽取，慢，实测 ~2.5s/次），读路径只要 embedding +
+        # 向量检索（快，实测 ~0.3s/次）—— service time 差一个量级，用同一个
+        # 数限会有一边被饿死、一边在排队。
         # 共用一把信号量时，写积压会把读饿死：实测 4 路并发写入时 add 耗时
         # 76s，排在后面的 search 等了 69s，召回直接 503。召回在助手的
         # 关键路径上，不能被后台写入队列拖死，所以读有自己的一份额度。
-        self._call_capacity = BoundedSemaphore(max_concurrent_calls)
-        self._read_capacity = BoundedSemaphore(max_concurrent_calls)
+        self._call_capacity = BoundedSemaphore(max_concurrent_writes)
+        self._read_capacity = BoundedSemaphore(max_concurrent_reads)
         # 写操作的串行化锁（按 user+scope 分片）。
         # mem0 的 Memory 实例不是线程安全的：entity_store 是实例级懒加载属性，
         # 实体链接是 linked_memory_ids 上的读-改-写 —— 同一用户的两次并发写
@@ -1221,7 +1229,7 @@ class Mem0LibraryMemoryBackend:
 
         - **客户端懒构造** ：首次使用时根据 config 构建 mem0 ``Memory``
           实例（``_build_memory_client``）。
-        - **并发限流** ：``_call_capacity = BoundedSemaphore(max_concurrent_calls)``
+        - **并发限流** ：写 ``_call_capacity``、读 ``_read_capacity`` 两把信号量
           限制同时进入 mem0 的请求数，避免上游突发打爆 mem0 + Milvus。
         - **线程池内联** ：``_mem0_inline_threadpool()`` 临时把 mem0 的
           ``concurrent.futures`` 替换为同步内联执行器，避免 mem0 内部线程
@@ -1238,7 +1246,7 @@ class Mem0LibraryMemoryBackend:
                 │
                 ▼
             绑定 call_log (operation, arg_count, kwarg_keys,
-                            max_concurrent_calls)
+                            max_concurrent_writes)
             INFO: "memory backend call started"
                 │
                 ▼
@@ -1252,7 +1260,7 @@ class Mem0LibraryMemoryBackend:
             │       _mem0_inline_threadpool():           │
             │      result = method(*args, **kwargs)      │
             │    ├─ _call_capacity.acquire()             │
-            │    │    超 max_concurrent_calls → 阻塞     │
+            │    │    超并发预算 → 阻塞             │
             │    ├─ mem0.concurrent 临时替换为内联执行器 │
             │    │    (深度计数管理嵌套场景)             │
             │    ├─ method(...)                          │
@@ -1272,7 +1280,7 @@ class Mem0LibraryMemoryBackend:
                       ) from exc
 
         设计取舍：
-        - ``_call_capacity`` 与 ``max_concurrent_calls`` 同源；
+        - 两把信号量与各自的配置项同源；
           ``add`` / ``search`` / ``update`` / ``delete`` 共享同一个信号量，
           因为 mem0 + Milvus 是单一资源池，分桶会让某个动作独自打爆。
         - ``_mem0_inline_threadpool`` 走深度计数：允许 ``_call`` 在
@@ -1292,7 +1300,8 @@ class Mem0LibraryMemoryBackend:
             operation=operation,
             arg_count=len(args),
             kwarg_keys=sorted(str(key) for key in kwargs),
-            max_concurrent_calls=self.max_concurrent_calls,
+            max_concurrent_writes=self.max_concurrent_writes,
+            max_concurrent_reads=self.max_concurrent_reads,
         )
         call_log.info("memory backend call started")
         try:

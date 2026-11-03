@@ -250,7 +250,8 @@ def test_mem0_library_backend_logs_english_call_summaries_without_content() -> N
     backend = Mem0LibraryMemoryBackend(
         config={"history_db_path": ".mem0/history.db"},
         memory_client=FakeMemoryClient(),
-        max_concurrent_calls=2,
+        max_concurrent_writes=2,
+        max_concurrent_reads=2,
     )
     try:
         backend.add(
@@ -271,7 +272,7 @@ def test_mem0_library_backend_logs_english_call_summaries_without_content() -> N
     assert "memory backend call started" in logs
     assert "memory backend call completed" in logs
     assert "operation" in logs
-    assert "max_concurrent_calls" in logs
+    assert "max_concurrent_writes" in logs and "max_concurrent_reads" in logs
     assert "backend secret text" not in logs
     assert "backend query text" not in logs
 
@@ -1029,7 +1030,8 @@ def test_mem0_library_backend_limits_concurrent_mem0_calls() -> None:
     backend = Mem0LibraryMemoryBackend(
         config={"history_db_path": ".mem0/history.db"},
         memory_client=client,
-        max_concurrent_calls=2,
+        max_concurrent_writes=2,
+        max_concurrent_reads=2,
     )
     start = Barrier(4)
 
@@ -1083,7 +1085,8 @@ def test_mem0_library_backend_does_not_spawn_mem0_threads_during_concurrent_call
     backend = Mem0LibraryMemoryBackend(
         config={"history_db_path": ".mem0/history.db"},
         memory_client=FakeMem0Client(),
-        max_concurrent_calls=4,
+        max_concurrent_writes=4,
+        max_concurrent_reads=4,
     )
     start = Barrier(4)
 

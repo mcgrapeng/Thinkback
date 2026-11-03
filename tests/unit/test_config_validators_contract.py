@@ -26,7 +26,8 @@ def _settings(**kwargs: object) -> Settings:
     "field",
     [
         "memory_l3_executor_workers",
-        "memory_backend_max_concurrent_calls",
+        "memory_backend_max_concurrent_writes",
+        "memory_backend_max_concurrent_reads",
         "memory_api_worker_limit",
     ],
 )
@@ -39,7 +40,8 @@ def test_a_worker_count_below_one_is_rejected(field: str) -> None:
     "field",
     [
         "memory_l3_executor_workers",
-        "memory_backend_max_concurrent_calls",
+        "memory_backend_max_concurrent_writes",
+        "memory_backend_max_concurrent_reads",
         "memory_api_worker_limit",
     ],
 )

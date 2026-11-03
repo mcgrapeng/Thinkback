@@ -248,7 +248,8 @@ def test_memory_service_can_use_mem0_library_backend_from_settings(monkeypatch) 
             milvus_password="milvus-secret",
             milvus_database="thinkback",
             memory_milvus_collection="thinkback_memories_test",
-            memory_backend_max_concurrent_calls=3,
+            memory_backend_max_concurrent_writes=3,
+            memory_backend_max_concurrent_reads=5,
         ),
     )
     service = dependencies.get_memory_service()
@@ -281,7 +282,8 @@ def test_memory_service_can_use_mem0_library_backend_from_settings(monkeypatch) 
     assert service.l3_executor_workers == 16
     assert service.l3_max_pending_tasks == 256
     assert service.l3_queue_wait_seconds == 5.0
-    assert service.backend.max_concurrent_calls == 3
+    assert service.backend.max_concurrent_writes == 3
+    assert service.backend.max_concurrent_reads == 5
 
 
 def test_memory_routes_call_sync_service_in_threadpool() -> None:

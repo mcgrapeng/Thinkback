@@ -117,7 +117,8 @@ def get_memory_backend(config: Settings | None = None) -> MemoryBackend:
         llm_model=current_settings.memory_llm_model,
         embedding_model=current_settings.memory_embedding_model,
         embedding_dims=current_settings.memory_embedding_dims,
-        max_concurrent_calls=current_settings.memory_backend_max_concurrent_calls,
+        max_concurrent_writes=current_settings.memory_backend_max_concurrent_writes,
+        max_concurrent_reads=current_settings.memory_backend_max_concurrent_reads,
     )
     backend_log.debug("memory backend initialization started")
     mem0_config = build_mem0_library_config(
@@ -144,7 +145,8 @@ def get_memory_backend(config: Settings | None = None) -> MemoryBackend:
         )
     backend = Mem0LibraryMemoryBackend(
         config=mem0_config,
-        max_concurrent_calls=current_settings.memory_backend_max_concurrent_calls,
+        max_concurrent_writes=current_settings.memory_backend_max_concurrent_writes,
+        max_concurrent_reads=current_settings.memory_backend_max_concurrent_reads,
         collection_analyzer=current_settings.memory_milvus_analyzer,
         mirror=mirror,
     )

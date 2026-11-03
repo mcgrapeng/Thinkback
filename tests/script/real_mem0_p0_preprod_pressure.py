@@ -31,35 +31,36 @@ P0_PREPROD_REQUIRED_PHASES = [
     "representative_replay",
 ]
 
-#: 各阶段的并发参数。召回与写入的并发都取后端预算（读、写两把独立信号量，
-#: 各 4）：超出部分排队，延迟门禁在排队下不可达。
-_BACKEND_CONCURRENCY = 4
+#: 各阶段的并发参数：召回取读预算，写入取写预算（两把独立信号量）。
+#: 超出预算的部分排队，延迟门禁在排队下不可达。
+_RECALL_CONCURRENCY = 8
+_APPEND_CONCURRENCY = 4
 
 _PHASE_ARGS = {
     "baseline": {
-        "recall_concurrency": _BACKEND_CONCURRENCY,
+        "recall_concurrency": _RECALL_CONCURRENCY,
         "recall_requests": 100,
-        "append_concurrency": _BACKEND_CONCURRENCY,
+        "append_concurrency": _APPEND_CONCURRENCY,
     },
     "stress": {
-        "recall_concurrency": _BACKEND_CONCURRENCY,
+        "recall_concurrency": _RECALL_CONCURRENCY,
         "recall_requests": 100,
-        "append_concurrency": _BACKEND_CONCURRENCY,
+        "append_concurrency": _APPEND_CONCURRENCY,
     },
     "spike": {
-        "recall_concurrency": _BACKEND_CONCURRENCY,
+        "recall_concurrency": _RECALL_CONCURRENCY,
         "recall_requests": 100,
-        "append_concurrency": _BACKEND_CONCURRENCY,
+        "append_concurrency": _APPEND_CONCURRENCY,
     },
     "soak_probe": {
-        "recall_concurrency": _BACKEND_CONCURRENCY,
+        "recall_concurrency": _RECALL_CONCURRENCY,
         "recall_requests": 100,
-        "append_concurrency": _BACKEND_CONCURRENCY,
+        "append_concurrency": _APPEND_CONCURRENCY,
     },
     "soak": {
-        "recall_concurrency": _BACKEND_CONCURRENCY,
+        "recall_concurrency": _RECALL_CONCURRENCY,
         "recall_requests": 100,
-        "append_concurrency": _BACKEND_CONCURRENCY,
+        "append_concurrency": _APPEND_CONCURRENCY,
     },
 }
 

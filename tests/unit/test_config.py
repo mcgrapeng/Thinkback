@@ -23,7 +23,8 @@ def test_settings_defaults_are_thinkback_baseline(monkeypatch) -> None:
         "MEMORY_LLM_MODEL",
         "MEMORY_EMBEDDING_MODEL",
         "MEM0_HISTORY_DB_PATH",
-        "MEMORY_BACKEND_MAX_CONCURRENT_CALLS",
+        "MEMORY_BACKEND_MAX_CONCURRENT_WRITES",
+        "MEMORY_BACKEND_MAX_CONCURRENT_READS",
         "MEMORY_L3_WRITE_MODE",
         "MEMORY_L3_EXECUTOR_WORKERS",
         "MEMORY_L3_MAX_PENDING_TASKS",
@@ -63,7 +64,8 @@ def test_settings_defaults_are_thinkback_baseline(monkeypatch) -> None:
     assert settings.memory_l3_executor_workers == 16
     assert settings.memory_l3_max_pending_tasks == 256
     assert settings.memory_l3_queue_wait_seconds == 5.0
-    assert settings.memory_backend_max_concurrent_calls == 4
+    assert settings.memory_backend_max_concurrent_writes == 4
+    assert settings.memory_backend_max_concurrent_reads == 8
     assert settings.memory_api_worker_limit == 8
     assert settings.memory_api_worker_wait_seconds == 5.0
     assert settings.readiness_timeout_seconds == 3.0

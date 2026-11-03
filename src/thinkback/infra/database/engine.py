@@ -26,15 +26,16 @@ from sqlalchemy.pool import NullPool
 
 from thinkback.infra.config import settings
 
-# SqlAlchemyMemoryRepository 通过单一事件循环串行化所有数据库操作，
-# 因此同一时刻最多只有 1 个活跃连接。
-# pool_size=5 + max_overflow=5 = 最大 10 个连接，同时避免默认值
-# (pool_size=5, max_overflow=10) 在高负载下的连接争用。
+# 池的大小跟着后端读预算走：召回一次要并发取四处数据（排除集 / L1 / 摘要 /
+# 本地索引），读预算 8 就是最多 8 × 4 = 32 个连接同时要。池比它小的话，
+# 并发召回就在池上排队（pool_timeout=10s 后才报错），等于把预算挪了个地方。
+# pool_size=10 + max_overflow=15 = 最大 25 个连接，PG 侧默认 max_connections=100
+# 留得住；再大就只是把排队从信号量挪到连接池。
 engine = create_async_engine(
     settings.database_url,
     pool_pre_ping=True,
-    pool_size=5,
-    max_overflow=5,
+    pool_size=10,
+    max_overflow=15,
     pool_timeout=10,
 )
 SessionLocal = async_sessionmaker(engine, expire_on_commit=False)
