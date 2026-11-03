@@ -2189,6 +2189,67 @@ def test_recall_skips_dirty_summary_but_keeps_l3() -> None:
     assert any(item.layer == "L3" for item in response.items)
 
 
+def test_recall_fetches_its_inputs_in_one_call() -> None:
+    """召回进引擎前只取一次数据（四处一起取回），不是四次串行往返。
+
+    串行时每处都是一次完整往返，PG 一卡就串成秒级延迟（实测 2026-11-03：
+    争用下每次 75-250ms，四处 2.5s，而引擎调用只要 327ms）。
+    """
+
+    class _InputsOnlyRepository(InMemoryMemoryRepository):
+        """召回阶段只允许走 recall_inputs：单独取数的接口一律报错（防回归成串行四次）。"""
+
+        def __init__(self) -> None:
+            super().__init__()
+            self.recall_inputs_calls = 0
+            self.forbid_separate_reads = False
+
+        def recall_inputs(self, **kwargs):  # type: ignore[no-untyped-def]
+            self.recall_inputs_calls += 1
+            # 仓储自己内部的取数不算「服务侧单独取」，临时放开。
+            self.forbid_separate_reads = False
+            try:
+                return super().recall_inputs(**kwargs)
+            finally:
+                self.forbid_separate_reads = True
+
+        def _forbid(self, name: str):  # type: ignore[no-untyped-def]
+            if self.forbid_separate_reads:
+                raise AssertionError(f"召回必须走 recall_inputs，不得单独取 {name}")
+
+        def excluded_source_refs_for_user(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+            self._forbid("excluded_source_refs_for_user")
+            return super().excluded_source_refs_for_user(*args, **kwargs)
+
+        def get_l1(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+            self._forbid("get_l1")
+            return super().get_l1(*args, **kwargs)
+
+        def get_summary(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+            self._forbid("get_summary")
+            return super().get_summary(*args, **kwargs)
+
+        def active_memories(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+            self._forbid("active_memories")
+            return super().active_memories(*args, **kwargs)
+
+    repository = _InputsOnlyRepository()
+    service = MemoryService(repository=repository, backend=FakeMemoryBackend())
+    service.append(make_append())
+    repository.forbid_separate_reads = True
+
+    response = service.recall(
+        RecallMemoryRequest(
+            user_id="user-1",
+            session_id="session-1",
+            query="睡觉偏好",
+        )
+    )
+
+    assert repository.recall_inputs_calls == 1
+    assert any(item.layer == "L1" for item in response.items)
+
+
 def test_recall_applies_l3_score_threshold_to_reduce_false_positives() -> None:
     repository = InMemoryMemoryRepository()
     backend = ScoredBackend()
@@ -7968,7 +8029,7 @@ def test_recall_degrades_to_l1_l2_when_l3_backend_search_fails() -> None:
     # L1: append 一轮（用普通文本，避免触发 P0 slot backfill）
     service.append(make_append(round_id="round-1", content="我今天心情不错"))
     # 触发 L2 summary 落库
-    service._summary("user-1", "session-1")
+    assert repository.get_summary("user-1", "session-1", namespace="thinkback") is not None
 
     response = service.recall(
         RecallMemoryRequest(
@@ -8001,7 +8062,7 @@ def test_recall_degraded_response_keeps_l1_l2() -> None:
     backend = FailingSearchBackend()
     service = MemoryService(repository=repository, backend=backend)
     service.append(make_append(round_id="round-keep", content="随便聊点什么"))
-    service._summary("user-1", "session-1")
+    assert repository.get_summary("user-1", "session-1", namespace="thinkback") is not None
 
     response = service.recall(
         RecallMemoryRequest(

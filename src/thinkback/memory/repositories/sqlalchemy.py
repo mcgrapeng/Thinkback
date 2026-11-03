@@ -23,6 +23,7 @@ from thinkback.domain.entities import (
     AdminAuditEntry,
     JournalEntry,
     MemoryIndexEntry,
+    RecallInputs,
     SummaryEntry,
     TaskEntry,
 )
@@ -221,6 +222,75 @@ class SqlAlchemyMemoryRepository(L1CacheMixin):
         if cached:
             return cached
         rounds = self.list_rounds(
+            user_id,
+            memory_scope_id,
+            session_id,
+            limit=L1_CACHE_LIMIT,
+            descending=True,
+            namespace=namespace,
+        )
+        rounds.reverse()
+        return self._l1_complete_read_through(
+            rounds, user_id, memory_scope_id, session_id, namespace=namespace
+        )
+
+    def recall_inputs(
+        self,
+        *,
+        user_id: str,
+        session_scope_id: str,
+        session_id: str,
+        l3_scope_id: str,
+    ) -> RecallInputs:
+        """四处数据并发取回：PG 侧并行执行，墙钟时间取各处的最大值。
+
+        串行取时每处都是一次完整往返，PG 一卡就串起来（实测 2026-11-03：
+        争用下每次往返 75-250ms，四处串起来 2.5s，而引擎调用只要 327ms）。
+        """
+        return self._run(
+            self._recall_inputs(
+                user_id=user_id,
+                session_scope_id=session_scope_id,
+                session_id=session_id,
+                l3_scope_id=l3_scope_id,
+            )
+        )
+
+    async def _recall_inputs(
+        self,
+        *,
+        user_id: str,
+        session_scope_id: str,
+        session_id: str,
+        l3_scope_id: str,
+    ) -> RecallInputs:
+        excluded, l1, summary, active = await asyncio.gather(
+            self._excluded_source_refs_for_user(user_id, l3_scope_id),
+            self._read_l1(user_id, session_scope_id, session_id, namespace=l3_scope_id),
+            self._get_summary(user_id, session_scope_id, namespace=l3_scope_id),
+            self._active_memories(user_id, l3_scope_id),
+        )
+        return RecallInputs(
+            excluded_refs=excluded,
+            l1_entries=l1,
+            summary=summary,
+            active_memories=active,
+        )
+
+    async def _read_l1(
+        self,
+        user_id: str,
+        memory_scope_id: str,
+        session_id: str,
+        *,
+        namespace: str,
+    ) -> list[JournalEntry]:
+        """L1 读取的异步版（语义与 :meth:`get_l1` 相同，供并发取回用）。"""
+
+        cached = super().get_l1(user_id, memory_scope_id, session_id, namespace=namespace)
+        if cached:
+            return cached
+        rounds = await self._list_rounds(
             user_id,
             memory_scope_id,
             session_id,

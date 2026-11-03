@@ -18,6 +18,7 @@ from thinkback.domain.entities import (
     AdminAuditEntry,
     JournalEntry,
     MemoryIndexEntry,
+    RecallInputs,
     SummaryEntry,
     TaskEntry,
 )
@@ -192,6 +193,21 @@ class MemoryRepository(Protocol):
     ) -> MemoryIndexEntry: ...
 
     def active_memories(self, user_id: str, memory_scope_id: str) -> list[MemoryIndexEntry]: ...
+
+    def recall_inputs(
+        self,
+        *,
+        user_id: str,
+        session_scope_id: str,
+        session_id: str,
+        l3_scope_id: str,
+    ) -> RecallInputs:
+        """一次性取回召回所需的四处数据（排除集 / L1 / 摘要 / L3 索引）。
+
+        四处互不依赖，实现可以并发取回：串行时每处都是一次完整往返，
+        PG 争用下会串成秒级延迟（实测见 ``RecallInputs`` 的说明）。
+        """
+        ...
 
     def list_memories(self, user_id: str, memory_scope_id: str) -> list[MemoryIndexEntry]: ...
 

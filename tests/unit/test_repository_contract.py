@@ -215,6 +215,44 @@ def test_excluded_source_refs_include_tombstoned_rounds(repository) -> None:  # 
     assert ("s1", "r1") in repository.excluded_source_refs_for_user("user-1", "thinkback")
 
 
+def test_recall_inputs_matches_the_separate_reads(repository) -> None:  # type: ignore[no-untyped-def]
+    """召回取数的四处必须与分开取一致（两条实现同语义）。
+
+    这四处互不依赖，实现可以并发取回；并发取回的值不能与串行取的不同，
+    否则「召回内容」就取决于实现细节了。
+    """
+    repository.save_round(make_append(round_id="r1", session_id="session-1"))
+    repository.save_round(make_append(round_id="r2", session_id="session-1"))
+    repository.mark_round_deleted("r2")
+    repository.upsert_summary_from_journal("user-1", "session-1", namespace="thinkback")
+    repository.add_memory_index(
+        backend_memory_id="backend-1",
+        user_id="user-1",
+        memory_scope_id="thinkback",
+        source_refs=[{"session_id": "session-1", "round_id": "r1"}],
+        memory_text="User lives in 上海",
+    )
+
+    inputs = repository.recall_inputs(
+        user_id="user-1",
+        session_scope_id="session-1",
+        session_id="session-1",
+        l3_scope_id="thinkback",
+    )
+
+    assert inputs.excluded_refs == repository.excluded_source_refs_for_user("user-1", "thinkback")
+    assert [entry.round_id for entry in inputs.l1_entries] == [
+        entry.round_id
+        for entry in repository.get_l1("user-1", "session-1", "session-1", namespace="thinkback")
+    ]
+    assert (inputs.summary is None) == (
+        repository.get_summary("user-1", "session-1", namespace="thinkback") is None
+    )
+    assert [memory.memory_text for memory in inputs.active_memories] == [
+        memory.memory_text for memory in repository.active_memories("user-1", "thinkback")
+    ]
+
+
 def test_mark_round_states_round_trip(repository) -> None:  # type: ignore[no-untyped-def]
     repository.save_round(make_append(round_id="r1"))
     assert repository.mark_round_deleted("r1") is True

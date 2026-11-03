@@ -1718,7 +1718,7 @@ L2 更新 (缓存失效)
                 │
                 ▼
             ┌── L1 召回 (本地短期) ─────────────────────┐
-            │  for entry in repository.get_l1(...):    │
+            │  for entry in inputs.l1_entries:           │
             │    content = 拼接非受限消息              │
             │    items.append(MemoryItem(              │
             │        layer="L1", content, source))     │
@@ -1726,8 +1726,7 @@ L2 更新 (缓存失效)
                                 │
                                 ▼
             ┌── L2 召回 (本地摘要) ─────────────────────┐
-            │  summary = _summary(user_id,             │
-            │                     session_scope_id)    │
+            │  summary = inputs.summary                 │
             │  ├─ ACTIVE + text → append(L2)           │
             │  ├─ STALE  + text → append(L2) +         │
             │  │                 degradation +=        │
@@ -1743,7 +1742,7 @@ L2 更新 (缓存失效)
                 │
                 ▼
             ┌── L3 召回 (后端语义检索) ────────────────┐
-            │  active = _active_memories(user_id, …)  │
+            │  active = inputs.active_memories         │
             │  by_backend_id = {m.backend_memory_id: │
             │                    m for m in active}   │
             │  query_slot = _query_conflict_slot(q)   │
@@ -1819,13 +1818,17 @@ L2 更新 (缓存失效)
         # 排除集按用户聚合（不按 scope）：L3 记忆在长期 scope，轮次在会话 scope，
         # 按 scope 过滤会漏掉「记忆已删除/已遗忘」的轮次 → 原文从 L1 复活。
         # 聚合范围限定在本 namespace：session_id 只在 namespace 内唯一。
-        excluded_refs = self.repository.excluded_source_refs_for_user(request.user_id, l3_scope_id)
-        for entry in self.repository.get_l1(
-            request.user_id,
-            session_scope_id,
-            request.session_id,
-            namespace=l3_scope_id,
-        ):
+        # 四处数据互不依赖（排除过滤在下面做，不在仓储层），一次并发取回：
+        # 串行时每处都是一次完整往返，PG 一卡就串成秒级（实测 2026-11-03：
+        # 争用下每次 75-250ms，四处 2.5s，引擎调用本身只要 327ms）。
+        recall_inputs = self.repository.recall_inputs(
+            user_id=request.user_id,
+            session_scope_id=session_scope_id,
+            session_id=request.session_id,
+            l3_scope_id=l3_scope_id,
+        )
+        excluded_refs = recall_inputs.excluded_refs
+        for entry in recall_inputs.l1_entries:
             if (entry.session_id, entry.round_id) in excluded_refs:
                 continue
             # 保留说话人：助手的话不能和用户的话混成一段，否则召回后无法区分
@@ -1837,7 +1840,7 @@ L2 更新 (缓存失效)
             )
             items.append(MemoryItem(layer="L1", content=content, source=entry.round_id))
 
-        summary = self._summary(request.user_id, session_scope_id, namespace=l3_scope_id)
+        summary = recall_inputs.summary
         if summary and summary.summary_state is SummaryState.ACTIVE and summary.summary_text:
             items.append(
                 MemoryItem(layer="L2", content=summary.summary_text, source=summary.summary_id)
@@ -1858,7 +1861,7 @@ L2 更新 (缓存失效)
             degradation_reasons.append("l2_rebuilding")
 
         recalled_entries: list[Any] = []
-        active_memories = self._active_memories(request.user_id, l3_scope_id)
+        active_memories = recall_inputs.active_memories
         active_memory_by_backend_id = {
             memory.backend_memory_id: memory for memory in active_memories
         }
@@ -4501,12 +4504,6 @@ L2 更新 (缓存失效)
         """读 L3 active 索引。直读仓库，V2.1 起不再缓存（之前的 cache 在每次写
         路径都被 invalidate，cache lifetime ≈ 0，收益不抵复杂度）。"""
         return list(self.repository.active_memories(user_id, memory_scope_id))
-
-    def _summary(
-        self, user_id: str, memory_scope_id: str, *, namespace: str = DEFAULT_NAMESPACE
-    ) -> Any | None:
-        """读 L2 摘要。直读仓库（同上，V2.1 起不再缓存）。"""
-        return self.repository.get_summary(user_id, memory_scope_id, namespace=namespace)
 
     def _dedupe_and_clip(
         self,

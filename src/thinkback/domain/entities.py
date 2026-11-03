@@ -62,6 +62,22 @@ class JournalEntry:
 
 
 @dataclass
+class RecallInputs:
+    """召回在进引擎前要取的四处数据。
+
+    四处互不依赖（L1 的排除过滤在服务层做，不在仓储层），所以仓储可以
+    一次性并发取回：串行时每处都是一次完整往返，PG 一卡就串起来 ——
+    实测（2026-11-03）PG 争用时每次往返 75-250ms，四处串起来 2.5s，
+    而引擎调用本身只要 327ms，召回延迟全被这串往返吃掉。
+    """
+
+    excluded_refs: set[tuple[str | None, str | None]]
+    l1_entries: list[JournalEntry]
+    summary: SummaryEntry | None
+    active_memories: list[MemoryIndexEntry]
+
+
+@dataclass
 class SummaryEntry:
     """会话摘要条目（L2 中期记忆）
 

@@ -17,6 +17,7 @@ from thinkback.domain.entities import (
     AdminAuditEntry,
     JournalEntry,
     MemoryIndexEntry,
+    RecallInputs,
     SummaryEntry,
     TaskEntry,
 )
@@ -361,6 +362,23 @@ class InMemoryMemoryRepository(L1CacheMixin):
             and memory.memory_scope_id == memory_scope_id
             and memory.memory_status is MemoryStatus.ACTIVE
         ]
+
+    def recall_inputs(
+        self,
+        *,
+        user_id: str,
+        session_scope_id: str,
+        session_id: str,
+        l3_scope_id: str,
+    ) -> RecallInputs:
+        """四处数据一次取回（内存实现没有往返成本，顺序取即可）。"""
+
+        return RecallInputs(
+            excluded_refs=self.excluded_source_refs_for_user(user_id, l3_scope_id),
+            l1_entries=self.get_l1(user_id, session_scope_id, session_id, namespace=l3_scope_id),
+            summary=self.get_summary(user_id, session_scope_id, namespace=l3_scope_id),
+            active_memories=self.active_memories(user_id, l3_scope_id),
+        )
 
     def list_memories(self, user_id: str, memory_scope_id: str) -> list[MemoryIndexEntry]:
         return [
