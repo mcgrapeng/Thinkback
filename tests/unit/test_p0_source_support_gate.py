@@ -583,3 +583,25 @@ def test_marker_only_nickname_slot_falls_through_to_default_allow() -> None:
     全部进不了本地索引（召回静默消失）。
     """
     assert memory_supported_by_source("称呼他为张工", _meta("我们团队都称呼他为张工"))
+
+
+def test_a_pet_memory_is_rejected_when_the_source_names_a_different_pet() -> None:
+    """源文本抽到明确宠物时以它为仲裁：与记忆的宠物不同就不放行。
+
+    源里同时提到猫和狗时，源抽取结果（猫）是口径 —— 狗的记忆即便也能
+    在源里找到整词 marker 依据，也不走 marker 兜底。跳过源抽取这一步
+    的话，多宠物源里的所有宠物记忆都会经 marker 兜底放行。
+    """
+    memory_text = "User has a dog named Beans"
+    source = "my cat is named Mimi and my dog is named Beans"
+
+    assert not memory_supported_by_source(memory_text, _meta(source))
+
+
+def test_a_cjk_pet_marker_accepts_uppercase_english_names() -> None:
+    """中文句式「叫Lucky猫」里的名字类不能丢大写字母。
+
+    名字字符类丢了 ``A-Z`` 后，这类来源匹配不上中文 marker 依据 ——
+    宠物记忆会被当成无源可依，进不了本地可见表（召回静默消失）。
+    """
+    assert memory_supported_by_source("我养了一只猫叫Lucky", _meta("邻居都叫Lucky猫"))

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -170,6 +171,25 @@ def test_decay_skips_legacy_rows_without_valid_at() -> None:
     entry.valid_at = None  # 模拟遗留行
     suppressed = make_sweeper(repository).sweep_now("user-1", "thinkback")
     assert suppressed == 0
+
+
+def test_decay_candidate_tolerates_rows_without_timestamp_attributes() -> None:
+    """连 recorded_at/valid_at **属性**都没有的行：跳过，且不抛异常。
+
+    ``_is_decay_candidate`` 收 ``Any``（仓储行可能是实体也可能是未来的
+    其他 DTO）—— 一行缺时间戳属性不该让整个清扫循环崩掉，getattr 的
+    默认值正是这道边界。把默认值去掉（两参 getattr），这里直接
+    AttributeError，整个 sweep 中断。
+    """
+    sweeper = make_sweeper(InMemoryMemoryRepository())
+    row = SimpleNamespace(
+        backend_memory_id="backend-1",
+        source_type="chat_round",
+        memory_text="User plays chess online",
+    )
+    result = sweeper._is_decay_candidate(row, datetime.now(UTC), datetime.now(UTC))
+
+    assert result is False
 
 
 # ── 阈值边界（变异审计暴露的覆盖缺口）────────────────────────────────

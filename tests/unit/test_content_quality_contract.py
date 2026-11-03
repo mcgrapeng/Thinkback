@@ -391,3 +391,25 @@ def test_jaccard_of_two_empty_sets_is_zero_not_one() -> None:
     from thinkback.domain.content_quality import _jaccard
 
     assert _jaccard(set(), set()) == 0.0
+
+
+def test_bigrams_of_two_and_three_char_texts() -> None:
+    """2 字 → 它自己那一个二元组；3 字 → 两个真正的二元组。
+
+    长度阈值写成 ``<= 2`` 或 ``< 3`` 时，3 字文本会整串返回而不是切成
+    ``{"ab","bc"}`` —— 相似度的比较单位从二元组集合变成整串，Jaccard
+    的分子分母全变，新颖性判定的取值跟着全变。
+    """
+    from thinkback.domain.content_quality import _bigrams
+
+    assert _bigrams("ab") == {"ab"}
+    assert _bigrams("abc") == {"ab", "bc"}
+
+
+def test_clarity_scores_single_char_content_as_short_not_empty() -> None:
+    """单字符内容走「过短」档（扣 0.60），不是「空内容」哨兵（0 分）。
+
+    判空条件写成 ``length == 1`` 的话，单字内容会提前返回 0.0 —— 比三字
+    内容的 0.40 还严，单字事实在质量排序里被压到「比空还空」的位置。
+    """
+    assert score_content(_plain(1)).dimension(CLARITY) == 1.0 - 0.60

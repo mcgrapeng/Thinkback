@@ -13,6 +13,7 @@ from __future__ import annotations
 import pytest
 
 from thinkback.domain.slots.extractors import (
+    extract_birthday,
     extract_current_location,
     extract_current_nickname,
     extract_current_work_status,
@@ -134,6 +135,15 @@ def test_the_english_patterns_ignore_case(text: str, expected: str) -> None:
 def test_the_uppercase_location_is_recognised() -> None:
     """地点的英文模式同样大小写不敏感。"""
     assert extract_current_location("USER LIVES IN HANGZHOU") == "HANGZHOU"
+
+
+def test_the_birthday_correction_marker_is_case_insensitive() -> None:
+    """生日的「更正自」截断同样大小写不敏感：大写写法也要截掉。
+
+    截断用的 ``re.split`` 丢了 IGNORECASE 的话，``(Corrected from …)``
+    匹配不上 —— 旧值跟着新值一起进槽位，冲突判定拿到的不是干净值。
+    """
+    assert extract_birthday("birthday is March 3 (Corrected from April 1)") == "March 3"
 
 
 def test_the_work_status_stops_at_the_no_longer_clause() -> None:
