@@ -428,6 +428,33 @@ def test_every_communication_marker_yields_the_communication_slot(marker: str) -
     assert memory_conflict_slot(marker) == "communication_preference"
 
 
+@pytest.mark.parametrize(
+    ("text", "slot"),
+    [
+        ("居住城市：上海", "current_location"),
+        ("沟通风格：简洁直接的建议", "communication_preference"),
+        ("生日：6月1日", "birthday"),
+        ("昵称：小明", "preferred_nickname"),
+        ("工作状态：在职", "current_work_status"),
+    ],
+)
+def test_attribute_form_facts_map_back_to_p0_slots(text: str, slot: str) -> None:
+    """属性名形态的事实（per-type 指令产出的「居住城市：上海」）也要能归到 P0 槽位。
+
+    per-type 指令产出的是「属性名：值」，P0 槽位按自然语句识别 —— 两套词表
+    不接上时，单槽位提问的排他过滤（问猫名别召回住址）会把属性名形态的事实
+    当成「别的槽位」整批滤掉。真实栈实测（2026-11-03）：问「用户现在住在哪？」
+    一条 L3 都召不回，而引擎其实把「居住城市：上海」排在第一。
+    """
+    assert memory_conflict_slot(text) == slot
+
+
+def test_vertical_attribute_names_do_not_map_to_p0_slots() -> None:
+    """垂类属性名不在 P0 槽位语义范围内 → 不映射（它们的冲突键走属性名口径）。"""
+    assert memory_conflict_slot("制程节点：28nm") is None
+    assert memory_conflict_slot("常用机台：ASML") is None
+
+
 def test_the_work_status_is_canonicalized_from_the_source_text() -> None:
     """源文本里的工作状态要能规范化成一条记忆。
 

@@ -11,10 +11,14 @@
 1. 丢 TTL —— 引擎侧到期隐藏了事实，本地行却永远 ACTIVE，过期事实回流；
 2. 分类被降级 —— 类型策略声明 personal、调用方声明 normal，回填行记成
    normal（调用方能借回填路径把策略声明的分类降下来）；
-3. 漏掉 per-type 指令的类型 —— 类型自带抽取指令时本该整条跳过回填，
-   但回填路径看不到解析后的类型名，照样写出不属于该类型语义的事实。
+3. 漏掉 per-type 指令的类型 —— 回填路径看不到解析后的类型名，照样写出
+   不属于该类型语义的事实。
 
 这三个症状同源，因此放在一个文件里钉住：任何一条被改回去都会红。
+
+第三条（类型自带指令时回填整条跳过）已随「回填对带指令的类型照常参与」
+一起翻过来：引擎产出的本来就是 P0 模板文本，冲突键也按 P0 槽位算，清单外
+的 P0 事实（昵称、宠物名、沟通偏好、睡眠提醒）只能靠回填兜底。
 """
 
 from __future__ import annotations
@@ -132,11 +136,18 @@ def test_backfilled_row_keeps_the_strictest_classification() -> None:
     assert rows[0].data_classification == "personal"
 
 
-def test_backfill_is_skipped_for_a_type_that_owns_an_extraction_prompt() -> None:
-    """类型自带抽取指令时，整条回填跳过。
+def test_backfill_runs_for_a_type_that_owns_an_extraction_prompt() -> None:
+    """类型自带抽取指令时，回填照常参与。
 
-    那份指令才是该类型事实形状的唯一来源（「属性名：值」）；P0 的英文
-    模板文本混进来只会产出既不属于该类型语义、又算不出冲突键的条目。
+    曾经整条跳过，理由是「P0 的英文模板文本跟类型指令冲突，混进来只会产出
+    既不属于该类型语义、又算不出冲突键的条目」。两条前提都不成立：引擎自己
+    产出的就是这套模板文本（mem0 先 ADD 属性形态、再 UPDATE 成模板形态），
+    冲突键现在也按 P0 槽位算（属性名形态经 ATTRIBUTE_SLOTS 映射回槽位）。
+
+    不放开的后果：类型指令清单外的 P0 事实（昵称、宠物名、沟通偏好、睡眠提醒）
+    只能靠引擎那句「照常抽成一句话」—— 不可靠：同一句话这轮抽到、下轮抽不到
+    （真实栈实测 2026-11-03：狗名/睡眠提醒/沟通偏好三轮抽取为空，召回 0 条），
+    抽不到时事实静默消失。回填是这些槽位唯一的确定性兜底。
     """
     registry = MemoryTypeRegistry(
         namespace="thinkback",
@@ -159,7 +170,9 @@ def test_backfill_is_skipped_for_a_type_that_owns_an_extraction_prompt() -> None
     # 不显式给 memory_type：append 解析出的默认类型是 profile（带指令）。
     service.append(_append("r-prompt", "我现在住在杭州"))
 
-    assert service.repository.list_memories("user-1", "thinkback") == []
+    rows = service.repository.list_memories("user-1", "thinkback")
+    assert len(rows) == 1, "带指令的类型也要有回填行"
+    assert rows[0].memory_text == "User lives in 杭州"
 
 
 def test_backfill_runs_for_a_type_without_an_extraction_prompt() -> None:

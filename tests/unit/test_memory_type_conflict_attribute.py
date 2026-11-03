@@ -76,6 +76,42 @@ def test_extract_attribute_name_reads_the_leading_attribute() -> None:
     assert extract_attribute_name("User has a cat named 麻薯: 3 years old") is None
 
 
+def test_free_form_fact_supersedes_by_p0_slot_when_type_has_prompt() -> None:
+    """类型带抽取指令时，指令清单外的自由句也要能覆盖旧事实。
+
+    真实栈实测（2026-11-03）：mem0 抽出的昵称事实是
+    「User prefers to be called 阿鹏」，取不到属性名 → 冲突键 None →
+    旧昵称一直 ACTIVE，改口不生效。单测的服务默认不带类型注册表，属性名
+    路径压根没进，缺口被单测盖住了。
+    """
+    service = MemoryService(
+        repository=InMemoryMemoryRepository(),
+        backend=FakeMemoryBackend(),
+        registry_provider=lambda namespace: load_registry(PROFILE_DIR, namespace),
+    )
+    repository = service.repository
+    old = repository.add_memory_index(
+        backend_memory_id="old-nickname",
+        user_id="user-1",
+        source_refs=[{"session_id": "session-1", "round_id": "round-1"}],
+        memory_text="User prefers to be called 阿鹏",
+    )
+
+    service._index_l3_event(
+        {"id": "new-nickname", "memory": "User prefers to be called 小鹏", "event": "ADD"},
+        user_id="user-1",
+        source_refs=[{"session_id": "session-1", "round_id": "round-2"}],
+        l3_metadata=service._l3_metadata(
+            [{"session_id": "session-1", "round_id": "round-2"}],
+            {},
+        ),
+    )
+
+    active = repository.active_memories("user-1", "thinkback")
+    assert [memory.backend_memory_id for memory in active] == ["new-nickname"]
+    assert repository.memories[old.memory_id].memory_status.name == "SUPERSEDED"
+
+
 def test_same_attribute_in_a_vertical_type_supersedes_the_old_value() -> None:
     """同类型、同属性名的新事实覆盖旧值（旧值不该再被召回）。"""
     service = _service()

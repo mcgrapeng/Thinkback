@@ -4845,12 +4845,19 @@ L2 更新 (缓存失效)
         「更旧」而被跳过 —— 用户纠正偏好后，新值反而进不了索引。
         """
 
-        # 类型自带 per-type 抽取指令时，P0 槽位回填不参与：那份指令才是这个
-        # 类型事实形状的唯一来源（属性名：值），P0 的英文模板文本跟它冲突，
-        # 混进来只会产出既不属于该类型语义、又没法算冲突键的条目。
-        memory_type = str(request_metadata.get("memory_type") or "") or None
-        if self._type_uses_attribute_keys(memory_type, memory_scope_id):
-            return []
+        # 类型自带 per-type 抽取指令时，P0 槽位回填**照常参与**。
+        #
+        # 曾经整条跳过，理由是「P0 的英文模板文本跟类型指令冲突，混进来只会
+        # 产出既不属于该类型语义、又算不出冲突键的条目」。两条前提都不成立：
+        #   - 引擎自己产出的就是这套模板文本（mem0 2.2.1 先 ADD 属性形态、
+        #     再 UPDATE 成 P0 模板形态），不是外来物；
+        #   - 冲突键现在按 P0 槽位算（属性名形态经 ATTRIBUTE_SLOTS 映射回槽位），
+        #     回填进来的条目算得出键、能正确覆盖旧值。
+        #
+        # 不放开的后果：清单外的 P0 事实（昵称、宠物名、沟通偏好、睡眠提醒）
+        # 完全依赖引擎那句「照常抽成一句话」—— 同一句话这轮抽到、下轮抽不到，
+        # 抽不到时事实静默消失（真实栈实测 2026-11-03：狗名/睡眠提醒/沟通偏好
+        # 三轮抽取为空，召回 0 条）。回填是这些槽位唯一的确定性兜底。
 
         backfill_log = logger.bind(
             user_id=user_id,
@@ -5665,24 +5672,28 @@ L2 更新 (缓存失效)
     def _conflict_key(
         self, memory_text: str, memory_type: str | None, namespace: str
     ) -> str | None:
-        """这条事实的冲突键：``<类型>#<属性名>``。
+        """这条事实的冲突键：``<类型>#<槽位或属性名>``。
 
         同类型的同一个属性才算冲突 —— 不同类型互不覆盖，不同属性也互不覆盖。
-        属性名取自 per-type 抽取指令产出的「属性名：值」格式；没有 per-type
-        抽取指令的类型回退到 P0 槽位。
 
-        过去这里只比 P0 槽位（``domain/slots`` 的 9 个中文消费级槽位），企业
-        垂类事实一律落在槽位之外 → 冲突永远不发生 → 类型声明的
-        ``conflict: overwrite`` 成了空配置。
+        取值口径：**P0 槽位优先，属性名兜底**。同一条属性不管被抽成
+        「属性名：值」（居住城市：上海）还是自由句（User lives in 上海），
+        键都得一样 —— 否则同一属性两条事实算出两个键，改口时旧的不被覆盖。
+        垂类属性（制程节点、常用机台）不在 P0 槽位语义范围内，落到属性名
+        兜底 —— 早先只比 P0 槽位时，企业垂类事实一律落在槽位之外，冲突永远
+        不发生，类型声明的 ``conflict: overwrite`` 成了空配置。
         """
         # 没记类型的行按默认类型算：_l3_metadata 与 _resolve_type_name 都把
         # 缺省当 profile，冲突键的口径必须一致，否则同一条事实算不出同一个键。
         type_name = str(memory_type or "") or MemoryType.PROFILE.value
+        slot = self._memory_conflict_slot(memory_text)
+        if slot:
+            return f"{type_name}#{slot}"
         if self._type_uses_attribute_keys(memory_type, namespace):
             name = extract_attribute_name(memory_text)
-            return f"{type_name}#{name}" if name else None
-        slot = self._memory_conflict_slot(memory_text)
-        return f"{type_name}#{slot}" if slot else None
+            if name:
+                return f"{type_name}#{name}"
+        return None
 
     @classmethod
     def _memory_supported_by_source(cls, memory_text: str, l3_metadata: dict[str, Any]) -> bool:

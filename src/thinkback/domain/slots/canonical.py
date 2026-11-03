@@ -9,6 +9,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from thinkback.domain.memory_types import extract_attribute_name
 from thinkback.domain.slots.extractors import (
     extract_birthday,
     extract_communication_preference,
@@ -19,6 +20,33 @@ from thinkback.domain.slots.extractors import (
     extract_pet_name,
     extract_sleep_reminder_preference,
 )
+
+#: 属性名 → P0 槽位。
+#:
+#: per-type 抽取指令产出的事实形状是「属性名：值」（居住城市：上海），而 P0 槽位
+#: 是按自然语句识别的（住在上海 / User lives in 上海）。两套词表不接上时，
+#: 属性名形态的事实归不出槽位：单槽位提问的排他过滤（问猫名别召回住址）会把它
+#: 当成「别的槽位」整批滤掉 —— 真实栈实测（2026-11-03）：问「用户现在住在哪？」
+#: 一条 L3 都召不回，引擎其实把「居住城市：上海」排在第一。
+#:
+#: 只映射 P0 槽位覆盖得到语义的那几个属性名；垂类属性名（制程节点、常用机台）
+#: 不在 P0 槽位语义范围内，不映射 —— 它们的冲突键走属性名口径。
+ATTRIBUTE_SLOTS: dict[str, str] = {
+    "居住城市": "current_location",
+    "现居城市": "current_location",
+    "居住地": "current_location",
+    "现居地": "current_location",
+    "城市": "current_location",
+    "沟通偏好": "communication_preference",
+    "沟通风格": "communication_preference",
+    "沟通方式": "communication_preference",
+    "生日": "birthday",
+    "出生日期": "birthday",
+    "昵称": "preferred_nickname",
+    "称呼": "preferred_nickname",
+    "工作状态": "current_work_status",
+    "在职状态": "current_work_status",
+}
 
 
 def memory_conflict_slot(memory_text: str) -> str | None:
@@ -68,6 +96,11 @@ def memory_conflict_slot(memory_text: str) -> str | None:
         return f"favorite:{favorite[0]}"
     if extract_sleep_reminder_preference(memory_text):
         return "sleep_reminder_preference"
+    # 属性名形态的事实（per-type 指令产出的「居住城市：上海」）：前面的自然语句
+    # 识别认不出来时，按属性名映射回 P0 槽位。
+    attribute = extract_attribute_name(memory_text)
+    if attribute:
+        return ATTRIBUTE_SLOTS.get(attribute)
     return None
 
 
