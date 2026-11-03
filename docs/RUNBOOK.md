@@ -96,6 +96,38 @@ MEMORY_MILVUS_MIRROR_COLLECTION=agent_semantic_memory_v1
 **Cleanup**（窗口结束后）：清空 `MEMORY_MILVUS_MIRROR_COLLECTION`，确认旧集合
 不再被写入后再删除；旧集合至少保留 30 天。
 
+## 真实栈门禁（gate-real）
+
+真实栈门禁验的是「真实引擎 + 真实向量库」上的抽取质量、召回水位、擦除残留与
+混合检索，自包含评测（`make eval`）全绿只证明 fake 编排契约。
+
+**前置**：真实 Milvus、真实 LLM/embedding endpoint、可写的 PostgreSQL。
+
+```bash
+docker compose -f deploy/milvus-local/docker-compose.yml up -d
+MILVUS_URL=http://localhost:19540 make gate-real
+```
+
+宿主访问 Milvus 走 compose 发布的端口（`MILVUS_HOST_PORT`，默认 19540 →
+容器 19530）；`.env` 里的 `MILVUS_URL` 要写宿主端口，写成容器端口会连不上，
+服务会静默降级（向量库不可达，记忆写不进去）。
+
+**门禁项与地板**：抽取非空率 1.00；期望事实覆盖率 / 召回率 ≥ 0.66；禁存词泄漏 0；
+擦除残留 0 条（Milvus / mem0 history / mem0 messages / PG 索引）；幂等重放完全一致；
+集合 schema 归 Thinkback（分析器 `chinese`）；英文词与中文词各抽样一次必须命中；
+引擎里的每条事实都要有对应的本地 ACTIVE 索引行。
+
+**报告**：`docs/memory/report/real/gate-<commit>-<时间戳>.json`，带 commit 号。
+退出码 0 = 全绿。
+
+**自清理**：门禁用自己的作用域（`gate-<hash>`），跑完擦除，两个集合的行数回到
+跑前的值 —— 跑完看行数对不上，说明有东西没擦干净。
+
+**评测集合**：真实栈的评测/探针脚本写独立集合 `agent_semantic_memory_eval`，
+不落生产集合。走 HTTP 驱动运行中服务的脚本（如 `real_mem0_quality_regression.py`）
+由服务进程的配置决定集合，被驱动的服务要用
+`MEMORY_MILVUS_COLLECTION=agent_semantic_memory_eval` 启动。
+
 ## Retention cleanup (保留期物理清理)
 
 **What it does**: 到期的事实先不可达（引擎隐藏 + 本地过滤），过了 7 天宽限期

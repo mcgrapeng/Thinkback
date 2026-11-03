@@ -20,6 +20,7 @@ from dotenv import load_dotenv
 from thinkback.api.dependencies import get_memory_backend
 from thinkback.infra.config import Settings
 from thinkback.infra.database.engine import check_database
+from thinkback.infra.milvus_collection import eval_settings
 from thinkback.infra.readiness import check_milvus
 from thinkback.memory.repositories import MemoryIndexEntry, SqlAlchemyMemoryRepository
 from thinkback.memory.schemas import (
@@ -176,7 +177,9 @@ def _select_delete_target(
 def main() -> None:
     load_dotenv()
     settings = Settings()
+    # 预检查的是生产配置（连得上、凭据齐）；评测集合由后端首次使用时预建。
     assert_preflight_ready(settings)
+    settings = eval_settings(settings)
 
     repository = SqlAlchemyMemoryRepository()
     service = MemoryService(

@@ -15,9 +15,12 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from loguru import logger
+
+if TYPE_CHECKING:
+    from thinkback.infra.config import Settings
 
 ID_FIELD = "id"
 VECTOR_FIELD = "vectors"
@@ -36,6 +39,11 @@ COPYABLE_FIELDS = (ID_FIELD, VECTOR_FIELD, METADATA_FIELD, TEXT_FIELD)
 #: ``multilingual`` 这两个名字在 2.6.15 上会被服务端拒绝（tokenizer 创建失败），
 #: 所以用 ``chinese``。
 DEFAULT_ANALYZER_TYPE = "chinese"
+
+#: 真实栈评测/探针脚本用的集合名。评测数据落进生产集合会污染 ADR-0007 的
+#: 切换判据：新集合比旧集合多出评测行，「新旧行数一致」永远对不上，回滚
+#: 时的数据缺口也算不清。生产集合只留真实用户作用域。
+EVAL_COLLECTION = "agent_semantic_memory_eval"
 
 #: 预建结果状态。
 STATE_CREATED = "created"
@@ -70,6 +78,21 @@ def connect(*, url: str, database: str, token: str | None = None) -> Any:
     from pymilvus import MilvusClient
 
     return MilvusClient(uri=url, token=token or None, db_name=database)
+
+
+def eval_settings(settings: Settings) -> Settings:
+    """把集合指向评测集合（真实栈评测/探针脚本用）。
+
+    镜像集合同时清掉：评测数据不该被复制进回滚集合，生产集合的
+    「新旧行数一致」判据（ADR-0007）也才对得上。
+    """
+
+    return settings.model_copy(
+        update={
+            "memory_milvus_collection": EVAL_COLLECTION,
+            "memory_milvus_mirror_collection": "",
+        }
+    )
 
 
 def scope_ids(

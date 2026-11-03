@@ -51,6 +51,7 @@ _prepare_environment(
 from thinkback.api.dependencies import get_memory_backend  # noqa: E402
 from thinkback.domain.prompts import DEFAULT_EXTRACTION_INSTRUCTIONS  # noqa: E402
 from thinkback.infra.config import get_settings  # noqa: E402
+from thinkback.infra.milvus_collection import eval_settings  # noqa: E402
 
 CORPUS_PATH = Path("tests/eval/semiconductor_cases.json")
 
@@ -287,7 +288,7 @@ def main() -> int:
     corpus = json.loads(Path(args.corpus).read_text(encoding="utf-8"))
     cases = list(corpus["cases"])[: args.cases]
 
-    settings = get_settings()
+    settings = eval_settings(get_settings())
     backend = get_memory_backend(settings)
     client = backend.memory_client
 

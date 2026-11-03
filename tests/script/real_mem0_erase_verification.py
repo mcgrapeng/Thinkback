@@ -28,6 +28,7 @@ from dotenv import load_dotenv
 from thinkback.api.dependencies import get_memory_backend
 from thinkback.infra.config import Settings
 from thinkback.infra.milvus import ensure_milvus_database
+from thinkback.infra.milvus_collection import eval_settings
 from thinkback.memory.repositories import SqlAlchemyMemoryRepository
 from thinkback.memory.schemas import (
     AppendMemoryRequest,
@@ -111,7 +112,7 @@ def main() -> int:
         "all_proxy",
     ):
         os.environ.pop(proxy_var, None)
-    settings = Settings()
+    settings = eval_settings(Settings())
     history_db_path = settings.mem0_history_db_path
     run_id = uuid4().hex[:10]
     user_id = f"erase-verify-{run_id}"

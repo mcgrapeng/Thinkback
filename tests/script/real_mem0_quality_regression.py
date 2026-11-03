@@ -3,6 +3,11 @@
 V1 边界：本脚本 rebuild 子流程依赖 `POST /v2/memory/rebuild`，但 V1 不对外暴露该端点
 （取舍见 docs/memory/Thinkback记忆三层架构.md §0.2 / §5）。本脚本相关段落已临时跳过，
 完整 rebuild 真实链路验证作为 V2/V3 整体清理的一部分按 §0.2 推进。
+
+集合隔离：本脚本驱动的是**运行中的服务**（THINKBACK_MEMORY_API_URL），集合由服务
+进程的配置决定，本脚本改不动。要让评测数据不落生产集合，被驱动的服务必须用
+``MEMORY_MILVUS_COLLECTION=agent_semantic_memory_eval`` 启动（进程内直连的真实栈
+脚本已由 thinkback.infra.milvus_collection.eval_settings 强制隔离）。
 """
 
 from __future__ import annotations
@@ -519,13 +524,13 @@ def _await_task(
 ) -> dict[str, Any]:
     """等后台任务到终态。
 
-    async 写入模式下 ``/memory/append`` 立刻返回 accepted，事实真正落到 L3
+    async 写入模式下 ``/v2/memory/events`` 立刻返回 accepted，事实真正落到 L3
     是后台任务做的。评测要看到「写完之后」的召回，所以必须等任务终态。
     """
     deadline = time.monotonic() + timeout_seconds
     last: dict[str, Any] = {}
     while time.monotonic() < deadline:
-        last = _get_json(base_url, f"/memory/tasks/{task_id}")
+        last = _get_json(base_url, f"/v2/memory/tasks/{task_id}")
         if str(last.get("status", "")) in {
             "completed",
             "already_done",
@@ -842,6 +847,10 @@ def main() -> None:
         scope,
         4,
         "我喜欢晚上复盘工作压力，但不喜欢被说教。",
+        # 沟通风格类的事实归 preference 类型（类型系统：调用方声明类型，
+        # 默认 profile）。不声明的话 profile 的抽取指令不收这类事实，引擎返回
+        # 0 个事件 → 这条事实静默丢失（真实栈实测 2026-11-03）。
+        metadata={"memory_type": "preference"},
         request_metrics=request_metrics,
         latency_metrics=latency_metrics,
     )
@@ -850,6 +859,7 @@ def main() -> None:
         scope,
         5,
         "如果我焦虑，请先帮我拆解问题，再给建议。",
+        metadata={"memory_type": "preference"},
         request_metrics=request_metrics,
         latency_metrics=latency_metrics,
     )
@@ -882,6 +892,7 @@ def main() -> None:
         scope,
         9,
         "沟通偏好也更新：我现在更想要简洁直接的建议，不需要先安慰。",
+        metadata={"memory_type": "preference"},
         request_metrics=request_metrics,
         latency_metrics=latency_metrics,
     )

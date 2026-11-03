@@ -237,6 +237,7 @@ def _make_service(real: bool, repository: Any = None) -> tuple[Any, Any, Any]:
     """
     from thinkback.api.dependencies import build_registry_provider, get_memory_backend
     from thinkback.infra.config import settings
+    from thinkback.infra.milvus_collection import eval_settings
     from thinkback.memory.backends import FakeMemoryBackend
     from thinkback.memory.repositories import InMemoryMemoryRepository, SqlAlchemyMemoryRepository
     from thinkback.memory.service import MemoryService
@@ -245,7 +246,7 @@ def _make_service(real: bool, repository: Any = None) -> tuple[Any, Any, Any]:
     if real:
         if repository is None:
             repository = SqlAlchemyMemoryRepository()
-        backend = get_memory_backend(settings)
+        backend = get_memory_backend(eval_settings(settings))
     else:
         repository = repository or InMemoryMemoryRepository()
         backend = FakeMemoryBackend()

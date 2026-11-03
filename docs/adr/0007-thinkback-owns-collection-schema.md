@@ -8,6 +8,12 @@ Thinkback 自己创建并持有 Milvus collection 的 schema，mem0 发现 colle
 
 切换窗口采用双写：写同时进新旧两个集合，回滚只需把配置改回旧集合名，不需要补数据，回滚时数据缺口的风险消失。双读窗口 48 小时，召回读新集合、未命中回落旧集合，切换判据是新集合行数与旧集合一致且抽样召回通过。旧集合至少保留 30 天再清理。窗口名与回滚步骤写进运行手册。
 
+「行数一致」的口径是生产集合：真实栈的评测/探针脚本写独立集合
+（`agent_semantic_memory_eval`，见 `thinkback.infra.milvus_collection.eval_settings`），
+不落生产集合。评测数据混进生产集合时，新集合必然比旧集合多出评测行，
+判据永远对不上，回滚时的数据缺口也算不清。门禁脚本（`tests/script/gate_real.py`）
+例外 —— 它验的就是生产集合本身（含分析器与双写镜像）。
+
 实测确定的三件事（Milvus 2.6.15）：
 
 - 分析器类型是 `chinese`（服务端内置的 jieba 分词）。`jieba` 与 `multilingual`
@@ -18,6 +24,9 @@ Thinkback 自己创建并持有 Milvus collection 的 schema，mem0 发现 colle
 - 「行数一致」的判据用可见行数（query 出来的行），不用
   `get_collection_stats` 的 row_count —— 后者把已删除未压实的墓碑行也算进去，
   同一集合报 252 而实际可见 240，用它当判据永远对不上。
+- 评测/探针数据不落生产集合：真实栈脚本把集合指向独立的评测集合
+  （`agent_semantic_memory_eval`）。生产集合被评测行污染时，「新旧行数一致」
+  的切换判据永远不成立。
 
 双写的粒度是行搬运而不是二次抽取：写完把新行按 id 搬到旧集合，删除与修改
 同样同步，否则回滚会把已擦除的事实带回来。回退路径不补数据。
