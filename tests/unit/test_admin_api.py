@@ -521,7 +521,19 @@ def test_admin_rebuild_route_and_audit() -> None:
     assert audit[0]["detail"]["operation_id"] == "op-admin-rebuild-1"
 
 
-def test_admin_config_masks_sensitive_values() -> None:
+def test_admin_config_masks_sensitive_values(monkeypatch: pytest.MonkeyPatch) -> None:
+    # memory_llm_key 默认是空串（字段定义：endpoint 无需鉴权时就留空），
+    # 空值不脱敏。不显式给值，本用例只在「本地 .env 恰好配了 key」或
+    # CI 注入了 secrets 的机器上绿 —— 无 .env 的全新 clone（隔离验证
+    # worktree）必红。测试自己给 key，不赌运行环境。
+    from thinkback.infra import config
+
+    monkeypatch.setattr(
+        config,
+        "settings",
+        config.settings.model_copy(update={"memory_llm_key": "sk-unit-test"}),
+    )
+
     client, _service = build_client()
 
     response = client.get("/admin/api/config")
