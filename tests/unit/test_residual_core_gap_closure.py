@@ -28,13 +28,16 @@
 | 位置（符号） | 为什么到不了 |
 | --- | --- |
 | ``service.MemoryService.append`` 里的作用域补齐分支 | append 的两处入口都先过 ``_assert_round_matches_request``，作用域不等会先被 409 拒掉 |
-| ``service.MemoryService._canonical_memory_text_from_source`` | 全仓零调用者（真实路径走 ``_canonical_memory_text_with_source``；只有 ``_index_l3_event`` 的流程图 docstring 提到过它）—— 死委托，建议删 |
 | ``content_quality._score_clarity`` 的 ``length == 0`` 分支 | ``score_content`` / ``intrinsic_quality`` 都先对空白内容短路返回，它收不到空串 |
 | ``content_quality._jaccard`` 的 ``if not union`` 分支 | 两侧皆空已在上一行返回，走到这里的 union 必非空 |
 | ``replica_guard.assert_multi_replica_ready`` 的「前置齐全」分支 | 第一条前置「幂等与限流入 PG」的 ``satisfied`` 恒为 ``False``，永远凑不齐 |
 | ``l2_refresh.L2BackgroundRefresher._finish`` 的 ``pass`` 分支 | ``_run_refresh`` 兜底捕获 ``Exception``，future 不会带异常出来 |
 | ``schemas._validate_metadata_size`` 的 ``value is None`` 分支 | 三个调用点都在调用前先 ``if value is None: return value`` |
 | ``mcp/__main__.py`` 的 ``sys.exit(main())`` | ``if __name__ == "__main__"`` 守卫，进程内导入不可达 |
+
+（另有 ``service.MemoryService._canonical_memory_text_from_source`` 曾经同属死分支，
+已于 ``ca1e300`` 删掉：零调用点的遗留委派，真实路径走
+``_canonical_memory_text_with_source``。）
 """
 
 from __future__ import annotations
