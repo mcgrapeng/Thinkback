@@ -1,13 +1,16 @@
 """Build and render P0 pre-production pressure summaries.
 
-阶段并发与服务自身的**后端并发预算**（``MEMORY_BACKEND_MAX_CONCURRENT_CALLS``，
-默认 4）对齐：召回走的是 mem0 的读路径，读额度就这么多，超出的请求排队，
-延迟门禁（recall p95 ≤ 1500ms）在排队下算术上不可达 —— 实测 10 路并发时
-p95 2163ms，而同一台机器上顺序召回 p95 只要 790ms。
+阶段并发与服务自身的**后端并发预算**对齐：召回走 mem0 的读路径
+（``MEMORY_BACKEND_MAX_CONCURRENT_READS``，默认 8），写入走写路径
+（``MEMORY_BACKEND_MAX_CONCURRENT_WRITES``，默认 4）—— 两把信号量各自
+按 Little's Law 定，超出预算的请求排队。
 
-所以门禁量的是「服务在**配置的操作点**上是否达标」，而不是「超出额度后
-排队多久」。超出额度的容量问题归 k6 那条车道（``make load-smoke``）：那里的
-口径是「压测测的是服务容量，不是限流器」。
+延迟门禁用**自归一化口径**：并发段召回 p95 不得超过同轮顺序基线 p95 的倍数
+（默认 3 倍）。绝对毫秒量的是机器不是服务 —— 同一份代码、同一份配置，在这台
+共享开发机上测出过 p95 894ms 与 1681ms（差 1.9 倍），差的全是宿主机负载。
+
+超出额度的容量问题归 k6 那条车道（``make load-smoke``）：那里的口径是
+「压测测的是服务容量，不是限流器」。
 """
 
 from __future__ import annotations
