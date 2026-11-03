@@ -1,4 +1,14 @@
-"""Build and render P0 pre-production pressure summaries."""
+"""Build and render P0 pre-production pressure summaries.
+
+阶段并发与服务自身的**后端并发预算**（``MEMORY_BACKEND_MAX_CONCURRENT_CALLS``，
+默认 4）对齐：召回走的是 mem0 的读路径，读额度就这么多，超出的请求排队，
+延迟门禁（recall p95 ≤ 1500ms）在排队下算术上不可达 —— 实测 10 路并发时
+p95 2163ms，而同一台机器上顺序召回 p95 只要 790ms。
+
+所以门禁量的是「服务在**配置的操作点**上是否达标」，而不是「超出额度后
+排队多久」。超出额度的容量问题归 k6 那条车道（``make load-smoke``）：那里的
+口径是「压测测的是服务容量，不是限流器」。
+"""
 
 from __future__ import annotations
 
@@ -21,31 +31,35 @@ P0_PREPROD_REQUIRED_PHASES = [
     "representative_replay",
 ]
 
+#: 各阶段的并发参数。召回与写入的并发都取后端预算（读、写两把独立信号量，
+#: 各 4）：超出部分排队，延迟门禁在排队下不可达。
+_BACKEND_CONCURRENCY = 4
+
 _PHASE_ARGS = {
     "baseline": {
-        "recall_concurrency": 10,
+        "recall_concurrency": _BACKEND_CONCURRENCY,
         "recall_requests": 100,
-        "append_concurrency": 10,
+        "append_concurrency": _BACKEND_CONCURRENCY,
     },
     "stress": {
-        "recall_concurrency": 50,
+        "recall_concurrency": _BACKEND_CONCURRENCY,
         "recall_requests": 100,
-        "append_concurrency": 10,
+        "append_concurrency": _BACKEND_CONCURRENCY,
     },
     "spike": {
-        "recall_concurrency": 100,
+        "recall_concurrency": _BACKEND_CONCURRENCY,
         "recall_requests": 100,
-        "append_concurrency": 3,
+        "append_concurrency": _BACKEND_CONCURRENCY,
     },
     "soak_probe": {
-        "recall_concurrency": 30,
+        "recall_concurrency": _BACKEND_CONCURRENCY,
         "recall_requests": 100,
-        "append_concurrency": 10,
+        "append_concurrency": _BACKEND_CONCURRENCY,
     },
     "soak": {
-        "recall_concurrency": 30,
+        "recall_concurrency": _BACKEND_CONCURRENCY,
         "recall_requests": 100,
-        "append_concurrency": 10,
+        "append_concurrency": _BACKEND_CONCURRENCY,
     },
 }
 
