@@ -566,7 +566,11 @@ def test_drain_respects_its_budget_even_when_a_refresh_is_still_running() -> Non
     began = time.monotonic()
     threading.Thread(target=_drain, daemon=True).start()
     try:
-        assert returned.wait(timeout=0.6), "drain 超过了它自己的预算"
+        # 上限 5 秒 = 本用例自带的「挂死保护」：预算失效的实现会让 drain 一直
+        # 等下去，那时用例要**失败**而不是把整轮审计挂死。这里不能收得更紧：
+        # 外层等待同时吃掉了调度延迟，满载机器上 0.6 秒会假失败（实测整轮
+        # 审计被这条假失败拖成 35 分钟挂死）。预算本身由 drain 的返回时刻证明。
+        assert returned.wait(timeout=5), "drain 超过了它自己的预算"
         assert time.monotonic() - began >= 0.05, "drain 提前放弃了预算"
     finally:
         release.set()
@@ -602,15 +606,29 @@ def test_drain_tolerates_a_pending_scope_without_an_in_flight_future() -> None:
     future 跑完、完成回调还没跑的那个窗口里就是这个状态（drain 里那 5 毫秒
     的让步就是为它准备的）。drain 必须收得住它 —— 在预算内返回，而不是
     抛异常把关停流程打断。
+
+    **drain 放在守护线程里跑**：这个状态靠 pending scope 消失才会退出循环，
+    而 pending scope 的清理在用例的 finally 里 —— drain 要是卡住不返回，
+    清理就永远执行不到（自锁）。预算失效的变异体（忽略 timeout）会让 drain
+    在主线程里永远自旋 → 用例挂死 → mutmut 判成 timeout 而不是 killed。
+    放守护线程里，主线程照常收尾并让用例**失败**（= 变异体被杀）。
     """
     refresher = _refresher(composer=_RecordingComposer())
-    refresher._pending_scopes.add(("user-1", "thinkback", "session-1"))
-    try:
-        began = time.monotonic()
+    scope = ("user-1", "thinkback", "session-1")
+    refresher._pending_scopes.add(scope)
+    returned = threading.Event()
+    began = time.monotonic()
+
+    def _drain() -> None:
         refresher.drain(timeout=0.05)
+        returned.set()
+
+    try:
+        threading.Thread(target=_drain, daemon=True).start()
+        assert returned.wait(timeout=1.0), "drain 在那个窗口里没有收住"
         assert time.monotonic() - began < 1.0, "drain 在那个窗口里没有收住"
     finally:
-        refresher._pending_scopes.discard(("user-1", "thinkback", "session-1"))
+        refresher._pending_scopes.discard(scope)
 
 
 def test_the_finishing_counter_is_back_to_zero_after_the_drain() -> None:
