@@ -948,11 +948,16 @@ def test_pressure_suite_report_fails_when_any_gate_fails() -> None:
 
 
 def test_pressure_suite_report_applies_recall_latency_gates() -> None:
+    """延迟门禁按相对口径判：并发段 p95 超过同轮顺序基线的倍数才算失败。
+
+    场景里顺序基线 p95=500ms、并发段 3519ms（7.04 倍）、post_delete 1700ms
+    （3.4 倍）—— 都超过 3 倍门限，两段都该红。
+    """
     report = build_pressure_suite_report(
         suite_id="suite-1",
         started_at="2026-05-07T10:00:00Z",
         ended_at="2026-05-07T10:05:00Z",
-        config={"recall_p95_gate_ms": 1500, "recall_p99_gate_ms": 3000},
+        config={"recall_ratio_gate": 3.0},
         quality_report={
             "passed": True,
             "case_pass_rate": 1.0,
@@ -989,21 +994,19 @@ def test_pressure_suite_report_applies_recall_latency_gates() -> None:
     assert report["latency_gate_failures"] == [
         {
             "section": "concurrent_recall",
-            "metric": "recall.p95",
-            "actual": 3519,
-            "expected": "<= 1500",
-        },
-        {
-            "section": "concurrent_recall",
-            "metric": "recall.p99",
-            "actual": 3519,
-            "expected": "<= 3000",
+            "metric": "recall.p95 / 顺序基线 p95",
+            "actual": 7.04,
+            "expected": "<= 3.0",
+            "baseline_p95_ms": 500,
+            "actual_p95_ms": 3519,
         },
         {
             "section": "post_delete",
-            "metric": "recall.p95",
-            "actual": 1700,
-            "expected": "<= 1500",
+            "metric": "recall.p95 / 顺序基线 p95",
+            "actual": 3.4,
+            "expected": "<= 3.0",
+            "baseline_p95_ms": 500,
+            "actual_p95_ms": 1700,
         },
     ]
 
@@ -1071,9 +1074,11 @@ def test_final_pressure_report_keeps_stress_latency_failure_visible(tmp_path) ->
     stress_report["latency_gate_failures"] = [
         {
             "section": "concurrent_recall",
-            "metric": "recall.p95",
-            "actual": 1808,
-            "expected": "<= 1500",
+            "metric": "recall.p95 / 顺序基线 p95",
+            "actual": 3.62,
+            "expected": "<= 3.0",
+            "baseline_p95_ms": 500,
+            "actual_p95_ms": 1808,
         }
     ]
     stress_report["concurrent_recall"]["latency_ms"]["recall"]["p95"] = 1808
