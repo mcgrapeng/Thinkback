@@ -23,7 +23,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Literal
 
-from thinkback.domain.enums import DataClassification
+from thinkback.domain.enums import DataClassification, MessageRole
 
 Extractor = Literal["mem0", "none"]
 Conflict = Literal["overwrite", "append", "none"]
@@ -312,6 +312,17 @@ def registry_from_dict(
             or not all(isinstance(role, str) and role.strip() for role in source_roles)
         ):
             raise ValueError(f"{where}: 'source_roles' must be a non-empty list of role names")
+
+        # 角色名必须是 MessageRole 的合法取值。准入判定是「消息角色 ∈
+        # source_roles」，角色名写错 → 永远匹配不上任何消息 → 该类型静默地
+        # 什么都抽不出来。配置其余部分一律 fail-visible，这里也一样。
+        known_roles = {role.value for role in MessageRole}
+        unknown_roles = [role for role in source_roles if role not in known_roles]
+        if unknown_roles:
+            raise ValueError(
+                f"{where}: 'source_roles' contains unknown role(s) {sorted(unknown_roles)}; "
+                f"expected one of {sorted(known_roles)}"
+            )
 
         review_required = bool(raw.get("review_required", False))
         if review_required and "user" in source_roles:

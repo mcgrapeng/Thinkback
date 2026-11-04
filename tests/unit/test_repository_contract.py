@@ -85,12 +85,18 @@ def repository(request: pytest.FixtureRequest, tmp_path: Path):  # type: ignore[
     try:
         yield repo
     finally:
-        repo.close()
-
+        # 收尾顺序必须是**先 dispose 引擎、再关仓储的事件循环**：
+        # aiosqlite 的 worker 线程要把结果投递回它创建时所在的那个循环
+        # （仓储的 worker loop）。先关 loop 再 dispose 引擎，投递就撞上
+        # 已关的循环 → "Event loop is closed" 的 unraisable 异常，pytest
+        # 把它记成**下一条**用例的 ERROR（看着像 flaky，其实是自己收尾
+        # 顺序错了）。同一个道理见
+        # ``tests/unit/test_sqlalchemy_repository_branches.py`` 的 ``_dispose``。
         async def _dispose() -> None:
             await engine.dispose()
 
         asyncio.run(_dispose())
+        repo.close()
 
 
 @pytest.fixture()

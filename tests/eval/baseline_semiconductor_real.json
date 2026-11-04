@@ -53,6 +53,8 @@
     "case_semi_customer_8d_request",
     "case_semi_customer_root_cause_deadline",
     "case_semi_correction_records_new_value",
+    "case_semi_two_rounds_same_attribute_updates_in_place",
+    "case_semi_two_rounds_accumulate_two_attributes",
     "case_semi_assistant_number_not_user_fact",
     "case_semi_two_facts_in_one_message",
     "case_semi_ttl_state_has_ttl",

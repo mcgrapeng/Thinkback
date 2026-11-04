@@ -414,7 +414,7 @@ def test_registry_rejects_reviewed_type_accepting_user_role() -> None:
                 "types": {
                     "procedure": {
                         "extractor": "none",
-                        "source_roles": ["user", "admin"],
+                        "source_roles": ["user", "tool"],
                         "conflict": "none",
                         "retention": "forever",
                         "classification": "restricted",

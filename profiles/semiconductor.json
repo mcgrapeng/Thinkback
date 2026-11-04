@@ -106,7 +106,7 @@
     "procedure": {
       "extractor": "none",
       "source_roles": [
-        "admin"
+        "system"
       ],
       "conflict": "none",
       "retention": "forever",

@@ -146,10 +146,24 @@ def _settle(repository: SqlAlchemyMemoryRepository) -> None:
     closed" 的 unraisable 异常，pytest 把它记成**下一条**用例的 ERROR
     （看着像 flaky，其实是自己收尾太快）。先醒一次，这些取消就在 loop 还
     活着时被处理掉。
+
+    **必须等它真的跑起来**，不能用 ``repository._run`` 提交：``_run`` 走的是
+    仓储的操作超时（``fast_timeout_repository`` 夹具里只有 0.05s），而循环
+    此刻可能正被 ``_occupy_loop`` 卡住（超时用例就是故意这么造的）——
+    唤醒请求排在阻塞后面跑不到，``_run`` 先超时返回，唤醒**根本没发生**；
+    紧接着 ``close()`` 关掉循环，那个悬着的协程就被销毁 → pytest 记成
+    "Task was destroyed but it is pending"。
+
+    所以这里直接提交并**等它完成**：给足时间，让唤醒在循环空出来之后真正
+    执行一次。循环已关时 ``run_coroutine_threadsafe`` 抛 RuntimeError，
+    由 ``suppress`` 兜住（那时没什么可等的）。
     """
 
     with suppress(Exception):  # loop 已停/已关时没什么可等的
-        repository._run(asyncio.sleep(0))  # noqa: SLF001
+        asyncio.run_coroutine_threadsafe(
+            asyncio.sleep(0),
+            repository._loop,  # noqa: SLF001
+        ).result(timeout=5.0)
 
 
 def _occupy_loop(repository: SqlAlchemyMemoryRepository, *, seconds: float) -> None:

@@ -15,6 +15,7 @@
 
 from __future__ import annotations
 
+import ast
 import os
 import re
 from pathlib import Path
@@ -96,3 +97,89 @@ def test_the_fake_only_evaluation_scripts_stay_untouched() -> None:
     source = (SCRIPT_DIR / "run_self_contained_evaluation.py").read_text(encoding="utf-8")
 
     assert "disable_env_proxy" not in source
+
+
+def _module_level_call_lines(source: str) -> list[int]:
+    """模块级（顶层）执行到的调用语句行号。
+
+    只看**顶层**语句：模块级执行的语句是按行顺序跑的，所以「先调用、
+    后 import」＝ 那个名字在调用那一刻还没绑定 → NameError。
+    函数体里的调用不在此列 —— 它在函数被调用时才执行。
+    """
+    tree = ast.parse(source)
+    lines: list[int] = []
+    for node in tree.body:
+        if isinstance(node, (ast.Import, ast.ImportFrom, ast.ClassDef, ast.FunctionDef)):
+            continue
+        if isinstance(node, ast.Expr) and isinstance(node.value, ast.Call):
+            lines.append(node.lineno)
+    return lines
+
+
+def test_every_script_binds_disable_env_proxy_before_calling_it() -> None:
+    """调用 ``disable_env_proxy()`` 之前，那个名字必须已经 import 好。
+
+    上一轮（2026-11-04，提交 3d88788）把内联的代理清理收敛到
+    ``thinkback.infra.net_env.disable_env_proxy()`` 时，三个脚本把
+    ``from thinkback.infra.net_env import disable_env_proxy`` 放在了
+    **模块级调用之后**：
+
+        def _prepare_environment() -> None:
+            ...
+            disable_env_proxy()      # ← 调用
+
+        _prepare_environment()       # ← 模块级执行到这里
+
+        from thinkback.infra.net_env import disable_env_proxy  # ← import 在这之后
+
+    Python 在模块级执行到 ``_prepare_environment()`` 那一刻，函数体里的
+    ``disable_env_proxy`` 还没绑定 → **NameError，脚本起不来，退出码 1**。
+
+    受影响的是三个真实栈脚本：``gate_real.py``（真实栈门禁）、
+    ``eval_prompt_ab.py``、``eval/run_semiconductor_evaluation.py``
+    （``make eval`` 跑它 → ``make check`` 跟着红）。
+
+    为什么之前没被发现：``test_every_script_that_touches_the_stack_disables_the_env_proxy``
+    只检查「源码里出现过 ``disable_env_proxy`` 这个字符串」，
+    看不到 import 的**位置**。字符串在 ≠ 名字在调用那一刻已绑定。
+    """
+    offenders: list[str] = []
+    for path in _scripts():
+        source = path.read_text(encoding="utf-8")
+        if "disable_env_proxy" not in source:
+            continue
+
+        tree = ast.parse(source)
+        # 绑定的位置：顶层 import 语句行号
+        import_lines = [
+            node.lineno
+            for node in tree.body
+            if isinstance(node, (ast.Import, ast.ImportFrom))
+            and any(alias.name == "disable_env_proxy" for alias in node.names)
+        ]
+        if not import_lines:
+            offenders.append(f"{path.relative_to(SCRIPT_DIR)}: 没有 import disable_env_proxy")
+            continue
+
+        # 调用的位置：函数定义体里的调用 + 模块级执行的调用
+        call_lines: list[int] = []
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id == "disable_env_proxy"
+            ):
+                call_lines.append(node.lineno)
+        call_lines.extend(_module_level_call_lines(source))
+
+        earliest_import = min(import_lines)
+        late = [line for line in call_lines if line < earliest_import]
+        if late:
+            offenders.append(
+                f"{path.relative_to(SCRIPT_DIR)}: 调用在第 {sorted(late)} 行，"
+                f"import 在第 {earliest_import} 行"
+            )
+
+    assert offenders == [], (
+        "disable_env_proxy 在 import 之前就被调用了（NameError）：\n" + "\n".join(offenders)
+    )

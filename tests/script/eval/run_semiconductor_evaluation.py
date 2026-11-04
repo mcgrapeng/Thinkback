@@ -49,6 +49,14 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+# 代理清理必须在模块级调用之前就 import 好：``_prepare_environment()`` 在
+# 模块级被调用，而函数体里的名字在调用那一刻就要求已绑定 —— import 写在
+# 调用之后会得到 NameError（脚本直接起不来，退出码 1）。
+#
+# ``thinkback.infra.net_env`` 不构造 Settings、不 import mem0，
+# 所以提前 import 它不会破坏「先读凭据再建 Settings」的顺序。
+from thinkback.infra.net_env import disable_env_proxy
+
 
 def _prepare_environment() -> None:
     """先读凭据、再清代理 —— 必须在导入 thinkback 之前。
@@ -73,7 +81,6 @@ def _prepare_environment() -> None:
 
 _prepare_environment()
 
-from thinkback.infra.net_env import disable_env_proxy  # noqa: E402
 from thinkback.memory.schemas import (  # noqa: E402
     AppendMemoryRequest,
     MemoryMessage,
@@ -250,6 +257,26 @@ def _make_service(real: bool, repository: Any = None) -> tuple[Any, Any, Any]:
     return service, backend, repository
 
 
+def _case_metadata(case: dict[str, Any]) -> dict[str, Any]:
+    """用例声明的记忆类型 → 写入时的 metadata。
+
+    垂类的每个类型有**自己的抽取指令**，指令里有一份属性名清单（见
+    ``profiles/prompts/semiconductor/*.md``）。落回默认的 ``profile`` 类型
+    时，指令的清单只有「负责角色 / 负责产线 / 负责工序段 / 所属团队」
+    四条 —— 语料里的机台、良率、客户要求这些事实不在清单里，抽不出来。
+
+    所以用例必须声明自己验的是哪个类型：``memory_type`` 字段由语料作者
+    按语义指定。**这个字段此前被静默丢弃**（runner 只在 ``reject_type``
+    与 ``ttl_expiration`` 两种 kind 里用它），于是 35 条 recall 用例全部
+    落回默认类型 —— 真实栈实测 22.5% 通过率（自包含模式 100%，因为假
+    后端不抽取，掩盖了这个问题）。
+
+    没声明 ``memory_type`` 的用例仍然走默认类型（保持旧语料的行为）。
+    """
+    memory_type = case.get("memory_type")
+    return {"memory_type": str(memory_type)} if memory_type else {}
+
+
 def _run_recall_case(
     case: dict[str, Any],
     namespace: str,
@@ -261,6 +288,7 @@ def _run_recall_case(
     started = time.perf_counter()
     service, _backend, service_repository = _make_service(real, repository)
     events: list[Any] = []
+    metadata = _case_metadata(case)
     for index, round_data in enumerate(case["rounds"]):
         events.extend(
             _append(
@@ -270,6 +298,7 @@ def _run_recall_case(
                 user_text=round_data["user"],
                 assistant_text=round_data["assistant"],
                 user_id=user_id,
+                metadata=metadata or None,
             )
         )
     texts = _recall_texts(service, namespace=namespace, query=case["query"], user_id=user_id)
@@ -309,6 +338,7 @@ def _run_namespace_isolation_case(
     started = time.perf_counter()
     service, _backend, service_repository = _make_service(real, repository)
     events: list[Any] = []
+    metadata = _case_metadata(case)
     for index, round_data in enumerate(case["rounds"]):
         events.extend(
             _append(
@@ -318,6 +348,7 @@ def _run_namespace_isolation_case(
                 user_text=round_data["user"],
                 assistant_text=round_data["assistant"],
                 user_id=user_id,
+                metadata=metadata or None,
             )
         )
     scoped = _recall_texts(service, namespace=namespace, query=case["query"], user_id=user_id)

@@ -25,6 +25,14 @@ from uuid import uuid4
 
 from dotenv import load_dotenv
 
+# 代理清理必须在模块级调用之前就 import 好：``_prepare_environment()`` 在
+# 模块级被调用，而函数体里的名字在调用那一刻就要求已绑定 —— import 写在
+# 调用之后会得到 NameError（脚本直接起不来，退出码 1）。
+#
+# ``thinkback.infra.net_env`` 不构造 Settings、不 import mem0，
+# 所以提前 import 它不会破坏「先读凭据再建 Settings」的顺序。
+from thinkback.infra.net_env import disable_env_proxy
+
 
 def _prepare_environment(env_file: str | None) -> None:
     """先读凭据、再清代理。Settings 在导入时构造，晚了就来不及。"""
@@ -41,7 +49,6 @@ from thinkback.api.dependencies import get_memory_backend  # noqa: E402
 from thinkback.domain.prompts import DEFAULT_EXTRACTION_INSTRUCTIONS  # noqa: E402
 from thinkback.infra.config import get_settings  # noqa: E402
 from thinkback.infra.milvus_collection import eval_settings  # noqa: E402
-from thinkback.infra.net_env import disable_env_proxy  # noqa: E402
 
 CORPUS_PATH = Path("tests/eval/semiconductor_cases.json")
 

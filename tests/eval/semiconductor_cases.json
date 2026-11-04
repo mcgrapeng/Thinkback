@@ -6,6 +6,7 @@
       "name": "case_semi_process_node_and_stage",
       "category": "工艺咨询",
       "kind": "recall",
+      "memory_type": "profile",
       "query": "用户负责的工艺节点和工序段是什么？",
       "expected_terms": [
         "28nm",
@@ -23,6 +24,7 @@
       "name": "case_semi_lithography_generation",
       "category": "工艺咨询",
       "kind": "recall",
+      "memory_type": "process_preference",
       "query": "用户产线用的光刻波长和对应工艺节点是什么？",
       "expected_terms": [
         "193nm",
@@ -40,6 +42,7 @@
       "name": "case_semi_device_architecture_preference",
       "category": "工艺咨询",
       "kind": "recall",
+      "memory_type": "process_preference",
       "query": "用户在先进节点上的器件架构倾向是什么？",
       "expected_terms": [
         "GAA"
@@ -56,6 +59,7 @@
       "name": "case_semi_euv_tool_vendor",
       "category": "设备选型",
       "kind": "recall",
+      "memory_type": "process_preference",
       "query": "用户评估的 EUV 机台厂商和型号是什么？",
       "expected_terms": [
         "ASML"
@@ -72,6 +76,7 @@
       "name": "case_semi_etch_and_metrology_vendors",
       "category": "设备选型",
       "kind": "recall",
+      "memory_type": "equipment_context",
       "query": "用户用的刻蚀和量测设备厂商分别是什么？",
       "expected_terms": [
         "TEL",
@@ -89,6 +94,7 @@
       "name": "case_semi_tool_selection_constraint",
       "category": "设备选型",
       "kind": "recall",
+      "memory_type": "event",
       "query": "用户选机时的硬约束是什么？",
       "expected_terms": [
         "交付周期"
@@ -105,6 +111,7 @@
       "name": "case_semi_yield_loss_defect_type",
       "category": "良率分析",
       "kind": "recall",
+      "memory_type": "process_preference",
       "query": "用户良率卡在哪个工序，缺陷类型是什么？",
       "expected_terms": [
         "CMP",
@@ -122,6 +129,7 @@
       "name": "case_semi_spc_control_method",
       "category": "良率分析",
       "kind": "recall",
+      "memory_type": "state",
       "query": "用户用什么方法管控关键尺寸，套刻精度要求是多少？",
       "expected_terms": [
         "SPC",
@@ -139,6 +147,7 @@
       "name": "case_semi_yield_target_and_current",
       "category": "良率分析",
       "kind": "recall",
+      "memory_type": "state",
       "query": "用户产线的良率目标和当前值是什么？",
       "expected_terms": [
         "99.5%",
@@ -156,6 +165,7 @@
       "name": "case_semi_customer_reliability_requirement",
       "category": "客户支持",
       "kind": "recall",
+      "memory_type": "commitment",
       "query": "用户的客户对可靠性有什么要求？",
       "expected_terms": [
         "车规",
@@ -173,6 +183,7 @@
       "name": "case_semi_customer_product_context",
       "category": "客户支持",
       "kind": "recall",
+      "memory_type": "event",
       "query": "客户的产品节点和良率要求是什么？",
       "expected_terms": [
         "7nm"
@@ -189,6 +200,7 @@
       "name": "case_semi_support_escalation_issue",
       "category": "客户支持",
       "kind": "recall",
+      "memory_type": "event",
       "query": "客户提出的问题和时限要求是什么？",
       "expected_terms": [
         "批次一致性"
@@ -221,6 +233,7 @@
       "name": "case_semi_assistant_not_user_fact",
       "category": "垂类机制",
       "kind": "recall",
+      "memory_type": "profile",
       "query": "用户用什么光刻方案？",
       "expected_terms": [],
       "forbidden_terms": [
@@ -267,6 +280,7 @@
       "name": "case_semi_litho_resolution_limit",
       "category": "工艺咨询",
       "kind": "recall",
+      "memory_type": "process_preference",
       "query": "用户产线用的是什么波长的光刻，分辨率极限是多少？",
       "expected_terms": [
         "193nm",
@@ -284,6 +298,7 @@
       "name": "case_semi_etch_gas_recipe",
       "category": "工艺咨询",
       "kind": "recall",
+      "memory_type": "process_preference",
       "query": "刻蚀用的气体和配比是什么？",
       "expected_terms": [
         "CF4",
@@ -301,6 +316,7 @@
       "name": "case_semi_cvd_temperature",
       "category": "工艺咨询",
       "kind": "recall",
+      "memory_type": "process_preference",
       "query": "沉铜工序的温度是多少？",
       "expected_terms": [
         "250℃"
@@ -317,6 +333,7 @@
       "name": "case_semi_interconnect_stack",
       "category": "工艺咨询",
       "kind": "recall",
+      "memory_type": "process_preference",
       "query": "用户的 IO 层互连材料和厚度是什么？",
       "expected_terms": [
         "铜互连",
@@ -334,6 +351,7 @@
       "name": "case_semi_clean_sequence",
       "category": "工艺咨询",
       "kind": "recall",
+      "memory_type": "state",
       "query": "出货前的清洗工序是怎么排的？",
       "expected_terms": [
         "RCA"
@@ -350,6 +368,7 @@
       "name": "case_semi_pvd_vendor",
       "category": "设备选型",
       "kind": "recall",
+      "memory_type": "process_preference",
       "query": "用户在评估哪家的 PVD 设备？",
       "expected_terms": [
         "AMAT",
@@ -367,6 +386,7 @@
       "name": "case_semi_overlay_tool_model",
       "category": "设备选型",
       "kind": "recall",
+      "memory_type": "process_preference",
       "query": "用户量套刻用的是哪台设备？",
       "expected_terms": [
         "Archer 600"
@@ -383,6 +403,7 @@
       "name": "case_semi_tool_lead_time_constraint",
       "category": "设备选型",
       "kind": "recall",
+      "memory_type": "process_preference",
       "query": "扩产时的机台交期约束是多少？",
       "expected_terms": [
         "9 个月"
@@ -399,6 +420,7 @@
       "name": "case_semi_implant_tool_candidate",
       "category": "设备选型",
       "kind": "recall",
+      "memory_type": "process_preference",
       "query": "用户在评估哪款离子注入设备？",
       "expected_terms": [
         "AX-28"
@@ -415,6 +437,7 @@
       "name": "case_semi_cost_target",
       "category": "设备选型",
       "kind": "recall",
+      "memory_type": "process_preference",
       "query": "用户对单片成本的目标是多少？",
       "expected_terms": [
         "3000 美元"
@@ -431,6 +454,7 @@
       "name": "case_semi_edge_defect_signature",
       "category": "良率分析",
       "kind": "recall",
+      "memory_type": "process_preference",
       "query": "这次良率下滑的缺陷特征是什么？",
       "expected_terms": [
         "edge dark"
@@ -447,6 +471,7 @@
       "name": "case_semi_film_thickness_measurement",
       "category": "良率分析",
       "kind": "recall",
+      "memory_type": "state",
       "query": "膜厚实测值和目标值分别是多少？",
       "expected_terms": [
         "1200Å"
@@ -463,6 +488,7 @@
       "name": "case_semi_cmp_pressure_window",
       "category": "良率分析",
       "kind": "recall",
+      "memory_type": "process_preference",
       "query": "CMP 的压力窗口是多少？",
       "expected_terms": [
         "1.5",
@@ -480,6 +506,7 @@
       "name": "case_semi_spc_control_limit",
       "category": "良率分析",
       "kind": "recall",
+      "memory_type": "process_preference",
       "query": "关键尺寸的 SPC 控制限和当前能力指数是多少？",
       "expected_terms": [
         "CPK",
@@ -497,6 +524,7 @@
       "name": "case_semi_dishing_root_cause",
       "category": "良率分析",
       "kind": "recall",
+      "memory_type": "process_preference",
       "query": "良率瓶颈的根因是什么？",
       "expected_terms": [
         "dishing"
@@ -513,6 +541,7 @@
       "name": "case_semi_customer_iatf_requirement",
       "category": "客户支持",
       "kind": "recall",
+      "memory_type": "event",
       "query": "客户要求提供什么体系认证？",
       "expected_terms": [
         "IATF 16949"
@@ -529,6 +558,7 @@
       "name": "case_semi_customer_capacity_commitment",
       "category": "客户支持",
       "kind": "recall",
+      "memory_type": "commitment",
       "query": "客户对明年产能的预期是什么？",
       "expected_terms": [
         "翻倍"
@@ -545,6 +575,7 @@
       "name": "case_semi_customer_8d_request",
       "category": "客户支持",
       "kind": "recall",
+      "memory_type": "event",
       "query": "客户要求提交什么形式的报告？",
       "expected_terms": [
         "8D"
@@ -561,6 +592,7 @@
       "name": "case_semi_customer_root_cause_deadline",
       "category": "客户支持",
       "kind": "recall",
+      "memory_type": "commitment",
       "query": "客户要求什么时候之前给出根因？",
       "expected_terms": [
         "下周三"
@@ -577,6 +609,7 @@
       "name": "case_semi_correction_records_new_value",
       "category": "垂类机制",
       "kind": "recall",
+      "memory_type": "process_preference",
       "query": "用户负责的工艺节点是什么？",
       "expected_terms": [
         "28nm"
@@ -586,8 +619,57 @@
       ],
       "rounds": [
         {
-          "user": "我们的线宽工艺节点改成 28nm 了。",
+          "user": "制程节点：45nm",
+          "assistant": "收到。"
+        },
+        {
+          "user": "制程节点：28nm",
           "assistant": "已更新。"
+        }
+      ]
+    },
+    {
+      "name": "case_semi_two_rounds_same_attribute_updates_in_place",
+      "category": "垂类机制",
+      "kind": "recall",
+      "memory_type": "process_preference",
+      "query": "用户负责的工艺节点是什么？",
+      "expected_terms": [
+        "28nm"
+      ],
+      "forbidden_terms": [
+        "45nm"
+      ],
+      "rounds": [
+        {
+          "user": "制程节点：45nm",
+          "assistant": "收到。"
+        },
+        {
+          "user": "制程节点：28nm",
+          "assistant": "已更新。"
+        }
+      ]
+    },
+    {
+      "name": "case_semi_two_rounds_accumulate_two_attributes",
+      "category": "垂类机制",
+      "kind": "recall",
+      "memory_type": "process_preference",
+      "query": "用户负责的机台和工序段是什么？",
+      "expected_terms": [
+        "ASML",
+        "CMP"
+      ],
+      "forbidden_terms": [],
+      "rounds": [
+        {
+          "user": "负责工序段：前道 CMP",
+          "assistant": "收到。"
+        },
+        {
+          "user": "常用机台：ASML EUV",
+          "assistant": "好的。"
         }
       ]
     },
@@ -595,6 +677,7 @@
       "name": "case_semi_assistant_number_not_user_fact",
       "category": "垂类机制",
       "kind": "recall",
+      "memory_type": "process_preference",
       "query": "用户的封装产能安排是什么？",
       "expected_terms": [],
       "forbidden_terms": [
@@ -611,6 +694,7 @@
       "name": "case_semi_two_facts_in_one_message",
       "category": "垂类机制",
       "kind": "recall",
+      "memory_type": "process_preference",
       "query": "用户外延工序用什么设备和多厚的层？",
       "expected_terms": [
         "MOCVD",
