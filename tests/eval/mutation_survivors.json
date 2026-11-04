@@ -14,6 +14,7 @@
     "thinkback.domain.content_quality.x__jaccard__mutmut_1": "等价变异（实测）：单侧为空时正常路径算出 0/|S|=0.0，与 or 组合的提前返回同值；两侧皆空两分支同返 0.0。把 and 改 or，全部用例仍绿。",
     "thinkback.domain.content_quality.x__jaccard__mutmut_2": "等价变异（实测）：left 非空 right 为空时分支返回 0.0，与正常路径 0/|left| = 0.0 同值，组合方式不可观测。",
     "thinkback.domain.content_quality.x__jaccard__mutmut_3": "等价变异（实测）：left 为空 right 非空时分支返回 0.0，与正常路径 0/|right| = 0.0 同值，组合方式不可观测。",
+    "thinkback.domain.content_quality.x__jaccard__mutmut_8": "等价变异（实测）：该 return 在 `if not union` 死分支上 —— 前面 `not left and not right` 已返回，走到这里至少一侧非空，union 必非空。把该处 0.0 改 1.0，content_quality 全部 60 条用例仍绿（两侧皆空那条活分支的 0.0 由 test_jaccard_of_two_empty_sets_is_zero_not_one 钉死）。",
     "thinkback.domain.content_quality.x__score_clarity__mutmut_10": "覆盖缺口：扣分原因的**文案**没被逐字钉死 —— 文案只把「为什么扣分」讲给人听。",
     "thinkback.domain.content_quality.x__score_clarity__mutmut_11": "覆盖缺口：扣分原因的**文案**没被逐字钉死 —— 文案只把「为什么扣分」讲给人听。",
     "thinkback.domain.content_quality.x__score_clarity__mutmut_12": "覆盖缺口：扣分原因的**文案**没被逐字钉死 —— 文案只把「为什么扣分」讲给人听。",
@@ -333,7 +334,9 @@
     "thinkback.memory.l3.xǁL3WriteExecutorǁrelease_write_slot__mutmut_13": "覆盖缺口：日志文案/字段随调优变动，不影响行为（刻意不钉死）。",
     "thinkback.memory.l3.xǁL3WriteExecutorǁrelease_write_slot__mutmut_6": "覆盖缺口：pending 这个日志字段的值未断言（只进日志，不影响行为）。",
     "thinkback.memory.l3.xǁL3WriteExecutorǁrelease_write_slot__mutmut_7": "覆盖缺口：日志文案/字段随调优变动，不影响行为（刻意不钉死）。",
+    "thinkback.memory.l3.xǁL3WriteExecutorǁrelease_write_slot__mutmut_8": "覆盖缺口：pending 这个日志字段的值未断言（只进日志，不影响行为）。",
     "thinkback.memory.l3.xǁL3WriteExecutorǁrelease_write_slot__mutmut_9": "覆盖缺口：日志文案/字段随调优变动，不影响行为（刻意不钉死）。",
+    "thinkback.memory.l3.xǁL3WriteExecutorǁreserve_write_slot__mutmut_10": "覆盖缺口：pending 这个日志字段的值未断言（只进日志，不影响行为）。",
     "thinkback.memory.l3.xǁL3WriteExecutorǁreserve_write_slot__mutmut_11": "覆盖缺口：日志文案/字段随调优变动，不影响行为（刻意不钉死）。",
     "thinkback.memory.l3.xǁL3WriteExecutorǁreserve_write_slot__mutmut_12": "覆盖缺口：日志文案/字段随调优变动，不影响行为（刻意不钉死）。",
     "thinkback.memory.l3.xǁL3WriteExecutorǁreserve_write_slot__mutmut_13": "覆盖缺口：日志文案/字段随调优变动，不影响行为（刻意不钉死）。",
@@ -367,10 +370,10 @@
     "thinkback.rpc.ratelimit.x_peer_address__mutmut_15": "等价变异：`address if separator and address else peer` 里的 `and` 改成 `or` —— address 为空时 separator 必为空（rpartition 找不到冒号时两个都空），两种写法都回落到 peer。",
     "thinkback.rpc.ratelimit.xǁGrpcRateLimiterǁ__init____mutmut_18": "覆盖缺口：这段文案（错误说明 / 前置条件的 detail）没被钉死 —— 文案本身不影响行为（它只是把「缺了会出什么事」讲给人听）。",
     "thinkback.rpc.ratelimit.xǁGrpcRateLimiterǁ__init____mutmut_2": "等价变异（死赋值）：`self.rate_limit_per_minute` 从来没被读过 —— 只用构造参数建桶，这个属性只是把参数又存了一份。",
-    "thinkback.rpc.ratelimit.xǁGrpcRateLimiterǁ__init____mutmut_3": "等价变异（死赋值）：`self.burst` 从来没被读过 —— 只用构造参数建桶，这个属性只是把参数又存了一份。",
-    "thinkback.domain.content_quality.x__jaccard__mutmut_8": "等价变异（实测）：该 return 在 `if not union` 死分支上 —— 前面 `not left and not right` 已返回，走到这里至少一侧非空，union 必非空。把该处 0.0 改 1.0，content_quality 全部 60 条用例仍绿（两侧皆空那条活分支的 0.0 由 test_jaccard_of_two_empty_sets_is_zero_not_one 钉死）。"
+    "thinkback.rpc.ratelimit.xǁGrpcRateLimiterǁ__init____mutmut_3": "等价变异（死赋值）：`self.burst` 从来没被读过 —— 只用构造参数建桶，这个属性只是把参数又存了一份。"
   },
   "accepted_no_tests": {},
   "accepted_timeouts": {},
-  "accepted_other": {}
+  "accepted_other": {},
+  "count": 369
 }
