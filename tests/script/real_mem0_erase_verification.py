@@ -17,7 +17,6 @@ fake 后端没有这些面，测不到。
 
 from __future__ import annotations
 
-import os
 import sqlite3
 import sys
 from pathlib import Path
@@ -29,6 +28,7 @@ from thinkback.api.dependencies import get_memory_backend
 from thinkback.infra.config import Settings
 from thinkback.infra.milvus import ensure_milvus_database
 from thinkback.infra.milvus_collection import eval_settings
+from thinkback.infra.net_env import disable_env_proxy
 from thinkback.memory.repositories import SqlAlchemyMemoryRepository
 from thinkback.memory.schemas import (
     AppendMemoryRequest,
@@ -103,15 +103,7 @@ def main() -> int:
     load_dotenv()
     # 本机装了个人 SOCKS 代理（HTTP_PROXY / ALL_PROXY）：会把对内网网关的请求
     # 劫持走，SOCKS 还会因为缺 socksio 直接构造失败。生产 pod 没有这些变量。
-    for proxy_var in (
-        "HTTP_PROXY",
-        "HTTPS_PROXY",
-        "ALL_PROXY",
-        "http_proxy",
-        "https_proxy",
-        "all_proxy",
-    ):
-        os.environ.pop(proxy_var, None)
+    disable_env_proxy()
     settings = eval_settings(Settings())
     history_db_path = settings.mem0_history_db_path
     run_id = uuid4().hex[:10]

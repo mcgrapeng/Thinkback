@@ -19,6 +19,8 @@ from uuid import uuid4
 
 from dotenv import dotenv_values
 
+from thinkback.infra.net_env import disable_env_proxy
+
 
 @dataclass(frozen=True)
 class FaultScenarioSpec:
@@ -367,6 +369,7 @@ def _parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
+    disable_env_proxy()
     args = _parse_args()
     report = run_readiness_fault_injection(
         output_dir=Path(args.output_dir),

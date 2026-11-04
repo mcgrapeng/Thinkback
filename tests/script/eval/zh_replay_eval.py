@@ -28,6 +28,8 @@ from typing import Any
 
 import httpx
 
+from thinkback.infra.net_env import disable_env_proxy
+
 
 @dataclass
 class Question:
@@ -164,6 +166,7 @@ def _percentile(values: list[float], ratio: float) -> float:
 
 
 def main() -> int:
+    disable_env_proxy()
     parser = argparse.ArgumentParser()
     parser.add_argument("--base", default="http://127.0.0.1:8000")
     args = parser.parse_args()

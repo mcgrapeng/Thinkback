@@ -34,6 +34,7 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+from thinkback.infra.net_env import disable_env_proxy
 from thinkback.memory.backends import FakeMemoryBackend
 from thinkback.memory.repositories import InMemoryMemoryRepository
 from thinkback.memory.schemas import (
@@ -1330,6 +1331,7 @@ def render_markdown(run_id: str, agg: dict[str, Any], results: list[Result]) -> 
 
 
 def main(argv: list[str]) -> int:
+    disable_env_proxy()
     run_id = f"prd-{datetime.now(UTC).strftime('%Y%m%d-%H%M%S')}-{uuid4().hex[:6]}"
     cases = _build_registry()
     results: list[Result] = []

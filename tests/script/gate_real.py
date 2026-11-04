@@ -30,7 +30,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import re
 import sqlite3
 import subprocess
@@ -62,18 +61,8 @@ def _prepare_environment() -> None:
         if not env_file:
             raise SystemExit("--env-file 需要一个路径")
     load_dotenv(env_file)
-    for key in (
-        "HTTP_PROXY",
-        "HTTPS_PROXY",
-        "ALL_PROXY",
-        "http_proxy",
-        "https_proxy",
-        "all_proxy",
-    ):
-        os.environ.pop(key, None)
     # mac 本地代理会劫持内网 httpx（LLM/embedding 端点在 10.x 网段）。
-    os.environ["NO_PROXY"] = "*"
-    os.environ["no_proxy"] = "*"
+    disable_env_proxy()
 
 
 _prepare_environment()
@@ -82,6 +71,7 @@ from thinkback.api.dependencies import build_registry_provider, get_memory_backe
 from thinkback.domain.enums import MemoryStatus  # noqa: E402
 from thinkback.infra.config import Settings, get_settings  # noqa: E402
 from thinkback.infra.milvus import ensure_milvus_database  # noqa: E402
+from thinkback.infra.net_env import disable_env_proxy  # noqa: E402
 from thinkback.memory.repositories import SqlAlchemyMemoryRepository  # noqa: E402
 from thinkback.memory.schemas import (  # noqa: E402
     DEFAULT_NAMESPACE,  # noqa: E402

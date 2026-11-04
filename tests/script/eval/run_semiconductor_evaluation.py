@@ -68,21 +68,12 @@ def _prepare_environment() -> None:
     from dotenv import load_dotenv
 
     load_dotenv(env_file)
-    for key in (
-        "HTTP_PROXY",
-        "HTTPS_PROXY",
-        "ALL_PROXY",
-        "http_proxy",
-        "https_proxy",
-        "all_proxy",
-    ):
-        os.environ.pop(key, None)
-    os.environ["NO_PROXY"] = "*"
-    os.environ["no_proxy"] = "*"
+    disable_env_proxy()
 
 
 _prepare_environment()
 
+from thinkback.infra.net_env import disable_env_proxy  # noqa: E402
 from thinkback.memory.schemas import (  # noqa: E402
     AppendMemoryRequest,
     MemoryMessage,

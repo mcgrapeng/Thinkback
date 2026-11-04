@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import re
 import sys
 import time
@@ -31,17 +30,7 @@ def _prepare_environment(env_file: str | None) -> None:
     """先读凭据、再清代理。Settings 在导入时构造，晚了就来不及。"""
 
     load_dotenv(env_file)
-    for key in (
-        "HTTP_PROXY",
-        "HTTPS_PROXY",
-        "ALL_PROXY",
-        "http_proxy",
-        "https_proxy",
-        "all_proxy",
-    ):
-        os.environ.pop(key, None)
-    os.environ["NO_PROXY"] = "*"
-    os.environ["no_proxy"] = "*"
+    disable_env_proxy()
 
 
 _prepare_environment(
@@ -52,6 +41,7 @@ from thinkback.api.dependencies import get_memory_backend  # noqa: E402
 from thinkback.domain.prompts import DEFAULT_EXTRACTION_INSTRUCTIONS  # noqa: E402
 from thinkback.infra.config import get_settings  # noqa: E402
 from thinkback.infra.milvus_collection import eval_settings  # noqa: E402
+from thinkback.infra.net_env import disable_env_proxy  # noqa: E402
 
 CORPUS_PATH = Path("tests/eval/semiconductor_cases.json")
 

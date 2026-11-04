@@ -1,6 +1,6 @@
 {
   "note": "pytest 套件的防回血基线：删用例或跳过用例要连带更新本文件（显式动作）",
-  "count": 2944,
+  "count": 2949,
   "tests": [
     "tests/unit/test_admin_api.py::test_a_listing_scoped_to_one_user_is_audited_too",
     "tests/unit/test_admin_api.py::test_admin_audit_invalid_action_returns_400",
@@ -1543,6 +1543,11 @@
     "tests/unit/test_namespace_boundary.py::test_namespace_boundary_warning_is_silent_when_it_does_not_apply",
     "tests/unit/test_namespace_boundary.py::test_namespace_boundary_warning_only_appears_in_production_without_allowlist",
     "tests/unit/test_namespace_boundary.py::test_require_namespace_is_fail_closed_and_names_the_namespace",
+    "tests/unit/test_net_env_proxy_policy.py::test_disable_env_proxy_is_idempotent",
+    "tests/unit/test_net_env_proxy_policy.py::test_disable_env_proxy_removes_the_proxy_variables",
+    "tests/unit/test_net_env_proxy_policy.py::test_disable_env_proxy_sets_the_no_proxy_escape_hatch",
+    "tests/unit/test_net_env_proxy_policy.py::test_every_script_that_touches_the_stack_disables_the_env_proxy",
+    "tests/unit/test_net_env_proxy_policy.py::test_the_fake_only_evaluation_scripts_stay_untouched",
     "tests/unit/test_ops_boundaries.py::test_api_deployment_keeps_single_replica",
     "tests/unit/test_ops_boundaries.py::test_k8s_exposes_the_namespace_allowlist_setting",
     "tests/unit/test_ops_boundaries.py::test_k8s_serves_memory_type_profiles_without_rebuilding_the_image",

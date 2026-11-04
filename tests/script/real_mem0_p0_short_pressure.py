@@ -21,6 +21,7 @@ from uuid import uuid4
 from dotenv import load_dotenv
 
 from thinkback.infra.config import Settings
+from thinkback.infra.net_env import disable_env_proxy
 from thinkback.memory.repositories import MemoryIndexEntry, SqlAlchemyMemoryRepository
 
 if __package__ in {None, ""}:
@@ -223,11 +224,14 @@ def render_pressure_suite_markdown(report: dict[str, Any]) -> str:
 
 
 def main() -> None:
-    args = _parse_args()
     load_dotenv()
+    disable_env_proxy()
     settings = Settings()
     if not settings.memory_llm_key or not settings.milvus_url:
         raise RuntimeError("MEMORY_LLM_KEY and MILVUS_URL are required")
+    # 召回并发默认取服务的读预算（单一事实源）：压测的就是服务承诺的那个并发度。
+    # 压低了测不到真实上限，压高了测的是排队而不是服务能力。
+    args = _parse_args(default_recall_concurrency=settings.memory_backend_max_concurrent_reads)
 
     started_at = datetime.now(UTC).isoformat()
     suite_id = f"p0-short-{datetime.now(UTC).strftime('%Y%m%dT%H%M%S')}-{uuid4().hex[:8]}"
@@ -313,13 +317,13 @@ def main() -> None:
         raise RuntimeError(f"P0 short pressure suite failed: {report['failed_sections']}")
 
 
-def _parse_args() -> argparse.Namespace:
+def _parse_args(default_recall_concurrency: int = 8) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run a real P0 short pressure suite.")
     parser.add_argument(
         "--recall-concurrency",
         type=int,
-        default=8,
-        help="并发召回数；默认取服务的读预算（MEMORY_BACKEND_MAX_CONCURRENT_READS=8）"
+        default=default_recall_concurrency,
+        help="并发召回数；默认取服务的读预算（MEMORY_BACKEND_MAX_CONCURRENT_READS）"
         "—— 超出预算的请求排队，延迟门禁在排队下不可达",
     )
     parser.add_argument("--recall-requests", type=int, default=20)

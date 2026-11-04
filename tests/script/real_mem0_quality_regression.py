@@ -26,6 +26,7 @@ from uuid import uuid4
 from dotenv import load_dotenv
 
 from thinkback.infra.config import Settings
+from thinkback.infra.net_env import disable_env_proxy
 from thinkback.memory.repositories import MemoryIndexEntry, SqlAlchemyMemoryRepository
 
 LONG_TERM_SCOPE_ID = "thinkback"
@@ -804,6 +805,7 @@ def _assert_deleted_rebuild_does_not_inflate(
 
 def main() -> None:
     load_dotenv()
+    disable_env_proxy()
     settings = Settings()
     if not settings.memory_llm_key or not settings.milvus_url:
         raise RuntimeError("MEMORY_LLM_KEY and MILVUS_URL are required")
