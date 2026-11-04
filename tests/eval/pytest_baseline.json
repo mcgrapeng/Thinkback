@@ -1,6 +1,6 @@
 {
   "note": "pytest 套件的防回血基线：删用例或跳过用例要连带更新本文件（显式动作）",
-  "count": 2940,
+  "count": 2944,
   "tests": [
     "tests/unit/test_admin_api.py::test_a_listing_scoped_to_one_user_is_audited_too",
     "tests/unit/test_admin_api.py::test_admin_audit_invalid_action_returns_400",
@@ -740,6 +740,7 @@
     "tests/unit/test_mcp_server.py::test_tool_surface_is_minimal_and_annotated",
     "tests/unit/test_mcp_server.py::test_unbound_server_still_requires_user_id",
     "tests/unit/test_mem0_library_gap_coverage.py::test_a_drifted_collection_is_reported_as_a_warning",
+    "tests/unit/test_mem0_library_gap_coverage.py::test_a_failed_warmup_does_not_block_startup",
     "tests/unit/test_mem0_library_gap_coverage.py::test_backend_rejects_non_positive_concurrency_budgets",
     "tests/unit/test_mem0_library_gap_coverage.py::test_build_client_for_without_mem0_raises_runtime_error",
     "tests/unit/test_mem0_library_gap_coverage.py::test_inline_executor_captures_exceptions_in_future",
@@ -768,9 +769,12 @@
     "tests/unit/test_mem0_library_gap_coverage.py::test_search_passes_explain_only_when_requested",
     "tests/unit/test_mem0_library_gap_coverage.py::test_the_mirror_collection_is_prebuilt_with_the_same_schema",
     "tests/unit/test_mem0_library_gap_coverage.py::test_warmup_success_builds_client_and_returns_quietly",
+    "tests/unit/test_mem0_llm_proxy_isolation.py::test_a_client_that_cannot_be_rebuilt_keeps_the_original_one",
     "tests/unit/test_mem0_llm_proxy_isolation.py::test_a_client_without_endpoint_details_is_left_untouched",
     "tests/unit/test_mem0_llm_proxy_isolation.py::test_a_memory_without_an_llm_is_left_untouched",
+    "tests/unit/test_mem0_llm_proxy_isolation.py::test_an_llm_without_a_client_is_left_untouched",
     "tests/unit/test_mem0_llm_proxy_isolation.py::test_the_mem0_llm_client_is_rebuilt_to_ignore_env_proxies",
+    "tests/unit/test_mem0_llm_proxy_isolation.py::test_the_proxy_env_vars_are_removed_again_when_they_were_not_set",
     "tests/unit/test_mem0_llm_proxy_isolation.py::test_the_rebuilt_client_keeps_the_endpoint_key_and_retries",
     "tests/unit/test_mem0_llm_proxy_isolation.py::test_the_rebuilt_client_uses_a_plain_http_transport",
     "tests/unit/test_memory_api.py::test_a_concurrent_round_id_conflict_returns_409_not_500",

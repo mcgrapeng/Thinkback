@@ -557,3 +557,28 @@ def test_a_drifted_collection_is_reported_as_a_warning(
         logger.remove(handler_id)
 
     assert any("drifted" in message for message in sink)
+
+
+def test_a_failed_warmup_does_not_block_startup(monkeypatch: pytest.MonkeyPatch) -> None:
+    """预热失败不阻塞启动：记一条 warning 就返回。
+
+    预热只是把 mem0 客户端提前构造出来（省掉首个请求的 3-4 秒）；真用到的
+    时候还会再构造一次。预热失败就当没预热过 —— 把它当启动失败，等于让
+    「mem0 暂时装不上」变成「整个服务起不来」。
+    """
+    from loguru import logger
+
+    backend = _backend()
+
+    def _boom(self: Any) -> Any:
+        raise RuntimeError("mem0 not installed")
+
+    monkeypatch.setattr(type(backend), "memory_client", property(_boom))
+    sink: list[str] = []
+    handler_id = logger.add(sink.append, level="WARNING", format="{message}")
+    try:
+        backend.warmup()
+    finally:
+        logger.remove(handler_id)
+
+    assert any("warmup failed" in message for message in sink)

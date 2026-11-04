@@ -15,14 +15,19 @@ mem0 那一侧也被换掉。
 
 from __future__ import annotations
 
+import os
 from types import SimpleNamespace
 from typing import Any
 
 import httpx
+import openai
 import pytest
 from openai import OpenAI
 
-from thinkback.memory.backends.mem0_library import _disable_env_proxy_for_mem0_llm
+from thinkback.memory.backends.mem0_library import (
+    _disable_env_proxy_for_mem0_llm,
+    _no_env_proxy_for_internal_endpoints,
+)
 
 
 class _Mem0StyleClient:
@@ -92,3 +97,62 @@ def test_a_memory_without_an_llm_is_left_untouched() -> None:
     _disable_env_proxy_for_mem0_llm(memory)
 
     assert not hasattr(memory, "llm")
+
+
+def test_an_llm_without_a_client_is_left_untouched() -> None:
+    """llm 在、但没有 client 字段（mem0 版本差异）也要跳过，不抛异常。"""
+    memory = SimpleNamespace(llm=SimpleNamespace())
+
+    _disable_env_proxy_for_mem0_llm(memory)
+
+    assert not hasattr(memory.llm, "client")
+
+
+def test_the_proxy_env_vars_are_removed_again_when_they_were_not_set(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """进出上下文后 NO_PROXY/no_proxy 必须回到「本来没有」的状态。
+
+    还原时写成字符串 "None" 会让 httpx 拿着一个无效的代理名单 —— 比不还原
+    更难查。
+    """
+    monkeypatch.delenv("NO_PROXY", raising=False)
+    monkeypatch.delenv("no_proxy", raising=False)
+
+    with _no_env_proxy_for_internal_endpoints():
+        assert os.environ["NO_PROXY"] == "*"
+
+    assert "NO_PROXY" not in os.environ
+    assert "no_proxy" not in os.environ
+
+
+def test_a_client_that_cannot_be_rebuilt_keeps_the_original_one(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """换不动就沿用原客户端，并记一条 warning：换客户端不该把抽取搞挂。"""
+    from loguru import logger
+
+    class _RebuildableButFailing(SimpleNamespace):
+        """端点信息齐全（否则函数在换之前就早退了），但客户端换不动。"""
+
+        api_key = "test-key"
+        base_url = "http://internal-llm.example/v1"
+        timeout = 30.0
+        max_retries = 2
+
+    sentinel = _RebuildableButFailing(marker="original")
+    memory = SimpleNamespace(llm=SimpleNamespace(client=sentinel))
+
+    def _boom(*args: Any, **kwargs: Any) -> Any:
+        raise RuntimeError("no transport available")
+
+    monkeypatch.setattr(openai, "OpenAI", _boom)
+    sink: list[str] = []
+    handler_id = logger.add(sink.append, level="WARNING", format="{message}")
+    try:
+        _disable_env_proxy_for_mem0_llm(memory)
+    finally:
+        logger.remove(handler_id)
+
+    assert memory.llm.client is sentinel
+    assert any("keeping the original client" in message for message in sink)
