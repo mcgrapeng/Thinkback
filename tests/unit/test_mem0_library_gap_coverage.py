@@ -500,3 +500,60 @@ def test_inline_threadpool_yields_without_mem0(monkeypatch: pytest.MonkeyPatch) 
     with _mem0_inline_threadpool():
         assert mem0_module._mem0_inline_threadpool_depth == 0
     assert mem0_module._mem0_inline_threadpool_original is None
+
+
+# ── 集合预建：镜像集合与 schema 漂移（ADR-0007） ────────────────────
+
+
+def test_the_mirror_collection_is_prebuilt_with_the_same_schema(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """镜像集合也必须按 Thinkback schema 预建。
+
+    镜像位承载迁移窗口期的双写：schema 不对，双写进去的就是 analyzer
+    退化的集合，回滚时它还要接回读路径 —— 两头都坏。
+    """
+    calls: list[dict[str, Any]] = []
+
+    def _fake_ensure(**kwargs: Any) -> milvus_collection.CollectionState:
+        calls.append(kwargs)
+        return milvus_collection.CollectionState(
+            state=milvus_collection.STATE_REUSED,
+            analyzer=milvus_collection.DEFAULT_ANALYZER_TYPE,
+        )
+
+    monkeypatch.setattr(milvus_collection, "ensure_collection", _fake_ensure)
+    backend = _backend(mirror=_MIRROR)
+
+    backend._ensure_collection_schema()  # noqa: SLF001
+
+    assert [call["collection_name"] for call in calls] == ["primary", _MIRROR.collection]
+
+
+def test_a_drifted_collection_is_reported_as_a_warning(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """schema 漂移必须看得见：分析器对不上时中文 BM25 静默失效。
+
+    漂移不报错（Milvus 不允许原地改分析器），但静默失效时中文召回质量
+    塌方 —— 没人能从报错里知道 BM25 已经关了。
+    """
+    from loguru import logger
+
+    def _fake_ensure(**kwargs: Any) -> milvus_collection.CollectionState:
+        return milvus_collection.CollectionState(
+            state=milvus_collection.STATE_DRIFTED,
+            analyzer="default",
+            detail="analyzer mismatch",
+        )
+
+    monkeypatch.setattr(milvus_collection, "ensure_collection", _fake_ensure)
+    sink: list[str] = []
+    handler_id = logger.add(sink.append, level="WARNING", format="{message}")
+    try:
+        backend = _backend()
+        backend._ensure_collection_schema()  # noqa: SLF001
+    finally:
+        logger.remove(handler_id)
+
+    assert any("drifted" in message for message in sink)

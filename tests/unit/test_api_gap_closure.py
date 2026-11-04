@@ -296,3 +296,18 @@ async def test_a_body_that_cannot_be_read_counts_as_no_claimed_identity() -> Non
     middleware = TrustedUserHeaderMiddleware(app=None, header_name="X-User-Id")  # type: ignore[arg-type]
 
     assert await middleware._claimed_user_id(_Request()) is None  # noqa: SLF001
+
+
+def test_a_configured_mirror_collection_is_attached_to_the_backend() -> None:
+    """配了镜像集合就必须真的建出镜像位。
+
+    迁移窗口期的双写与双读回落全靠镜像位：配置写了却没建出来，等于
+    回滚时才发现双写根本没开 —— 那时生产数据已经在新集合里了。
+    """
+    from thinkback.api.dependencies import get_memory_backend
+    from thinkback.infra.config import Settings
+
+    backend = get_memory_backend(Settings(memory_milvus_mirror_collection="mirror_col"))
+
+    assert backend.mirror is not None
+    assert backend.mirror.collection == "mirror_col"

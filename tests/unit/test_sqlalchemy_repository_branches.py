@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import threading
 import time
+from contextlib import suppress
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -74,6 +75,15 @@ def _make_repository(
 
 
 def _dispose(engine: AsyncEngine) -> None:
+    """关引擎。
+
+    夹具的收尾顺序必须是**先 dispose 引擎、再关仓储的事件循环**：aiosqlite
+    的 worker 线程要把结果投递回它创建时所在的那个循环（仓储的 worker
+    loop）。先关 loop 再 dispose 引擎，投递就撞上已关的循环 → "Event loop
+    is closed" 的 unraisable 异常，偶尔会被 pytest 记成下一条用例的 ERROR
+    （一次偶发红看起来像 flaky，其实是自己的收尾顺序错了）。
+    """
+
     asyncio.run(engine.dispose())
 
 
@@ -88,8 +98,9 @@ def repository(request: pytest.FixtureRequest, tmp_path: Path):  # type: ignore[
     try:
         yield repo
     finally:
-        repo.close()
         _dispose(engine)
+        _settle(repo)
+        repo.close()
 
 
 @pytest.fixture()
@@ -98,8 +109,9 @@ def sql_repository(tmp_path: Path):  # type: ignore[no-untyped-def]
     try:
         yield repo
     finally:
-        repo.close()
         _dispose(engine)
+        _settle(repo)
+        repo.close()
 
 
 @pytest.fixture()
@@ -108,8 +120,9 @@ def fast_timeout_repository(tmp_path: Path):  # type: ignore[no-untyped-def]
     try:
         yield repo
     finally:
-        repo.close()
         _dispose(engine)
+        _settle(repo)
+        repo.close()
 
 
 @pytest.fixture()
@@ -120,8 +133,23 @@ def autocommit_repository(tmp_path: Path):  # type: ignore[no-untyped-def]
     try:
         yield repo
     finally:
-        repo.close()
         _dispose(engine)
+        _settle(repo)
+        repo.close()
+
+
+def _settle(repository: SqlAlchemyMemoryRepository) -> None:
+    """让仓储的事件循环醒一次，把待处理的取消做完。
+
+    被取消但没启动的协程还遗弃在 loop 里（它从没启动，握着的 session 也
+    悬着）。loop 一关，它的 GC 清理就撞上已关的循环 → "Event loop is
+    closed" 的 unraisable 异常，pytest 把它记成**下一条**用例的 ERROR
+    （看着像 flaky，其实是自己收尾太快）。先醒一次，这些取消就在 loop 还
+    活着时被处理掉。
+    """
+
+    with suppress(Exception):  # loop 已停/已关时没什么可等的
+        repository._run(asyncio.sleep(0))  # noqa: SLF001
 
 
 def _occupy_loop(repository: SqlAlchemyMemoryRepository, *, seconds: float) -> None:
@@ -665,3 +693,26 @@ def test_a_task_that_vanishes_after_an_insert_conflict_raises(sql_repository) ->
 
     with pytest.raises(RuntimeError, match="task vanished after insert conflict"):
         repository.save_task(task)
+
+
+def test_the_concurrent_l1_read_serves_from_the_cache_without_a_db_read(
+    sql_repository,
+) -> None:  # type: ignore[no-untyped-def]
+    """并发取回的 L1 读命中缓存时不得再查库：四个并发取回里最热的一条。"""
+    repository = sql_repository
+    repository.save_round(make_append(round_id="r-cache"))
+
+    # 第一次读把行放进 L1 缓存；随后物理删掉，命中缓存就还能读到。
+    assert [entry.round_id for entry in repository.get_l1("user-1", "session-1", "session-1")]
+    assert repository.delete_rounds("user-1", "session-1") == 1
+
+    cached = repository._run(  # noqa: SLF001
+        repository._read_l1(  # noqa: SLF001
+            "user-1",
+            "session-1",
+            "session-1",
+            namespace="thinkback",
+        )
+    )
+
+    assert [entry.round_id for entry in cached] == ["r-cache"]

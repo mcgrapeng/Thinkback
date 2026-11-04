@@ -4500,11 +4500,6 @@ L2 更新 (缓存失效)
                 memory_text="deleted source ref tombstone",
             )
 
-    def _active_memories(self, user_id: str, memory_scope_id: str) -> list[Any]:
-        """读 L3 active 索引。直读仓库，V2.1 起不再缓存（之前的 cache 在每次写
-        路径都被 invalidate，cache lifetime ≈ 0，收益不抵复杂度）。"""
-        return list(self.repository.active_memories(user_id, memory_scope_id))
-
     def _dedupe_and_clip(
         self,
         items: list[MemoryItem],
