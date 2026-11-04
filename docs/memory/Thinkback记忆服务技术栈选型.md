@@ -88,8 +88,8 @@ API 默认使用 `SqlAlchemyMemoryRepository`，不再使用内存仓库作为�
 `SqlAlchemyMemoryRepository` 在固定后台 event loop 上运行 async SQLAlchemy 调用，engine 使用默认连接池，避免每次调用新建 event loop 和 asyncpg 连接。
 后续如果把仓库和服务整体改成 async，可以去掉这层同步适配。
 
-Mem0 Library 后端调用并发上限由 `MEMORY_BACKEND_MAX_CONCURRENT_CALLS` 控制，当前默认 `4`。
-这个闸门限制单进程同时进入 LLM、Embedding 和 Milvus 的 Mem0 调用数，不等同于 L3 后台队列容量。
+Mem0 Library 后端调用并发上限由 `MEMORY_BACKEND_MAX_CONCURRENT_WRITES`（默认 `4`）与 `MEMORY_BACKEND_MAX_CONCURRENT_READS`（默认 `8`）分别控制读写两把信号量。
+这两个闸门限制单进程同时进入 LLM、Embedding 和 Milvus 的 Mem0 调用数，不等同于 L3 后台队列容量；分开是因为读写两条路径的 service time 差一个量级（写打 LLM 抽取，读只要 embedding + 检索），共用一个数会有一边饿死、一边排队。
 Mem0 telemetry 在 thinkback 适配层保持关闭，因为已知 `mem0.memory.telemetry` 会为 Posthog client 创建后台线程，不能放在主链路热路径里。运行时由 `disable_mem0_telemetry()` 在创建 Mem0 Library 后端前处理，这里只保留选型原因。
 
 ## 4. Redis、Celery 和 L3 后台写入边界

@@ -132,8 +132,8 @@ src/thinkback/
 | --- | --- | --- |
 | API 读/写线程池 | `MEMORY_API_WORKER_LIMIT`(8) × 2，等待 `MEMORY_API_WORKER_WAIT_SECONDS`(5s) | 同步 MemoryService 调用不阻塞事件循环 |
 | L3 后台执行器（`memory/l3.py` `L3WriteExecutor`） | `MEMORY_L3_EXECUTOR_WORKERS`(16) + `MEMORY_L3_MAX_PENDING_TASKS`(256) 信号量背压 | async 模式的 mem0 抽取 |
-| mem0 调用信号量 | `MEMORY_BACKEND_MAX_CONCURRENT_CALLS`(4) | LLM/Embedding/Milvus 压力 |
-| 仓储事件循环 | 单线程 loop，单操作超时 30s | DB 连接（pool 5+5） |
+| mem0 调用信号量（读、写两把） | `MEMORY_BACKEND_MAX_CONCURRENT_WRITES`(4) + `MEMORY_BACKEND_MAX_CONCURRENT_READS`(8) | LLM/Embedding/Milvus 压力（读写的 service time 差一个量级，各自按 Little's Law 定） |
+| 仓储事件循环 | 单线程 loop，单操作超时 30s | DB 连接（pool 10+15，跟着读预算走：一次召回并发取四处数据） |
 
 ---
 

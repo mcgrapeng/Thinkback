@@ -77,7 +77,8 @@ MEMORY_API_WORKER_WAIT_SECONDS=5
 MEMORY_L3_EXECUTOR_WORKERS=16
 MEMORY_L3_MAX_PENDING_TASKS=256
 MEMORY_L3_QUEUE_WAIT_SECONDS=5
-MEMORY_BACKEND_MAX_CONCURRENT_CALLS=4
+MEMORY_BACKEND_MAX_CONCURRENT_WRITES=4
+MEMORY_BACKEND_MAX_CONCURRENT_READS=8
 READINESS_TIMEOUT_SECONDS=3
 ```
 
@@ -122,7 +123,8 @@ READINESS_TIMEOUT_SECONDS=3
 | `MEMORY_L3_EXECUTOR_WORKERS` | L3 后台抽取线程数 |
 | `MEMORY_L3_MAX_PENDING_TASKS` | L3 后台写入队列容量 |
 | `MEMORY_L3_QUEUE_WAIT_SECONDS` | L3 队列满前的最长等待秒数 |
-| `MEMORY_BACKEND_MAX_CONCURRENT_CALLS` | 单进程内 Mem0 Library 后端调用并发上限，用于限制 LLM、Embedding 和 Milvus 压力 |
+| `MEMORY_BACKEND_MAX_CONCURRENT_WRITES` | 单进程内 Mem0 Library **写**并发上限（写路径打 LLM 抽取，慢，约 2.5s/次） |
+| `MEMORY_BACKEND_MAX_CONCURRENT_READS` | 单进程内 Mem0 Library **读**并发上限（读路径只要 embedding + 向量检索，快，约 0.3s/次） |
 | `READINESS_TIMEOUT_SECONDS` | 单个依赖 readiness 检查超时时间，单位秒；K8s readinessProbe `timeoutSeconds` 必须大于等于该值 |
 
 Mem0 不再作为独立 REST Server 部署。
@@ -178,7 +180,8 @@ Mem0 L3 抽取在后台任务中沉淀，避免外部 LLM/Embedding 抖动把写
 | `MEMORY_L3_EXECUTOR_WORKERS` | L3 后台抽取线程数，影响 Mem0 写入并发，不影响 append 已经完成可靠轮次存储这件事 |
 | `MEMORY_L3_MAX_PENDING_TASKS` | L3 后台写入队列容量，队列满时 append 会触发背压，避免无限堆积 |
 | `MEMORY_L3_QUEUE_WAIT_SECONDS` | 队列接近满时最多等待多久，超过后仍无容量，会返回明确错误而不是静默丢任务 |
-| `MEMORY_BACKEND_MAX_CONCURRENT_CALLS` | 单个 API 进程同时进入 Mem0 Library 的调用数；调大前必须确认 LLM、Embedding、Milvus 和主机线程资源可承载 |
+| `MEMORY_BACKEND_MAX_CONCURRENT_WRITES` | 单个 API 进程同时进入 Mem0 Library 的**写**调用数；调大前必须确认 LLM 端点的并发容量 |
+| `MEMORY_BACKEND_MAX_CONCURRENT_READS` | 单个 API 进程同时进入 Mem0 Library 的**读**调用数；调大前必须确认 embedding/Milvus 容量与 PG 连接池（读预算 8 最多要 32 个连接） |
 | `READINESS_TIMEOUT_SECONDS` | `/health/ready` 检查数据库、Redis、Milvus 和 Mem0 Library 配置时的单项依赖超时时间；Mem0 Library 检查不执行 add/delete 写入探针；K8s readinessProbe `timeoutSeconds` 必须同步设置为不小于该值，否则 kubelet 会先终止 HTTP probe |
 
 调高 `MEMORY_API_WORKER_LIMIT` 会让更多读写同步工作同时执行；当前实现读池和写池各使用这一上限。
@@ -602,7 +605,8 @@ thinkback-secret
 | `MEMORY_L3_EXECUTOR_WORKERS` | 按压测结果调整，当前基线 `16` |
 | `MEMORY_L3_MAX_PENDING_TASKS` | 按压测结果调整，当前基线 `256` |
 | `MEMORY_L3_QUEUE_WAIT_SECONDS` | 按压测结果调整，当前基线 `5` |
-| `MEMORY_BACKEND_MAX_CONCURRENT_CALLS` | 按后端依赖承载能力调整，当前基线 `4` |
+| `MEMORY_BACKEND_MAX_CONCURRENT_WRITES` | 按后端依赖承载能力调整，当前基线 `4`（写路径打 LLM 抽取，约 2.5s/次） |
+| `MEMORY_BACKEND_MAX_CONCURRENT_READS` | 按后端依赖承载能力调整，当前基线 `8`（读路径约 0.3s/次；PG 连接池要跟着放大） |
 | `READINESS_TIMEOUT_SECONDS` | 当前基线 `3`；K8s readinessProbe `timeoutSeconds` 当前为 `5`，必须不小于该值且小于 `periodSeconds` |
 
 `MEMORY_API_WORKER_LIMIT` 是 API 读池和写池各自的同步工作线程上限，不是单进程全局唯一线程数上限。
@@ -610,7 +614,8 @@ thinkback-secret
 503 只表示 HTTP 层等待超时或 worker 队列满，不保证后端业务操作已经取消。
 调用方重试 append 必须复用原 `round_id`，重试 update/delete/rebuild 必须复用原 `operation_id`，并可用返回或已知的 `task_id` 查询最终状态。
 update 的完成幂等只在目标记忆仍是该次编辑结果时返回 `already_done`；如果同一记忆已被后续编辑或删除，旧 `operation_id` 重试会返回冲突，调用方应以当前管理列表或详情为准重新决策。
-`MEMORY_BACKEND_MAX_CONCURRENT_CALLS` 是 Mem0 Library 后端调用并发上限，和 L3 后台队列容量不是同一层控制。
+`MEMORY_BACKEND_MAX_CONCURRENT_WRITES` / `MEMORY_BACKEND_MAX_CONCURRENT_READS` 是 Mem0 Library 后端读、写各自的并发上限，和 L3 后台队列容量不是同一层控制。
+两个值按 Little's Law 定（并发 = 目标吞吐 × 单次服务时间）：写的 service time 是 LLM 抽取的秒级，读只有 embedding + 向量检索的亚秒级，所以读预算比写预算大一个量级。
 `CELERY_TASK_TIME_LIMIT` 和 `CELERY_TASK_SOFT_TIME_LIMIT` 当前只约束 worker 诊断和后续异步扩展任务；L3 后台抽取执行位置见第 1.3 节。
 调大前必须确认 LLM、Embedding、Milvus、Pod CPU 和主机线程资源都能承载。
 `k8s/deployment-api.yaml` 的 readinessProbe `timeoutSeconds` 必须大于等于 `READINESS_TIMEOUT_SECONDS`，并且小于 `periodSeconds`，避免探针重叠。

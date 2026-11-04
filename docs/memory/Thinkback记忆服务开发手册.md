@@ -56,7 +56,7 @@ MEMORY_EMBEDDING_DIMS=1024
 `ENVIRONMENT=production` 时不允许跳过 L3 凭据，缺少 `OPENAI_API_KEY` 会让 `/health/ready` 返回 503。
 完整 L3 链路（跨会话长期记忆）必须提供真实 `OPENAI_API_KEY` 和可达的 Milvus、Embedding endpoint。
 
-`MEMORY_BACKEND_MAX_CONCURRENT_CALLS` 是单进程内 Mem0 Library 后端调用并发上限。当前本地默认值为 `4`，它是保守限流，不代表最终生产容量。是否调大应以目标主机、LLM、Embedding、Milvus 和 PostgreSQL 的压测结果为准。
+`MEMORY_BACKEND_MAX_CONCURRENT_WRITES` / `MEMORY_BACKEND_MAX_CONCURRENT_READS` 是单进程内 Mem0 Library 后端**读、写各自**的并发上限。当前本地默认 `4` / `8`：写路径打 LLM 抽取（慢，约 2.5s/次），读路径只要 embedding + 向量检索（快，约 0.3s/次），两个值按 Little's Law 定（并发 = 目标吞吐 × 单次服务时间）。它们是保守限流，不代表最终生产容量；是否调大应以目标主机、LLM、Embedding、Milvus 和 PostgreSQL 的压测结果为准。
 当前仓库默认 `MILVUS_DATABASE=default`、`MEMORY_MILVUS_COLLECTION=thinkback`；如果本地共享实例使用其他库名或 collection，启动前要在 `.env` 里显式覆盖。
 
 ## 3. 本地依赖与共享 PostgreSQL
@@ -340,7 +340,7 @@ lsof -iTCP:8000 -sTCP:LISTEN
 
 ### L3 pending 队列持续增长
 
-先观察 `/v2/memory/l3/background-status`。如果 pending 线性增长但没有错误，通常表示外部 LLM、Embedding、Milvus 或本机资源处理速度低于写入速度。当前本地默认 `MEMORY_BACKEND_MAX_CONCURRENT_CALLS=4` 偏保守；是否调高应基于目标主机压测，不应只根据本机硬件做最终判断。
+先观察 `/v2/memory/l3/background-status`。如果 pending 线性增长但没有错误，通常表示外部 LLM、Embedding、Milvus 或本机资源处理速度低于写入速度。当前本地默认 `MEMORY_BACKEND_MAX_CONCURRENT_WRITES=4` / `MEMORY_BACKEND_MAX_CONCURRENT_READS=8` 偏保守；是否调高应基于目标主机压测，不应只根据本机硬件做最终判断。
 
 ## 9. 提交前检查清单
 
