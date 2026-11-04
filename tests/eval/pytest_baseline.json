@@ -1,6 +1,6 @@
 {
   "note": "pytest 套件的防回血基线：删用例或跳过用例要连带更新本文件（显式动作）",
-  "count": 2935,
+  "count": 2940,
   "tests": [
     "tests/unit/test_admin_api.py::test_a_listing_scoped_to_one_user_is_audited_too",
     "tests/unit/test_admin_api.py::test_admin_audit_invalid_action_returns_400",
@@ -768,6 +768,11 @@
     "tests/unit/test_mem0_library_gap_coverage.py::test_search_passes_explain_only_when_requested",
     "tests/unit/test_mem0_library_gap_coverage.py::test_the_mirror_collection_is_prebuilt_with_the_same_schema",
     "tests/unit/test_mem0_library_gap_coverage.py::test_warmup_success_builds_client_and_returns_quietly",
+    "tests/unit/test_mem0_llm_proxy_isolation.py::test_a_client_without_endpoint_details_is_left_untouched",
+    "tests/unit/test_mem0_llm_proxy_isolation.py::test_a_memory_without_an_llm_is_left_untouched",
+    "tests/unit/test_mem0_llm_proxy_isolation.py::test_the_mem0_llm_client_is_rebuilt_to_ignore_env_proxies",
+    "tests/unit/test_mem0_llm_proxy_isolation.py::test_the_rebuilt_client_keeps_the_endpoint_key_and_retries",
+    "tests/unit/test_mem0_llm_proxy_isolation.py::test_the_rebuilt_client_uses_a_plain_http_transport",
     "tests/unit/test_memory_api.py::test_a_concurrent_round_id_conflict_returns_409_not_500",
     "tests/unit/test_memory_api.py::test_a_registered_memory_type_is_accepted",
     "tests/unit/test_memory_api.py::test_an_unregistered_memory_type_is_rejected_with_400",

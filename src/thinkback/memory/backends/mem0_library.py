@@ -7,9 +7,10 @@
 from __future__ import annotations
 
 import concurrent.futures
+import os
 import sqlite3
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager, suppress
 from copy import deepcopy
 from inspect import signature
@@ -17,6 +18,7 @@ from pathlib import Path
 from threading import BoundedSemaphore, Lock, RLock
 from typing import Any
 
+import httpx
 from loguru import logger
 
 from thinkback.domain.ports import MEMORY_LIST_PAGE_LIMIT
@@ -134,6 +136,66 @@ def register_mem0_embedder_provider() -> None:
     except ImportError as exc:
         raise RuntimeError("mem0 library is not installed; install mem0ai") from exc
     EmbedderFactory.provider_to_class["openai"] = THINKBACK_OPENAI_EMBEDDER_CLASS
+
+
+@contextmanager
+def _no_env_proxy_for_internal_endpoints() -> Iterator[None]:
+    """构造 mem0 客户端期间临时让 httpx 不读环境代理。
+
+    mem0 的 OpenAI LLM 固定 ``OpenAI(api_key=..., base_url=...)``，没有
+    http_client 注入口 → httpx 会去读环境里的 HTTP/SOCKS 代理。机器上配了
+    SOCKS 代理又没装 socksio 时，客户端在**构造阶段**就抛 ImportError：
+    预热只记一条 warning，用户看到的现象是「抽取一直为空、召回 0 条」，
+    日志里没有任何指向代理的线索。
+
+    ``NO_PROXY=*`` 让 httpx 直接建普通 HTTP 传输层（不碰代理，也就不需要
+    socksio）；httpx 在**构造时**就把传输层定死，所以退出这个上下文后
+    客户端仍然不走代理。内部端点本来就不该走代理。
+    """
+
+    saved = {key: os.environ.get(key) for key in ("NO_PROXY", "no_proxy")}
+    os.environ["NO_PROXY"] = "*"
+    os.environ["no_proxy"] = "*"
+    try:
+        yield
+    finally:
+        for key, value in saved.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+
+def _disable_env_proxy_for_mem0_llm(memory: Any) -> None:
+    """把 mem0 自建的 LLM 客户端换成不吃环境代理的。
+
+    兜底：``_no_env_proxy_for_internal_endpoints`` 已经在构造期让客户端不走
+    代理，这里再把传输层显式换成 ``trust_env=False``——客户端可能被别处
+    构造出来（测试替身、插件式注入），显式声明比依赖构造时机可靠。
+    """
+
+    llm = getattr(memory, "llm", None)
+    client = getattr(llm, "client", None)
+    if client is None:
+        return
+    api_key = getattr(client, "api_key", None)
+    base_url = str(getattr(client, "base_url", "") or "")
+    if not api_key or not base_url:
+        return
+    try:
+        from openai import OpenAI
+
+        llm.client = OpenAI(
+            api_key=api_key,
+            base_url=base_url,
+            timeout=getattr(client, "timeout", None),
+            max_retries=getattr(client, "max_retries", 2),
+            http_client=httpx.Client(trust_env=False),
+        )
+    except Exception as exc:  # noqa: BLE001 - 换不动就沿用原客户端，不挡住启动
+        logger.bind(error_type=type(exc).__name__).warning(
+            "mem0 llm client proxy isolation failed; keeping the original client"
+        )
 
 
 def disable_mem0_telemetry() -> None:
@@ -953,7 +1015,10 @@ class Mem0LibraryMemoryBackend:
             raise RuntimeError("mem0 library is not installed; install mem0ai") from exc
         disable_mem0_telemetry()
         register_mem0_embedder_provider()
-        return Memory.from_config(deepcopy(config))
+        with _no_env_proxy_for_internal_endpoints():
+            memory = Memory.from_config(deepcopy(config))
+        _disable_env_proxy_for_mem0_llm(memory)
+        return memory
 
     def _ensure_collection_schema(self) -> None:
         """建 mem0 客户端之前先把集合按 Thinkback 的 schema 预建好（ADR-0007）。
