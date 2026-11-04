@@ -175,6 +175,8 @@ def _disable_env_proxy_for_mem0_llm(memory: Any) -> None:
     """
 
     llm = getattr(memory, "llm", None)
+    if llm is None:
+        return
     client = getattr(llm, "client", None)
     if client is None:
         return
