@@ -89,6 +89,12 @@ Manifests are in `k8s/`:
   `namespaceSelector.matchLabels` with `kubernetes.io/metadata.name: <your-gateway-ns>`.
 - `ENVIRONMENT=production` disables `.env` fallback: runtime config must come from the
   ConfigMap and Secret.
+- **Variable names must match the service's field names exactly.** `Settings` is
+  `extra="ignore"` — a name the service doesn't recognise is dropped **silently**:
+  you edit the ConfigMap, restart, and nothing changes, with nothing in the logs.
+  `tests/unit/test_env_centralization_contract.py` fails the build if the ConfigMap
+  (or `.env.example`) carries a name the service doesn't claim. See
+  **[docs/CONFIGURATION.md](CONFIGURATION.md)** for the full picture.
 
 ### Deploy
 

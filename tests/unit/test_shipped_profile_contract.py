@@ -248,7 +248,6 @@ def test_the_procedure_type_rejects_every_role(role: str) -> None:
         service.append(request)
 
 
-
 @pytest.mark.parametrize("namespace", _NAMESPACES)
 def test_the_overwrite_types_all_carry_an_extraction_prompt(namespace: str) -> None:
     """声明 overwrite 的类型必须配抽取指令。

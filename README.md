@@ -440,20 +440,26 @@ embedding endpoints, not by Thinkback itself.
 
 ### Configuration
 
-All runtime config comes from environment variables. See [`.env.example`](.env.example).
+All runtime config comes from environment variables. The full list — every knob, with
+comments — lives in [`.env.example`](.env.example); copy it to `.env` and fill in the
+values you need. See **[docs/CONFIGURATION.md](docs/CONFIGURATION.md)** for how config
+and credentials are managed (and why a typo'd variable name fails silently).
 
 | Variable | Purpose | Default |
 | --- | --- | --- |
 | `MEMORY_LLM_KEY` | LLM API key for L2 / L3 | — |
 | `MEMORY_LLM_BASE_URL` | OpenAI-compatible endpoint | — |
-| `MEMORY_LLM_MODEL` | LLM model name | `gpt-4o-mini` |
-| `MEMORY_EMBEDDING_KEY` | Embedding model API key | — |
-| `MEMORY_EMBEDDING_MODEL` | Embedding model | `text-embedding-3-small` |
+| `MEMORY_LLM_MODEL` | LLM model name | `qwen-plus-latest` |
+| `MEMORY_EMBEDDING_API_KEY` | Embedding model API key | — |
+| `MEMORY_EMBEDDING_BASE_URL` | OpenAI-compatible embedding endpoint | — |
+| `MEMORY_EMBEDDING_MODEL` | Embedding model | `default-embedding` |
+| `MEMORY_EMBEDDING_DIMS` | Embedding vector dimensions | `1024` |
+| `DATABASE_URL` | PostgreSQL connection URL | — |
 | `MILVUS_URL` | Milvus server URL | `http://localhost:19530` |
-| `MILVUS_DATABASE` | Milvus database name | `Thinkback` |
+| `MILVUS_DATABASE` | Milvus database name | `default` |
 | `MEMORY_L3_WRITE_MODE` | `async` (default) or `sync` | `async` |
 | `MEMORY_DECAY_ENABLED` | Enable the decay sweeper | `false` |
-| `MEMORY_DECAY_DAYS` | Suppression threshold | `90` |
+| `MEMORY_DECAY_MIN_AGE_DAYS` | Suppression threshold (days) | `90` |
 | `GRPC_ENABLED` | Start gRPC alongside HTTP | `true` |
 
 > **Decay** is off by default. When enabled, aged and rarely-recalled long-tail memories are
@@ -636,6 +642,9 @@ Kubernetes manifests, Helm chart, production config
 
 <strong><a href="docs/RUNBOOK.md">Operations runbook</a></strong><br>
 Debugging, recovery, scaling, incident procedures
+
+<strong><a href="docs/CONFIGURATION.md">Configuration &amp; credentials</a></strong><br>
+Where every environment variable lives, and how secrets stay out of the repo
 
 <strong><a href="docs/specs/2026-10-08-thinkback-integration-protocol-v1.md">Integration protocol v1</a></strong><br>
 Historical — the v1 public API was never shipped; see the notes in the spec

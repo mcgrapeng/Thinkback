@@ -60,8 +60,17 @@ data:
   MEMORY_L3_MAX_PENDING_TASKS: "256"
   # L3 队列满前的最长等待秒数。
   MEMORY_L3_QUEUE_WAIT_SECONDS: "5"
-  # Mem0 Library 后端调用并发上限。
-  MEMORY_BACKEND_MAX_CONCURRENT_CALLS: "4"
+  # Mem0 Library 后端调用并发上限，读写分开两把信号量。
+  # 数值按 Little's Law 定（并发 = 目标吞吐 × 单次服务时间）：写路径打 LLM
+  # 抽取（慢，约 2.5s/次），读路径只要 embedding + 向量检索（快，约 0.3s/次）
+  # —— service time 差一个量级，用同一个数限会有一边饿死。
+  #
+  # 变量名必须与 Settings 的字段名对上：Settings 是 extra="ignore"，
+  # 写错的名字被**静默丢弃**（改 ConfigMap 一点用都没有，也没有报错）。
+  # 此前这里写的是 MEMORY_BACKEND_MAX_CONCURRENT_CALLS —— 那个名字不存在，
+  # 读写两把信号量都没被这份 ConfigMap 覆盖（值碰巧等于默认值才没暴露）。
+  MEMORY_BACKEND_MAX_CONCURRENT_WRITES: "4"
+  MEMORY_BACKEND_MAX_CONCURRENT_READS: "8"
 
   # 记忆类型注册表 profile 目录（逗号分隔，按顺序找第一个命中的）。
   # 第一个是企业自己的 profile 挂载点（ConfigMap thinkback-profiles，没有就当空目录），

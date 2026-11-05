@@ -121,7 +121,8 @@ kubectl apply -f k8s/secret.example.yaml
 | `MEMORY_L3_EXECUTOR_WORKERS` | L3 后台抽取线程数，当前基线为 `16`。 |
 | `MEMORY_L3_MAX_PENDING_TASKS` | L3 后台写入队列容量，当前基线为 `256`。 |
 | `MEMORY_L3_QUEUE_WAIT_SECONDS` | L3 队列满前的最长等待秒数，当前基线为 `5`。 |
-| `MEMORY_BACKEND_MAX_CONCURRENT_CALLS` | 单进程内 Mem0 Library 后端调用并发上限，当前基线为 `4`。 |
+| `MEMORY_BACKEND_MAX_CONCURRENT_WRITES` | 单进程内 Mem0 Library 后端**写**并发上限，当前基线为 `4`。 |
+| `MEMORY_BACKEND_MAX_CONCURRENT_READS` | 单进程内 Mem0 Library 后端**读**并发上限，当前基线为 `8`。 |
 | `READINESS_TIMEOUT_SECONDS` | 单个依赖 readiness 检查超时时间，当前基线为 `3` 秒。 |
 
 这些基线值不是线上容量承诺。真实流量、Pod 资源和外部模型限流明确后，需要重新校准。

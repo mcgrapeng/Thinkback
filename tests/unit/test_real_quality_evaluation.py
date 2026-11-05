@@ -1707,7 +1707,7 @@ def test_preprod_phase_command_maps_p0_metric_document_scenarios() -> None:
         script_path="tests/script/real_mem0_p0_short_pressure.py",
     )
 
-    # 所有阶段的并发都取服务的后端并发预算（MEMORY_BACKEND_MAX_CONCURRENT_CALLS=4）：
+    # 所有阶段的并发都取服务的后端写并发预算（MEMORY_BACKEND_MAX_CONCURRENT_WRITES=4）：
     # 超出预算的请求排队，延迟门禁在排队下不可达（测的就不是服务容量了）。
     assert baseline == [
         ".venv/bin/python",

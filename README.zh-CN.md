@@ -415,20 +415,25 @@ L3 抽取异步执行 —— 端到端延迟主要由你配置的 LLM 与 embedd
 
 ### 配置
 
-全部运行时配置来自环境变量,参见 [`.env.example`](.env.example)。
+全部运行时配置来自环境变量。完整清单（每个旋钮 + 注释）在
+[`.env.example`](.env.example) —— 复制成 `.env` 再填值。配置与凭据怎么管、
+为什么变量名写错会静默失效，见 **[docs/CONFIGURATION.md](docs/CONFIGURATION.md)**。
 
 | 变量 | 用途 | 默认值 |
 | --- | --- | --- |
 | `MEMORY_LLM_KEY` | L2 / L3 的 LLM API Key | — |
 | `MEMORY_LLM_BASE_URL` | OpenAI 兼容端点 | — |
-| `MEMORY_LLM_MODEL` | LLM 模型名 | `gpt-4o-mini` |
-| `MEMORY_EMBEDDING_KEY` | Embedding 模型 API Key | — |
-| `MEMORY_EMBEDDING_MODEL` | Embedding 模型 | `text-embedding-3-small` |
+| `MEMORY_LLM_MODEL` | LLM 模型名 | `qwen-plus-latest` |
+| `MEMORY_EMBEDDING_API_KEY` | Embedding 模型 API Key | — |
+| `MEMORY_EMBEDDING_BASE_URL` | OpenAI 兼容 Embedding 端点 | — |
+| `MEMORY_EMBEDDING_MODEL` | Embedding 模型 | `default-embedding` |
+| `MEMORY_EMBEDDING_DIMS` | Embedding 向量维度 | `1024` |
+| `DATABASE_URL` | PostgreSQL 连接 URL | — |
 | `MILVUS_URL` | Milvus 服务地址 | `http://localhost:19530` |
-| `MILVUS_DATABASE` | Milvus 数据库名 | `Thinkback` |
+| `MILVUS_DATABASE` | Milvus 数据库名 | `default` |
 | `MEMORY_L3_WRITE_MODE` | `async`(默认)或 `sync` | `async` |
 | `MEMORY_DECAY_ENABLED` | 是否启用衰减清理 | `false` |
-| `MEMORY_DECAY_DAYS` | 抑制阈值(天) | `90` |
+| `MEMORY_DECAY_MIN_AGE_DAYS` | 抑制阈值(天) | `90` |
 | `GRPC_ENABLED` | 与 HTTP 一同启动 gRPC | `true` |
 
 > **衰减**默认关闭。启用后,长期未被召回的长尾记忆会被抑制 —— 只是不可达,绝不删除。召回一次即可恢复权重。
@@ -601,6 +606,9 @@ Kubernetes 清单、Helm chart、生产配置
 
 <strong><a href="docs/RUNBOOK.md">运维手册</a></strong><br>
 排障、恢复、扩缩容、应急流程
+
+<strong><a href="docs/CONFIGURATION.md">配置与凭据管理</a></strong><br>
+环境变量都放在哪、凭据怎么保证不外泄
 
 <strong><a href="docs/specs/2026-10-08-thinkback-integration-protocol-v1.md">接入协议 v1</a></strong><br>
 历史文档 —— v1 公开 API 从未上线,详见规范开头的说明

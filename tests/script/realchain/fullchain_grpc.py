@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import sys
 import time
 import uuid
@@ -19,18 +18,6 @@ SESSION = f"session-{RUN}"
 
 PASSED: list[str] = []
 FAILED: list[str] = []
-
-
-class _AuthInjector(grpc.UnaryUnaryClientInterceptor):
-    """给所有调用补上 authorization metadata（gRPC 端口必须带 API Key）。"""
-
-    def __init__(self, authorization: str) -> None:
-        self._authorization = authorization
-
-    def intercept_unary_unary(self, continuation, client_call_details, request):  # type: ignore[no-untyped-def]
-        metadata = list(client_call_details.metadata or [])
-        metadata.append(("authorization", self._authorization))
-        return continuation(client_call_details._replace(metadata=metadata), request)
 
 
 def check(name: str, condition: bool, detail: str = "") -> None:
@@ -56,16 +43,14 @@ def wait_task(stub, task_id: str, timeout: float = 420.0) -> str:
 
 
 def main() -> int:
-    api_key = os.environ.get("THINKBACK_API_KEY", "").strip()
-    if not api_key:
-        print("需要 THINKBACK_API_KEY 环境变量：gRPC 端口现在强制 API Key 鉴权（与 HTTP 同口径）。")
-        return 2
-    channel = grpc.intercept_channel(
-        grpc.insecure_channel(
-            "127.0.0.1:50052",
-            options=[("grpc.enable_http_proxy", 0)],  # 内网直连禁用代理路由
-        ),
-        _AuthInjector(f"Bearer {api_key}"),
+    # gRPC 端口**没有**服务端鉴权（服务端没挂任何 interceptor，见
+    # ``src/thinkback/rpc/server.py``）—— 与 HTTP 面同口径。所以这里不要求
+    # API key。曾经这里强制要 ``THINKBACK_API_KEY``，而服务端根本不校验它：
+    # 那个变量既是「必须填才能跑」的门（挡住所有人），又是「填了也没用」的
+    # 假安全感。信任边界是网络边界（k8s NetworkPolicy + 内网暴露）。
+    channel = grpc.insecure_channel(
+        "127.0.0.1:50052",
+        options=[("grpc.enable_http_proxy", 0)],  # 内网直连禁用代理路由
     )
     grpc.channel_ready_future(channel).result(timeout=10)
     stub = memory_pb2_grpc.MemoryServiceStub(channel)
