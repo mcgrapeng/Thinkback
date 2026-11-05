@@ -199,6 +199,56 @@ def test_the_procedure_type_is_not_extractable() -> None:
     assert registry.get("procedure").allows_extraction() is False
 
 
+@pytest.mark.parametrize("role", ["user", "assistant", "tool", "system"])
+def test_the_procedure_type_rejects_every_role(role: str) -> None:
+    """`procedure` 对**任何**角色都写不进去（没有审批通道）。
+
+    这条钉住「角色改成 system 之后行为没变」：审批闸门在准入判定**之前**
+    触发（``service.py`` 的 append 路径先查 ``review_required``），
+    所以它的 ``source_roles`` 取什么值都不影响写入结果 —— 角色从
+    ``admin`` 改成 ``system``（``admin`` 不在 ``MessageRole`` 里）纯属
+    配置合法性修正，不是行为变更。
+
+    这条用例防止将来有人为了「让 procedure 能写进去」而放宽审批闸门：
+    那样程序性规则会绕过审批直接落库。
+    """
+    from datetime import UTC, datetime
+
+    from thinkback.api.dependencies import build_registry_provider
+    from thinkback.infra.config import settings
+    from thinkback.memory.backends import FakeMemoryBackend
+    from thinkback.memory.repositories import InMemoryMemoryRepository
+    from thinkback.memory.schemas import AppendMemoryRequest, MessageRole
+    from thinkback.memory.service import MemoryService
+
+    service = MemoryService(
+        repository=InMemoryMemoryRepository(),
+        backend=FakeMemoryBackend(),
+        registry_provider=build_registry_provider(settings),
+        l3_write_mode="sync",
+    )
+    request = AppendMemoryRequest(
+        request_id=f"req-procedure-{role}",
+        user_id="user-1",
+        session_id="session-1",
+        round_id=f"round-{role}",
+        namespace="semiconductor",
+        messages=[
+            {
+                "message_id": f"m-{role}",
+                "role": MessageRole(role),
+                "content": "以后所有变更必须先过工艺委员会评审。",
+                "timestamp": datetime(2026, 11, 5, tzinfo=UTC),
+            }
+        ],
+        source_timestamp=datetime(2026, 11, 5, tzinfo=UTC),
+        metadata={"memory_type": "procedure"},
+    )
+    with pytest.raises(ValueError, match="requires review"):
+        service.append(request)
+
+
+
 @pytest.mark.parametrize("namespace", _NAMESPACES)
 def test_the_overwrite_types_all_carry_an_extraction_prompt(namespace: str) -> None:
     """声明 overwrite 的类型必须配抽取指令。
