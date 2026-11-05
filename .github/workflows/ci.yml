@@ -273,11 +273,19 @@ jobs:
         # 凭据只落在这台 runner 上，不进版本库（.env 在 .gitignore 里）。
         # secret 经 env 传进来，不拼进命令文本；含换行的值直接拒绝 ——
         # 否则一行能塞进两条 .env 变量。
+        #
+        # **模型名也要写进去**：产品默认值是「qwen-plus-latest」/
+        # 「default-embedding」（公有云端点），而这里的端点是自建的 vLLM ——
+        # 不写模型名就用默认值去请求，端点上没有这个模型（实测 404
+        # `The model qwen-plus-latest does not exist`），抽取全空，
+        # 门禁会以「召回 0 条」的形式红掉，而根因是配置而不是记忆系统。
         env:
           LLM_BASE_URL: ${{ secrets.MEMORY_LLM_BASE_URL }}
           LLM_KEY: ${{ secrets.MEMORY_LLM_KEY }}
+          LLM_MODEL: ${{ vars.MEMORY_LLM_MODEL }}
           EMBEDDING_BASE_URL: ${{ secrets.MEMORY_EMBEDDING_BASE_URL }}
           EMBEDDING_API_KEY: ${{ secrets.MEMORY_EMBEDDING_API_KEY }}
+          EMBEDDING_MODEL: ${{ vars.MEMORY_EMBEDDING_MODEL }}
           EMBEDDING_DIMS: ${{ vars.MEMORY_EMBEDDING_DIMS || '1024' }}
         run: |
           for name in LLM_BASE_URL LLM_KEY EMBEDDING_BASE_URL EMBEDDING_API_KEY; do
@@ -297,16 +305,70 @@ jobs:
             echo "MEMORY_EMBEDDING_BASE_URL=${EMBEDDING_BASE_URL}"
             echo "MEMORY_EMBEDDING_API_KEY=${EMBEDDING_API_KEY}"
             echo "MEMORY_EMBEDDING_DIMS=${EMBEDDING_DIMS}"
+            # 模型名留空时用产品默认值；端点上有别的模型名就靠这两个变量指定。
+            [ -n "${LLM_MODEL}" ] && echo "MEMORY_LLM_MODEL=${LLM_MODEL}"
+            [ -n "${EMBEDDING_MODEL}" ] && echo "MEMORY_EMBEDDING_MODEL=${EMBEDDING_MODEL}"
+            true
           } > .env
+      - name: Verify the configured models exist on the endpoint
+        if: steps.creds.outputs.available == 'true'
+        # 模型名写错 = 端点上没有这个模型 = 抽取全空 = 门禁红。
+        # 但那个红看起来像「记忆系统坏了」，根因却是配置。
+        # 这里提前验一次，把「配置错了」与「记忆系统坏了」分开。
+        env:
+          LLM_BASE_URL: ${{ secrets.MEMORY_LLM_BASE_URL }}
+          LLM_KEY: ${{ secrets.MEMORY_LLM_KEY }}
+          EMBEDDING_BASE_URL: ${{ secrets.MEMORY_EMBEDDING_BASE_URL }}
+          EMBEDDING_API_KEY: ${{ secrets.MEMORY_EMBEDDING_API_KEY }}
+        run: |
+          set -euo pipefail
+          # 从写好的 .env 里读实际生效的模型名（含产品默认值）。
+          llm_model=$(grep -E '^MEMORY_LLM_MODEL=' .env | cut -d= -f2- || true)
+          emb_model=$(grep -E '^MEMORY_EMBEDDING_MODEL=' .env | cut -d= -f2- || true)
+          llm_model=${llm_model:-qwen-plus-latest}
+          emb_model=${emb_model:-default-embedding}
+          check() {
+            local base=$1 key=$2 model=$3 label=$4
+            local available
+            available=$(curl -sf -H "Authorization: Bearer ${key}" "${base%/}/models" \
+              | python3 -c "import json,sys;print(' '.join(d.get('id','') for d in json.load(sys.stdin).get('data',[])))" \
+              || echo "")
+            if ! echo " ${available} " | grep -q " ${model} "; then
+              echo "::error::${label} 端点上没有模型 '${model}'（可用：${available:-无}）—— 配置错了，不是记忆系统坏了"
+              exit 1
+            fi
+            echo "${label} 模型 '${model}' 可用"
+          }
+          check "$LLM_BASE_URL" "$LLM_KEY" "$llm_model" "LLM"
+          check "$EMBEDDING_BASE_URL" "$EMBEDDING_API_KEY" "$emb_model" "Embedding"
       - name: Real-stack gate
         if: steps.creds.outputs.available == 'true'
         run: make gate-real
+      - name: Vertical evaluation (real stack)
+        if: steps.creds.outputs.available == 'true'
+        # 垂类评测的**真实模式**：真实 PG + Milvus + Mem0 + LLM。
+        #
+        # 为什么它必须在 CI 里（第十五轮教训）：垂类语料在 2026-10-28 写完，
+        # 2026-10-29 产品改成「按类型带抽取指令」，语料没跟着改 —— 真实栈
+        # 通过率从 40/40 退化到 22.5%，**潜伏 6 天无人察觉**。原因有二：
+        # 自包含模式 100% 通过（假后端不抽取，掩盖了问题），而 --real 模式
+        # 不在任何 CI job 里 —— 没有门禁会红。
+        #
+        # 地板在 tests/eval/baseline_semiconductor_real.json（按真实基线取，
+        # 留抖动余量）。泄漏与机制违规仍然卡 0：那是正确性问题，不是质量问题。
+        run: |
+          uv run --group dev python tests/script/eval/run_semiconductor_evaluation.py --real
+          uv run --group dev python tests/script/eval/check_baseline.py \
+            --report-dir docs/memory/report/semiconductor \
+            --baseline tests/eval/baseline_semiconductor_real.json
       - name: Upload gate report
         if: steps.creds.outputs.available == 'true' && always()
         # 报告目录在 .gitignore 里 —— 归档走 artifact，不进版本库。
         uses: actions/upload-artifact@v4
         with:
           name: real-stack-gate-report
-          path: docs/memory/report/real/
+          path: |
+            docs/memory/report/real/
+            docs/memory/report/semiconductor/
           if-no-files-found: ignore
 

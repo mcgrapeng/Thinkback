@@ -86,13 +86,18 @@ def test_expected_and_forbidden_terms_do_not_overlap(case: dict[str, Any]) -> No
     assert overlap == set(), f"{case['name']} 的期望词与禁用词交叠：{sorted(overlap)}"
 
 
+#: 断言召回内容的 kind —— 这些用例走写入→抽取→召回的完整链路，
+#: 因此**必须**声明用哪个类型抽取（抽取指令按类型不同）。
+_RECALL_KINDS = ("recall", "namespace_isolation")
+
+
 @pytest.mark.parametrize(
     "case",
-    [case for case in _CASES if case["kind"] == "recall"],
-    ids=[case["name"] for case in _CASES if case["kind"] == "recall"],
+    [case for case in _CASES if case["kind"] in _RECALL_KINDS],
+    ids=[case["name"] for case in _CASES if case["kind"] in _RECALL_KINDS],
 )
 def test_a_recall_case_declares_its_memory_type(case: dict[str, Any]) -> None:
-    """recall 类用例必须声明 ``memory_type``。
+    """走召回链路的用例必须声明 ``memory_type``。
 
     垂类每个类型带自己的抽取指令（属性名清单不同）。不声明就落回默认
     ``profile`` 类型，清单里只有 4 条属性 —— 机台、良率、客户要求这些
@@ -100,9 +105,14 @@ def test_a_recall_case_declares_its_memory_type(case: dict[str, Any]) -> None:
 
     这条断言是**在语料写下的那一刻**就拦住「忘了声明类型」，而不是等到
     真实栈评测跑完才发现（那一轮要几十分钟）。
+
+    **``namespace_isolation`` 也在内**：它同样要写入并召回一条事实，
+    抽取指令同样按类型走。上一版这条断言只覆盖 ``kind == "recall"``，
+    漏掉了 ``namespace_isolation`` —— 那两条用例因此落回默认类型，
+    在真实栈上稳定失败（实测：改成正确类型后即通过）。
     """
     assert case.get("memory_type"), (
-        f"{case['name']} 是 recall 用例但没声明 memory_type —— "
+        f"{case['name']} 是 {case['kind']} 用例但没声明 memory_type —— "
         "它会落回默认 profile 类型，其抽取指令的属性清单不覆盖本用例的事实"
     )
 

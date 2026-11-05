@@ -1,6 +1,6 @@
 {
   "note": "pytest 套件的防回血基线：删用例或跳过用例要连带更新本文件（显式动作）",
-  "count": 3251,
+  "count": 3253,
   "tests": [
     "tests/unit/test_admin_api.py::test_a_listing_scoped_to_one_user_is_audited_too",
     "tests/unit/test_admin_api.py::test_admin_audit_invalid_action_returns_400",
@@ -467,6 +467,8 @@
     "tests/unit/test_eval_corpus_contract.py::test_a_recall_case_declares_its_memory_type[case_semi_interconnect_stack]",
     "tests/unit/test_eval_corpus_contract.py::test_a_recall_case_declares_its_memory_type[case_semi_litho_resolution_limit]",
     "tests/unit/test_eval_corpus_contract.py::test_a_recall_case_declares_its_memory_type[case_semi_lithography_generation]",
+    "tests/unit/test_eval_corpus_contract.py::test_a_recall_case_declares_its_memory_type[case_semi_namespace_isolation]",
+    "tests/unit/test_eval_corpus_contract.py::test_a_recall_case_declares_its_memory_type[case_semi_namespace_isolation_equipment]",
     "tests/unit/test_eval_corpus_contract.py::test_a_recall_case_declares_its_memory_type[case_semi_overlay_tool_model]",
     "tests/unit/test_eval_corpus_contract.py::test_a_recall_case_declares_its_memory_type[case_semi_process_node_and_stage]",
     "tests/unit/test_eval_corpus_contract.py::test_a_recall_case_declares_its_memory_type[case_semi_pvd_vendor]",

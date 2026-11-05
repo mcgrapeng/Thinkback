@@ -111,7 +111,7 @@
       "name": "case_semi_yield_loss_defect_type",
       "category": "良率分析",
       "kind": "recall",
-      "memory_type": "process_preference",
+      "memory_type": "state",
       "query": "用户良率卡在哪个工序，缺陷类型是什么？",
       "expected_terms": [
         "CMP",
@@ -227,7 +227,8 @@
           "user": "我负责 28nm 逻辑工艺的整合。",
           "assistant": "收到。"
         }
-      ]
+      ],
+      "memory_type": "process_preference"
     },
     {
       "name": "case_semi_assistant_not_user_fact",
@@ -298,7 +299,7 @@
       "name": "case_semi_etch_gas_recipe",
       "category": "工艺咨询",
       "kind": "recall",
-      "memory_type": "process_preference",
+      "memory_type": "equipment_context",
       "query": "刻蚀用的气体和配比是什么？",
       "expected_terms": [
         "CF4",
@@ -333,7 +334,7 @@
       "name": "case_semi_interconnect_stack",
       "category": "工艺咨询",
       "kind": "recall",
-      "memory_type": "process_preference",
+      "memory_type": "equipment_context",
       "query": "用户的 IO 层互连材料和厚度是什么？",
       "expected_terms": [
         "铜互连",
@@ -351,7 +352,7 @@
       "name": "case_semi_clean_sequence",
       "category": "工艺咨询",
       "kind": "recall",
-      "memory_type": "state",
+      "memory_type": "equipment_context",
       "query": "出货前的清洗工序是怎么排的？",
       "expected_terms": [
         "RCA"
@@ -368,7 +369,7 @@
       "name": "case_semi_pvd_vendor",
       "category": "设备选型",
       "kind": "recall",
-      "memory_type": "process_preference",
+      "memory_type": "equipment_context",
       "query": "用户在评估哪家的 PVD 设备？",
       "expected_terms": [
         "AMAT",
@@ -386,7 +387,7 @@
       "name": "case_semi_overlay_tool_model",
       "category": "设备选型",
       "kind": "recall",
-      "memory_type": "process_preference",
+      "memory_type": "equipment_context",
       "query": "用户量套刻用的是哪台设备？",
       "expected_terms": [
         "Archer 600"
@@ -737,7 +738,8 @@
           "user": "我们量产线的量测设备用的是 KLA 2930。",
           "assistant": "好的。"
         }
-      ]
+      ],
+      "memory_type": "equipment_context"
     }
   ]
 }

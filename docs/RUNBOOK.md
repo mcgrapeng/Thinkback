@@ -128,6 +128,36 @@ MILVUS_URL=http://localhost:19540 make gate-real
 由服务进程的配置决定集合，被驱动的服务要用
 `MEMORY_MILVUS_COLLECTION=agent_semantic_memory_eval` 启动。
 
+## 垂类评测（真实模式）
+
+`gate-real` 验的是「记忆系统本身对不对」；垂类评测验的是「换成垂类语料后还对不对」
+—— 工艺咨询 / 设备选型 / 良率分析 / 客户支持四类场景的专业词能不能被记住、被召回，
+以及垂类机制（namespace 隔离、类型准入、保留期、assistant 不成为事实）。
+
+两种模式：
+
+- **自包含**（`make eval` 的一步）：内存仓储 + 假后端，不联网、确定性、进 CI。
+  **只证明编排契约** —— 假后端不跑 LLM 抽取，整轮原文直接当记忆存，
+  所以这里的「抽出来了」是假的，抽取与召回质量都不作数。
+- **真实**（`--real`）：真实 PG + Milvus + Mem0 + LLM，看真实抽取与语义召回的水位。
+  **不进 PR 门禁**（要真实栈 + 分钟级），但**进夜间 CI**（`real-stack-gate` job）。
+
+```bash
+uv run --group dev python tests/script/eval/run_semiconductor_evaluation.py --real
+uv run --group dev python tests/script/eval/check_baseline.py \
+  --report-dir docs/memory/report/semiconductor \
+  --baseline tests/eval/baseline_semiconductor_real.json
+```
+
+**模型名要写对**：端点上没有的模型名会让抽取**全空**，门禁以「召回 0 条」的
+形式红，而根因是配置。`MEMORY_LLM_MODEL` / `MEMORY_EMBEDDING_MODEL` 要与端点
+实际提供的模型一致（端点上有哪些模型：`curl -H "Authorization: Bearer $KEY" $BASE/models`）。
+产品默认值面向公有云端点，自建端点必须覆盖。
+
+**报告**：`docs/memory/report/semiconductor/semi-eval-<时间戳>-<run_id>.json`。
+真实模式的失败按原因分桶：抽取空 / 抽出来但缺事实 / 事实已在索引却没召回 /
+禁词泄漏 / 机制违规。**泄漏与机制违规卡 0** —— 那是正确性问题，不是质量问题。
+
 ## Retention cleanup (保留期物理清理)
 
 **What it does**: 到期的事实先不可达（引擎隐藏 + 本地过滤），过了 7 天宽限期
