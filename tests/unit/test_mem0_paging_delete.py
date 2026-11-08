@@ -31,7 +31,7 @@ from typing import Any
 import pytest
 
 from thinkback.domain.ports import MEMORY_LIST_PAGE_LIMIT
-from thinkback.memory.backends import Mem0LibraryMemoryBackend
+from thinkback.memory.backends import Mem0LibraryMemoryBackend, mem0_library
 
 
 class _PagingClient:
@@ -77,30 +77,37 @@ def test_a_single_short_page_ends_the_paging_loop() -> None:
     assert len(get_all_calls) == 1, f"不满页却多跑了查询：{len(get_all_calls)} 次"
 
 
-def test_a_full_page_continues_to_the_next_page() -> None:
-    """一批正好满页 → 继续取下一页（数据比一页多的情况）。"""
-    full_page = [f"m{index}" for index in range(MEMORY_LIST_PAGE_LIMIT)]
+def test_a_full_page_continues_to_the_next_page(monkeypatch: pytest.MonkeyPatch) -> None:
+    """一批正好满页 → 继续取下一页（数据比一页多的情况）。
+
+    页大小调小：判定的只是「这批满页 → 还要继续取」，与满页有多少条无关。
+    """
+    monkeypatch.setattr(mem0_library, "MEMORY_LIST_PAGE_LIMIT", 4)
+
+    full_page = [f"m{index}" for index in range(4)]
     client = _PagingClient(pages=[full_page, ["m-last"]])
     backend = _backend(client)
 
     deleted = backend.delete_all(user_id="user-1", memory_scope_id="thinkback")
 
-    assert len(deleted) == MEMORY_LIST_PAGE_LIMIT + 1
+    assert len(deleted) == 5
     assert deleted[-1] == "m-last"
     get_all_calls = [call for call in client.calls if call[0] == "get_all"]
     assert len(get_all_calls) == 2, f"满页后没有继续取下一页：{len(get_all_calls)} 次"
 
 
-def test_multiple_full_pages_are_all_deleted() -> None:
+def test_multiple_full_pages_are_all_deleted(monkeypatch: pytest.MonkeyPatch) -> None:
     """连续多页满页 → 全部删掉（不只是第一页）。"""
-    page1 = [f"a{index}" for index in range(MEMORY_LIST_PAGE_LIMIT)]
-    page2 = [f"b{index}" for index in range(MEMORY_LIST_PAGE_LIMIT)]
+    monkeypatch.setattr(mem0_library, "MEMORY_LIST_PAGE_LIMIT", 4)
+
+    page1 = [f"a{index}" for index in range(4)]
+    page2 = [f"b{index}" for index in range(4)]
     client = _PagingClient(pages=[page1, page2, ["c-tail"]])
     backend = _backend(client)
 
     deleted = backend.delete_all(user_id="user-1", memory_scope_id="thinkback")
 
-    assert len(deleted) == MEMORY_LIST_PAGE_LIMIT * 2 + 1
+    assert len(deleted) == 9
     assert len(set(deleted)) == len(deleted), "同一条被删了两次"
     assert deleted[-1] == "c-tail"
 
@@ -113,16 +120,25 @@ def test_an_empty_first_page_deletes_nothing() -> None:
     assert backend.delete_all(user_id="user-1", memory_scope_id="thinkback") == []
 
 
-def test_the_paging_loop_is_bounded_by_the_max_pages_safety_limit() -> None:
+def test_the_paging_loop_is_bounded_by_the_max_pages_safety_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """数据量超过安全上限时，循环**停下**（而不是无限取页）。
 
-    ``max_pages=100`` × 每页 1000 条 = 最多 10 万条。超过这个量，
+    ``max_pages=100`` × 每页 4096 条 = 最多 40 万条。超过这个量，
     剩下的**不会被删** —— 这是「删除用户全部数据」的已知残留边界
     （``delete_all`` 的 docstring 里写了）。
 
     这条用例把这个边界钉住：上限是 100 页，不是无限。
+
+    **页大小调小而不是页数调小**：要触到上限就得有 100 个**满页**，
+    而满页 = 页大小那么多条。按真实页大小（4096）来造，就是 40 万次删除
+    —— 实测要 100 秒，而变异审计会把每个用例重跑几十遍。
+    把页大小调小后，页数不变（还是 100 页），被测的判定完全一样。
     """
-    full_page = [f"m{index}" for index in range(MEMORY_LIST_PAGE_LIMIT)]
+    monkeypatch.setattr(mem0_library, "MEMORY_LIST_PAGE_LIMIT", 4)
+
+    full_page = [f"m{index}" for index in range(4)]
     # 每一页都满 → 永远取不满，循环会跑到 max_pages 上限
     client = _PagingClient(pages=[full_page] * 200)
     backend = _backend(client)
@@ -132,7 +148,7 @@ def test_the_paging_loop_is_bounded_by_the_max_pages_safety_limit() -> None:
     get_all_calls = [call for call in client.calls if call[0] == "get_all"]
     assert len(get_all_calls) == 100, f"分页循环没有停在安全上限（跑了 {len(get_all_calls)} 页）"
     # 上限之外的数据确实没删 —— 这是已知边界，不是 bug
-    assert len(deleted) == MEMORY_LIST_PAGE_LIMIT * 100
+    assert len(deleted) == 4 * 100
 
 
 def test_the_get_all_limit_is_capped_at_the_page_limit() -> None:
@@ -159,9 +175,12 @@ def test_the_get_all_limit_is_capped_at_the_page_limit() -> None:
     )
 
 
-@pytest.mark.parametrize("page_size", [0, 1, MEMORY_LIST_PAGE_LIMIT])
+@pytest.mark.parametrize("page_size", [0, 1, 4])
 def test_any_page_size_is_deleted_completely(page_size: int) -> None:
-    """各种页大小都要删干净（分页边界不能漏）。"""
+    """各种页大小都要删干净（分页边界不能漏）。
+
+    页大小取小值：这里验的是「这一批有多少条就删多少条」，与上限无关。
+    """
     ids = [f"m{index}" for index in range(page_size)]
     client = _PagingClient(pages=[ids] if ids else [[]])
     backend = _backend(client)

@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import threading
 import time
+from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
@@ -56,6 +57,26 @@ class _BlockingComposer(_Composer):
         return "摘要", {}
 
 
+# 本文件造的每个 executor 都登记在这里，用例结束统一关掉。
+# ThreadPoolExecutor 的工作线程默认活到解释器退出 —— 一条用例漏关一个，
+# 整轮套件就会攒下几十条常驻线程（实测：本文件 20 条用例 → 20 条线程）。
+_EXECUTORS: list[ThreadPoolExecutor] = []
+
+
+@pytest.fixture(autouse=True)
+def _shutdown_executors() -> Iterator[None]:
+    yield
+    for executor in _EXECUTORS:
+        executor.shutdown(wait=False)
+    _EXECUTORS.clear()
+
+
+def _new_executor() -> ThreadPoolExecutor:
+    executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="test-l2-slot")
+    _EXECUTORS.append(executor)
+    return executor
+
+
 def _refresher(
     *,
     composer: Any = None,
@@ -67,7 +88,7 @@ def _refresher(
     return L2BackgroundRefresher(
         repository=InMemoryMemoryRepository(),
         composer=composer or _Composer(),
-        executor=executor or ThreadPoolExecutor(max_workers=1),
+        executor=executor or _new_executor(),
         refresh_interval_rounds=interval,
         reserve_capacity=reserve_capacity,
         release_capacity=release_capacity,
@@ -119,7 +140,7 @@ def test_a_failed_submit_returns_its_capacity_slot() -> None:
     队列预算被这些失败提交吃光。
     """
     released: list[str] = []
-    executor = ThreadPoolExecutor(max_workers=1)
+    executor = _new_executor()
     refresher = _refresher(
         composer=_Composer(),
         reserve_capacity=lambda wait: None,
@@ -200,7 +221,7 @@ def test_a_refresh_without_a_capacity_callback_skips_the_release_in_the_race_win
 
 def test_a_failed_submit_without_a_capacity_callback_does_not_crash() -> None:
     """提交失败 + **没接容量回调** → 也不能崩。"""
-    executor = ThreadPoolExecutor(max_workers=1)
+    executor = _new_executor()
     refresher = _refresher(
         composer=_Composer(),
         reserve_capacity=None,
@@ -460,7 +481,7 @@ def test_every_capacity_path_returns_the_slot(scenario: str) -> None:
     只是慢慢写不进去了。所以这三条路径都要有断言。
     """
     released: list[str] = []
-    executor = ThreadPoolExecutor(max_workers=1)
+    executor = _new_executor()
     refresher = _refresher(
         composer=_Composer(),
         reserve_capacity=lambda wait: None,

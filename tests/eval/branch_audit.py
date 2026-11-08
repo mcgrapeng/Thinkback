@@ -23,8 +23,11 @@
 - ``arc`` —— 从哪行到哪行的转移没被走过
 - ``kind`` —— 自动分类（见 ``classify_arc``）
 
-分类的意义：**85 处缺口里只有一部分是真缺口**，其余是「不可达的防御分支」
+分类的意义：**85 处缺口里只有一部分是真缺口**，其余是错误路径
 或者「已有契约但本处没走到」。不分类就得逐条读源码，分不出优先级。
+
+注意：工具**不**自动识别「不可达的分支」—— 那需要数据流分析，
+源码行的形状做不到。真正恒假的分支要人工确认后写进审计报告。
 """
 
 from __future__ import annotations
@@ -89,6 +92,37 @@ def _run_coverage() -> None:
     )
 
 
+def _newest_source_mtime() -> float:
+    """被测源码里最新的修改时间。
+
+    用来判断现存的覆盖率数据是不是已经过期（源码改了、数据没重跑）。
+    """
+    newest = 0.0
+    for path in (SRC_ROOT).rglob("*.py"):
+        try:
+            newest = max(newest, path.stat().st_mtime)
+        except OSError:
+            continue
+    return newest
+
+
+def _warn_if_stale() -> None:
+    """覆盖率数据比源码旧 → 说清楚，别让人拿着过期数字做决策。
+
+    这个工具的全部价值是「测量」，给出过期测量等于没测。
+    """
+    if not COVERAGE_DATA.exists():
+        print("::warning::没有覆盖率数据（.coverage 不存在）—— 请去掉 --skip-run 重跑")
+        return
+    data_mtime = COVERAGE_DATA.stat().st_mtime
+    source_mtime = _newest_source_mtime()
+    if source_mtime > data_mtime:
+        print(
+            "::warning::覆盖率数据比源码旧（源码改过之后没重跑）—— "
+            "下面的数字是过期的，去掉 --skip-run 重跑"
+        )
+
+
 def _coverage_json() -> dict[str, Any]:
     out = REPO_ROOT / "docs" / "memory" / "report" / "branch-audit-coverage.json"
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -103,17 +137,21 @@ def _coverage_json() -> dict[str, Any]:
 def classify_arc(source_line: str, line: int, to_line: int, body: str = "") -> tuple[str, str]:
     """给一处缺口分类。
 
-    分类依据是**源码行的形状**（`if` 那行 + 分支体第一行），不是行号 ——
-    换句话说，规则本身与具体模块无关，换个模块也适用。
+    分类依据是**源码行的形状**（`if` 那行 + 分支体第一行），
+    不是行号 —— 换句话说，规则本身与具体模块无关，换个模块也适用。
 
     返回 ``(kind, note)``：
 
-    - ``dead_defensive`` —— 不可达的防御分支（条件恒假，如「JSON 解析成功但不是 dict」）
     - ``error_path`` —— 错误 / 降级路径
     - ``cleanup`` —— 资源归还类（finally / 释放 / 归还槽位）
     - ``early_return`` —— 早退 / 短路分支
     - ``loop_back`` —— 循环回边（提前 break 的那一侧）
     - ``feature`` —— 正常功能分支
+
+    注意：这里**没有**「不可达分支」这一类。判断一个条件恒假需要数据流
+    分析，源码行的形状做不到 —— 之前那版规则（``isinstance`` 且带 ``raise``）
+    一次都没命中过，属于写了但跑不到的规则；真要标不可达分支只能人工确认，
+    写在审计报告里，不要让工具假装能自动识别。
     """
     text = source_line.strip()
 
@@ -125,10 +163,8 @@ def classify_arc(source_line: str, line: int, to_line: int, body: str = "") -> t
     if any(marker in text for marker in ("release", "close()", "discard", "shutdown", "free()")):
         return "cleanup", "资源归还分支"
 
-    # 类型防御：isinstance 检查
+    # 类型判断（isinstance 防御）：不是 dict 就抛错的那类 —— 算错误路径。
     if text.startswith("if not isinstance(") or text.startswith("if isinstance("):
-        if "raise" in text:
-            return "dead_defensive", "类型防御分支（条件恒假）"
         return "error_path", "类型判断分支"
 
     # 循环回边：弧的终点在分支体里（回到循环头）
@@ -176,15 +212,33 @@ def collect_gaps(coverage: dict[str, Any]) -> list[Gap]:
     return gaps
 
 
-def build_report(coverage: dict[str, Any], gaps: list[Gap]) -> dict[str, Any]:
+def _scoped(gaps: list[Gap], only_file: str | None) -> list[Gap]:
+    """按模块过滤缺口。``only_file`` 是子串匹配（``service.py`` 能命中多个文件）。"""
+    if only_file is None:
+        return gaps
+    return [gap for gap in gaps if only_file in gap.file]
+
+
+def build_report(
+    coverage: dict[str, Any], gaps: list[Gap], *, only_file: str | None = None
+) -> dict[str, Any]:
+    """把覆盖率数据与缺口列表合成一份报告。
+
+    ``only_file`` 给了就只看那个模块 —— **所有口径都按过滤后的算**
+    （缺口数、按类型/按模块的分布、总量），不能出现「缺口列表是过滤后的、
+    汇总数字还是全量的」这种同报告两个口径的情况。
+    """
     totals = coverage["totals"]
     by_kind: dict[str, int] = {}
     by_file: dict[str, int] = {}
+
+    # 过滤在这里做一次，下面所有数字都从同一份列表派生 ——
+    # 不能出现「缺口列表是过滤后的、汇总数字还是全量的」这种同报告两个口径。
+    gaps = _scoped(gaps, only_file)
+
     for gap in gaps:
         by_kind[gap.kind] = by_kind.get(gap.kind, 0) + 1
         by_file[gap.file] = by_file.get(gap.file, 0) + 1
-    total_branches = totals.get("num_branches", 0)
-    covered = totals.get("covered_branches", 0)
 
     # 每个模块的分支覆盖率 —— 报告要自包含：不看外部覆盖率文件也能知道
     # 哪个模块还差多少。
@@ -193,6 +247,8 @@ def build_report(coverage: dict[str, Any], gaps: list[Gap]) -> dict[str, Any]:
         summary = info["summary"]
         num = summary.get("num_branches", 0)
         if not num:
+            continue
+        if only_file is not None and only_file not in path:
             continue
         cov = summary.get("covered_branches", 0)
         file_stats[path] = {
@@ -207,21 +263,38 @@ def build_report(coverage: dict[str, Any], gaps: list[Gap]) -> dict[str, Any]:
             ),
         }
 
+    if only_file is None:
+        total_branches = totals.get("num_branches", 0)
+        covered = totals.get("covered_branches", 0)
+        missing = totals.get("missing_branches", 0)
+        statement_coverage = round(
+            totals.get("covered_lines", 0)
+            / max(1, totals.get("covered_lines", 0) + totals.get("missing_lines", 0)),
+            4,
+        )
+    else:
+        # 过滤后的口径：总量 = 过滤到的那些模块之和
+        total_branches = sum(s["num_branches"] for s in file_stats.values())
+        covered = sum(s["covered_branches"] for s in file_stats.values())
+        missing = sum(s["missing_branches"] for s in file_stats.values())
+        statement_coverage = (
+            round(
+                sum(s["statement_coverage"] * s["num_branches"] for s in file_stats.values())
+                / total_branches,
+                4,
+            )
+            if total_branches
+            else 0.0
+        )
+
     return {
         "report_type": "thinkback_branch_coverage_audit",
         "totals": {
             "num_branches": total_branches,
             "covered_branches": covered,
-            "missing_branches": totals.get("missing_branches", 0),
+            "missing_branches": missing,
             "branch_coverage": round(covered / total_branches, 4) if total_branches else 0.0,
-            "statement_coverage": round(
-                totals.get("covered_lines", 0)
-                / max(
-                    1,
-                    totals.get("covered_lines", 0) + totals.get("missing_lines", 0),
-                ),
-                4,
-            ),
+            "statement_coverage": statement_coverage,
         },
         "gaps_by_kind": by_kind,
         "gaps_by_file": by_file,
@@ -248,15 +321,12 @@ def main(argv: list[str] | None = None) -> int:
 
     if not args.skip_run:
         _run_coverage()
+    else:
+        _warn_if_stale()
 
     coverage = _coverage_json()
     gaps = collect_gaps(coverage)
-    report = build_report(coverage, gaps)
-
-    if args.file:
-        gaps = [gap for gap in gaps if args.file in gap.file]
-        report["gaps"] = [asdict(gap) for gap in gaps]
-        report["gap_count"] = len(gaps)
+    report = build_report(coverage, gaps, only_file=args.file)
 
     report_path = Path(args.report)
     report_path.parent.mkdir(parents=True, exist_ok=True)
@@ -269,15 +339,16 @@ def main(argv: list[str] | None = None) -> int:
         f"分支覆盖：{totals['covered_branches']}/{totals['num_branches']} = {totals['branch_coverage']:.2%}"
     )
     print(f"语句覆盖：{totals['statement_coverage']:.2%}")
-    print(
-        f"未覆盖分支：{totals['missing_branches']} 处（其中 {report['gap_count']} 处列在本文件内）"
-    )
+    print(f"未覆盖分支：{report['gap_count']} 处")
     print()
     print("按类型：")
     for kind, count in sorted(report["gaps_by_kind"].items(), key=lambda kv: -kv[1]):
         print(f"  {kind:12} {count}")
     print()
-    print("按模块（分支覆盖率最低的 12 个）：")
+    if args.file:
+        print(f"按模块（只列 {args.file} 匹配到的）：")
+    else:
+        print("按模块（分支覆盖率最低的 12 个）：")
     file_stats = report.get("file_stats", {})
     ranked = sorted(
         file_stats.items(),
@@ -289,7 +360,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.baseline:
         baseline_path = Path(args.baseline)
         previous = _load_baseline(baseline_path)
-        current = {gap.key for gap in gaps}
+        current = {gap.key for gap in _scoped(gaps, args.file)}
+        if args.file:
+            # 基线对比要同一个口径 —— 不然别的模块的缺口会被算成「已修复」
+            previous = {key for key in previous if args.file in key}
         new_gaps = sorted(current - previous)
         fixed = sorted(previous - current)
         print()

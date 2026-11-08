@@ -246,10 +246,14 @@ def test_an_erase_resumes_l1_after_the_history_stage() -> None:
 
     _run_erase_and_keep_plan(service, backend, repository, operation_id)
     _reseed_with_done_stages(service, repository, operation_id, ["barrier", "backend", "history"])
+    # 断点现场：这一轮是**第一次擦除之后**才写进去的，只有续跑时 L1 阶段真跑了
+    # 才会被删掉。（早先这里断言的是 "r1" —— 它在第一次擦除时就已被删，
+    # 那个断言恒真，续跑漏掉 L1 阶段它也照样过。）
+    assert repository.get_round("r1-restored") is not None, "断点现场没还原成功"
     service.erase(_erase_request(operation_id))
     time.sleep(0.2)
 
-    assert repository.get_round("r1") is None, "L1 阶段没跑，被擦的轮次原文还在本地"
+    assert repository.get_round("r1-restored") is None, "L1 阶段没跑，被擦的轮次原文还在本地"
 
 
 def test_an_erase_resumes_the_index_after_the_audit_stage() -> None:
